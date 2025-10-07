@@ -1,0 +1,39 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="camera_password" default="zjsxmfhf" />
+  <arg name="transport" default="udp" />
+  <arg name="latency_ms" default="80" />
+  <arg name="decoder" default="auto" />
+  <arg name="publish_rate_hz" default="90.0" />
+
+  <node pkg="ip_camera"
+        type="low_latency_rtsp_streamer.py"
+        name="vigi_low_latency_streamer"
+        output="screen"
+        respawn="true"
+        respawn_delay="3">
+    <param name="publish_rate_hz" value="$(arg publish_rate_hz)" />
+    <rosparam param="cameras" subst_value="true">
+      - name: camera_1
+        ip: 192.168.0.171
+        username: admin
+        password: $(arg camera_password)
+        stream: stream2
+        topic: /camera/camera_1/image_raw
+        frame_id: camera_1_link
+        transport: $(arg transport)
+        latency_ms: $(arg latency_ms)
+        decoder: $(arg decoder)
+      - name: camera_2
+        ip: 192.168.0.195
+        username: admin
+        password: $(arg camera_password)
+        stream: stream2
+        topic: /camera/camera_2/image_raw
+        frame_id: camera_2_link
+        transport: $(arg transport)
+        latency_ms: $(arg latency_ms)
+        decoder: $(arg decoder)
+    </rosparam>
+  </node>
+</launch>

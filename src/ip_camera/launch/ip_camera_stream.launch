@@ -1,0 +1,67 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- IP Camera Streamer Launch File -->
+    
+    <!-- 카메라 1 설정 파라미터 -->
+    <arg name="camera_1_ip" default="192.168.0.60" />
+    <arg name="camera_1_port" default="554" />
+    <arg name="camera_1_username" default="admin" />
+    <arg name="camera_1_password" default="zjsxmfhf" />
+    <arg name="camera_1_topic" default="/camera/camera_1/image_raw" />
+    <arg name="camera_1_frame_id" default="camera_1_link" />
+    
+    <!-- 카메라 2 설정 파라미터 -->
+    <arg name="camera_2_ip" default="192.168.0.195" />
+    <arg name="camera_2_port" default="554" />
+    <arg name="camera_2_username" default="admin" />
+    <arg name="camera_2_password" default="zjsxmfhf" />
+    <arg name="camera_2_topic" default="/camera/camera_2/image_raw" />
+    <arg name="camera_2_frame_id" default="camera_2_link" />
+    
+    <!-- 저지연 설정 파라미터 -->
+    <arg name="buffer_size" default="1" />
+    <arg name="fps" default="30" />
+    <arg name="width" default="1920" />
+    <arg name="height" default="1080" />
+    
+    <!-- IP Camera Streamer 노드 실행 -->
+    <node name="ip_camera_streamer" 
+          pkg="ip_camera" 
+          type="ip_camera_streamer.py" 
+          output="screen"
+          respawn="true"
+          respawn_delay="5">
+        
+        <!-- 카메라 1 파라미터 -->
+        <param name="camera_1_ip" value="$(arg camera_1_ip)" />
+        <param name="camera_1_port" value="$(arg camera_1_port)" />
+        <param name="camera_1_username" value="$(arg camera_1_username)" />
+        <param name="camera_1_password" value="$(arg camera_1_password)" />
+        <param name="camera_1_topic" value="$(arg camera_1_topic)" />
+        <param name="camera_1_frame_id" value="$(arg camera_1_frame_id)" />
+        
+        <!-- 카메라 2 파라미터 -->
+        <param name="camera_2_ip" value="$(arg camera_2_ip)" />
+        <param name="camera_2_port" value="$(arg camera_2_port)" />
+        <param name="camera_2_username" value="$(arg camera_2_username)" />
+        <param name="camera_2_password" value="$(arg camera_2_password)" />
+        <param name="camera_2_topic" value="$(arg camera_2_topic)" />
+        <param name="camera_2_frame_id" value="$(arg camera_2_frame_id)" />
+        
+        <!-- 저지연 설정 파라미터 -->
+        <param name="buffer_size" value="$(arg buffer_size)" />
+        <param name="fps" value="$(arg fps)" />
+        <param name="width" value="$(arg width)" />
+        <param name="height" value="$(arg height)" />
+    </node>
+    
+    <!-- 카메라 정보 출력 -->
+    <node name="camera_info_logger" 
+          pkg="rospy_tutorials" 
+          type="talker" 
+          output="screen"
+          args="__name:=camera_info_logger">
+        <remap from="chatter" to="/camera_info" />
+    </node>
+    
+</launch>

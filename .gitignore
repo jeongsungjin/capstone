@@ -1,0 +1,20 @@
+# Catkin/ROS build artifacts
+build/
+devel/
+logs/
+install/
+
+# CMake/Make
+**/CMakeFiles/
+**/cmake_install.cmake
+**/CMakeCache.txt
+**/Makefile
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors/OS
+.vscode/
+.idea/
+.DS_Store

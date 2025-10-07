@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<launch>
+  <!-- CARLA 서버 설정 -->
+  <arg name="host" default="localhost" />
+  <arg name="port" default="2000" />
+  
+  <!-- 카메라 설정 -->
+  <arg name="image_width" default="1280" />
+  <arg name="image_height" default="720" />
+  <arg name="fov" default="90.0" />
+  
+  <!-- 카메라 스폰 노드 -->
+  <node pkg="carla_camera_stream" 
+        type="spawn_cameras.py" 
+        name="carla_camera_stream" 
+        output="screen">
+    <param name="host" value="$(arg host)" />
+    <param name="port" value="$(arg port)" />
+    <param name="image_width" value="$(arg image_width)" />
+    <param name="image_height" value="$(arg image_height)" />
+    <param name="fov" value="$(arg fov)" />
+  </node>
+  
+  <!-- RViz 실행 (옵션) -->
+  <!-- <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carla_camera_stream)/config/cameras.rviz" /> -->
+</launch>
+

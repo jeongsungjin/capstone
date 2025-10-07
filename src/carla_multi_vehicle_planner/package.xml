@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>carla_multi_vehicle_planner</name>
+  <version>0.1.0</version>
+  <description>Multi-vehicle planning and visualization pipeline for CARLA 0.9.16 using ROS1.</description>
+
+  <maintainer email="user@example.com">ctrl</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>rospy</build_depend>
+  <build_depend>std_msgs</build_depend>
+  <build_depend>geometry_msgs</build_depend>
+  <build_depend>nav_msgs</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>visualization_msgs</build_depend>
+  <build_depend>ackermann_msgs</build_depend>
+
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>python3</exec_depend>
+  <exec_depend>python3-networkx</exec_depend>
+
+  <export>
+  </export>
+</package>

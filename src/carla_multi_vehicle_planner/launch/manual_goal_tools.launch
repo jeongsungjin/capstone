@@ -1,0 +1,12 @@
+<launch>
+    <node pkg="carla_multi_vehicle_planner" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
+        <param name="resolution" value="0.25" />
+        <param name="update_rate" value="0.5" />
+    </node>
+
+    <node pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+        <param name="default_vehicle" value="ego_vehicle_1" />
+    </node>
+
+    <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
+</launch>

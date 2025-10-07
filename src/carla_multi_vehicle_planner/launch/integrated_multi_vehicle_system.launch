@@ -1,0 +1,29 @@
+<launch>
+  <!-- 통합 멀티 비히클 시스템 런치 파일 -->
+  <!-- multi_vehicle_autonomy.launch와 manual_goal_tools.launch를 순서대로 실행하고 RViz를 자동으로 실행합니다 -->
+  
+  <!-- Arguments -->
+  <arg name="num_vehicles" default="3" />
+  <arg name="enable_rviz" default="true" />
+  <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
+  
+  <!-- Multi Vehicle Autonomy System -->
+  <!-- 1단계: 멀티 비히클 자율 주행 시스템 실행 -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/multi_vehicle_autonomy.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  </include>
+  
+  <!-- Manual Goal Tools -->
+  <!-- 2단계: 수동 목표 설정 도구 실행 -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/manual_goal_tools.launch" />
+  
+  <!-- RViz Visualization -->
+  <!-- 3단계: RViz 자동 실행 및 설정 적용 -->
+  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz" 
+        args="-d $(arg rviz_config)" 
+        output="screen" 
+        required="false">
+    <!-- RViz가 종료되어도 다른 노드들이 계속 실행되도록 required=false로 설정 -->
+  </node>
+  
+</launch>

@@ -1,0 +1,31 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="enable_autopilot" value="false" />
+    <param name="vehicle_model" value="vehicle.tesla.model3" />
+    <param name="target_speed" value="15.0" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="networkx_path_planner.py" name="networkx_path_planner" output="screen">
+    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="graph_resolution" value="1.0" />
+    <param name="path_sampling" value="1.0" />
+    <param name="min_destination_distance" value="80.0" />
+    <param name="max_destination_distance" value="400.0" />
+    <param name="override_preempt_min_dist" value="6.0" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="lookahead_distance" value="5.0" />
+    <param name="target_speed" value="8.0" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
+    <param name="max_vehicle_count" value="6" />
+    <param name="update_rate" value="2.0" />
+  </node>
+</launch>
