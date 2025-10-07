@@ -3,7 +3,7 @@
     <!-- IP Camera Streamer Launch File -->
     
     <!-- 카메라 1 설정 파라미터 -->
-    <arg name="camera_1_ip" default="192.168.0.60" />
+    <arg name="camera_1_ip" default="192.168.0.171" />
     <arg name="camera_1_port" default="554" />
     <arg name="camera_1_username" default="admin" />
     <arg name="camera_1_password" default="zjsxmfhf" />

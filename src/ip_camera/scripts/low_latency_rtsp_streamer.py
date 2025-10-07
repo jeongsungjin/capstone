@@ -72,6 +72,7 @@ class LowLatencyCamera(threading.Thread):
         self._decoder_name = self._pick_decoder(config.decoder)
         self._backoff_seconds = 1.0
         self._max_backoff_seconds = 5.0
+        
         # Stream candidates for fallback (requested -> stream2 -> stream1)
         candidates = [config.stream, "stream2", "stream1"]
         self._stream_candidates = []
@@ -91,6 +92,8 @@ class LowLatencyCamera(threading.Thread):
     def stop(self):
         self._stop_event.set()
 
+    
+
     def _build_pipeline_description(self) -> str:
         transport = "udp" if self.config.transport.lower() == "udp" else "tcp"
         stream_name = self._stream_candidates[self._stream_index]
@@ -98,7 +101,7 @@ class LowLatencyCamera(threading.Thread):
         base = (
             f"rtspsrc name=src location={rtsp_url} latency={self.config.latency_ms} "
             f"protocols={transport} drop-on-late=false buffer-mode=none timeout=2000000 do-rtcp=true "
-            f"ntp-sync=false");
+            f"ntp-sync=false")
 
         # Insert leaky queues to ensure old frames are discarded quickly
         queue_1 = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=2"
@@ -171,6 +174,7 @@ class LowLatencyCamera(threading.Thread):
         self._bus = self._pipeline.get_bus()
         self._pipeline.set_state(Gst.State.PLAYING)
         rospy.loginfo("[%s] pipeline PLAYING", self.config.name)
+        
 
     def _mainloop(self):
         assert self._pipeline is not None

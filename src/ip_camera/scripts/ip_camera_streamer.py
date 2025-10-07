@@ -20,7 +20,7 @@ class IPCameraStreamer:
         # 카메라 설정 (성공한 설정만 유지)
         self.camera_configs = [
             {
-                'ip': '192.168.0.60',
+                'ip': '192.168.0.171',
                 'port': 554,
                 'username': 'admin',
                 'password': 'zjsxmfhf',
