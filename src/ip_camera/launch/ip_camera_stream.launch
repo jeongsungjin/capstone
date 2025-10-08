@@ -56,12 +56,12 @@
     </node>
     
     <!-- 카메라 정보 출력 -->
-    <node name="camera_info_logger" 
+    <!-- <node name="camera_info_logger" 
           pkg="rospy_tutorials" 
           type="talker" 
           output="screen"
           args="__name:=camera_info_logger">
         <remap from="chatter" to="/camera_info" />
-    </node>
+    </node> -->
     
 </launch>

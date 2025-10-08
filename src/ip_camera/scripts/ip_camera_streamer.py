@@ -201,7 +201,7 @@ class IPCameraStreamer:
                 frame_count += 1
                 now = time.time()
                 if now - last_time >= 5.0:
-                    rospy.loginfo(f"카메라 {camera_id} capture fps≈{frame_count/(now-last_time):.2f}, drops/loop≈{drops}")
+                    rospy.loginfo(f"카메라 {camera_id} capture fps≈{frame_count/(now-last_time):.2f}")
                     frame_count, last_time = 0, now
             except Exception as e:
                 rospy.logerr(f"카메라 {camera_id} 스트리밍 오류: {str(e)}")
