@@ -9,6 +9,8 @@ import os
 from collections import deque
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
+import ffmpeg
+import numpy as np
 
 class IPCameraStreamer:
     def __init__(self):
@@ -17,7 +19,7 @@ class IPCameraStreamer:
         # CV Bridge 초기화
         self.bridge = CvBridge()
         
-        # 카메라 설정 (성공한 설정만 유지)
+        # 카메라 설정 (FFmpeg 파이프 기반)
         self.camera_configs = [
             {
                 'ip': '192.168.0.171',
@@ -26,7 +28,10 @@ class IPCameraStreamer:
                 'password': 'zjsxmfhf',
                 'topic_name': '/camera/camera_1/image_raw',
                 'frame_id': 'camera_1_link',
-                'camera_id': 1
+                'camera_id': 1,
+                'transport': 'tcp',   # 'tcp' or 'udp'
+                'width': 1280,
+                'height': 720,
             },
             {
                 'ip': '192.168.0.195',
@@ -35,19 +40,12 @@ class IPCameraStreamer:
                 'password': 'zjsxmfhf',
                 'topic_name': '/camera/camera_2/image_raw',
                 'frame_id': 'camera_2_link',
-                'camera_id': 2
+                'camera_id': 2,
+                'transport': 'tcp',
+                'width': 1280,
+                'height': 720,
             }
         ]
-        
-        # FFmpeg 백엔드 환경변수 설정 (TCP + 저지연, 재정렬 최소화)
-        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
-            'rtsp_transport;tcp'
-            '|fflags;nobuffer|flags;low_delay'
-            '|reorder_queue_size;0|max_delay;0'
-            '|probesize;16k|analyzeduration;0'
-            '|flush_packets;1|avioflags;direct'
-            '|use_wallclock_as_timestamps;1'
-        )
         
         # ROS 퍼블리셔 초기화 (극한 저지연을 위해 큐 크기 1)
         self.publishers = {}
@@ -87,11 +85,35 @@ class IPCameraStreamer:
         cv2.setNumThreads(1)
     
     def create_stream_urls(self, config):
-        """서브 스트림 우선으로 간단한 RTSP URL 목록 생성"""
+        """RTSP URL 목록 생성 (서브 스트림 우선)"""
         return [
             f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/stream2",
             f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/stream1",
         ]
+
+    def spawn_ffmpeg(self, url: str, width: int, height: int, transport: str):
+        """FFmpeg 파이프라인 생성 및 시작"""
+        rtsp_transport = transport if transport in ('tcp', 'udp') else 'tcp'
+        try:
+            process = (
+                ffmpeg
+                .input(
+                    url,
+                    rtsp_transport=rtsp_transport,
+                    fflags='nobuffer',
+                    flags='low_delay',
+                    probesize='16k',
+                    analyzeduration='0'
+                )
+                .filter('scale', width, height)
+                .output('pipe:', format='rawvideo', pix_fmt='bgr24', vsync='passthrough')
+                .global_args('-loglevel', 'error', '-nostats')
+                .run_async(pipe_stdout=True, pipe_stderr=True)
+            )
+            return process
+        except ffmpeg.Error as e:
+            rospy.logerr(f"FFmpeg error: {e.stderr.decode(errors='ignore') if e.stderr else e}")
+            return None
     
     def camera_thread(self, config):
         """개별 카메라 스트림 처리 스레드"""
@@ -100,9 +122,12 @@ class IPCameraStreamer:
         
         rospy.loginfo(f"카메라 {camera_id} 연결 시도 시작")
         
-        # 카메라 연결 시도
-        cap = None
+        # 카메라 연결 시도 (FFmpeg 파이프)
+        process = None
         successful_url = None
+        width = int(config.get('width', 1280))
+        height = int(config.get('height', 720))
+        bytes_per_frame = width * height * 3
         
         # 각 스트림 URL을 시도 (FFmpeg 백엔드)
         for i, stream_url in enumerate(stream_urls):
@@ -112,66 +137,63 @@ class IPCameraStreamer:
             rospy.loginfo(f"카메라 {camera_id} URL 시도 ({i+1}/{len(stream_urls)}): {stream_url}")
             
             try:
-                # FFmpeg 백엔드 고정
-                cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-                
-                # 버퍼/시간 설정 (가능한 경우)
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                try:
-                    cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 2000)
-                    cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 1000)
-                except Exception:
-                    pass
-                
-                # 연결 테스트
-                ret, frame = cap.read()
-                
-                if ret and frame is not None:
+                process = self.spawn_ffmpeg(
+                    stream_url,
+                    width=width,
+                    height=height,
+                    transport=config.get('transport', 'tcp')
+                )
+                if process is None:
+                    raise RuntimeError('ffmpeg spawn failed')
+
+                # 연결 테스트: 한 프레임 읽기
+                test_bytes = process.stdout.read(bytes_per_frame)
+                if test_bytes and len(test_bytes) == bytes_per_frame:
+                    frame = np.frombuffer(test_bytes, np.uint8).reshape((height, width, 3))
                     rospy.loginfo(f"✅ 카메라 {camera_id} 연결 성공!")
                     rospy.loginfo(f"   성공한 URL: {stream_url}")
-                    rospy.loginfo(f"   프레임 크기: {frame.shape}")
+                    rospy.loginfo(f"   해상도: {frame.shape[1]}x{frame.shape[0]}")
                     successful_url = stream_url
                     break
                 else:
-                    rospy.logwarn(f"❌ 카메라 {camera_id} URL 실패: {stream_url}")
-                    cap.release()
-                    cap = None
-                    
+                    rospy.logwarn(f"❌ 카메라 {camera_id} URL 실패(프레임 없음): {stream_url}")
+                    if process:
+                        try:
+                            process.stdout.close()
+                            process.stderr.close()
+                            process.wait(timeout=1)
+                        except Exception:
+                            pass
+                    process = None
+
             except Exception as e:
                 rospy.logerr(f"❌ 카메라 {camera_id} URL 오류 ({stream_url}): {str(e)}")
-                if cap:
-                    cap.release()
-                cap = None
+                if process:
+                    try:
+                        process.stdout.close()
+                        process.stderr.close()
+                        process.wait(timeout=1)
+                    except Exception:
+                        pass
+                process = None
             
             time.sleep(0.5)  # 빠른 재시도
         
-        if cap is None:
+        if process is None:
             rospy.logerr(f"카메라 {camera_id} 연결 실패 - 모든 URL 시도 완료")
             return
         
-        self.captures[camera_id] = cap
-        
-        # 초기 버퍼 과감히 비우기
-        for _ in range(20):
-            cap.grab()
+        self.captures[camera_id] = process
 
         frame_count, last_time = 0, time.time()
         while self.running and not rospy.is_shutdown():
             try:
-                # 내부 버퍼 비우기 (상한 8프레임) → 과도 드롭 방지
-                drops = 0
-                for _ in range(8):
-                    if not cap.grab():
-                        break
-                    drops += 1
-                # 최신 프레임 가져오기
-                ret, frame = cap.retrieve()
-                if not ret or frame is None:
-                    # retrieve 실패 시 read로 폴백
-                    ret, frame = cap.read()
-                if not ret or frame is None:
-                    continue
-
+                # FFmpeg 파이프에서 프레임 읽기
+                in_bytes = process.stdout.read(bytes_per_frame)
+                if not in_bytes:
+                    rospy.logwarn(f"카메라 {camera_id} 스트림 종료/중단 감지, 재연결 시도")
+                    break
+                frame = np.frombuffer(in_bytes, np.uint8).reshape((height, width, 3))
                 dq = self.latest[camera_id]
                 dq.clear()
                 dq.append(frame)
@@ -186,12 +208,17 @@ class IPCameraStreamer:
                 time.sleep(0.05)
         
         # 정리
-        if cap:
-            cap.release()
+        if process:
+            try:
+                process.stdout.close()
+                process.stderr.close()
+                process.wait(timeout=1)
+            except Exception:
+                pass
         rospy.loginfo(f"카메라 {camera_id} 스트리밍 종료")
 
     def publisher_loop(self):
-        rate = rospy.Rate(300)
+        rate = rospy.Rate(60)
         while self.running and not rospy.is_shutdown():
             stamp = rospy.Time.now()
             for cfg in self.camera_configs:
@@ -222,10 +249,16 @@ class IPCameraStreamer:
         rospy.loginfo("리소스 정리 중...")
         self.running = False
         
-        # 모든 캡처 객체 해제
-        for cap in self.captures.values():
-            if cap:
-                cap.release()
+        # 모든 FFmpeg 프로세스 종료
+        for proc in self.captures.values():
+            if not proc:
+                continue
+            try:
+                proc.stdout.close()
+                proc.stderr.close()
+                proc.wait(timeout=1)
+            except Exception:
+                pass
         
         # 스레드 종료 대기
         for thread in self.threads:
