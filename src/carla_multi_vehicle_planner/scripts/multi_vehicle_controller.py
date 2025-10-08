@@ -248,7 +248,7 @@ class MultiVehicleController:
         if abs(steer) > 0.2:
             speed *= 0.7
         if Ld < self.lookahead_distance:
-            speed *= max(0.3, Ld / self.lookahead_distance)
+            speed *= max(0.0, Ld / self.lookahead_distance)
 
         return steer, speed
 

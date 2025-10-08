@@ -37,15 +37,17 @@ class ConflictDetector:
         self.detour_merge_distance = float(rospy.get_param("~detour_merge_distance", 6.0))
         self.lane_width = float(rospy.get_param("~lane_width", 3.2))
         self.s_safe_long = float(rospy.get_param("~s_safe_long", 6.0))
-        self.d_safe_lat = float(rospy.get_param("~d_safe_lat", 1.6))
+        self.d_safe_lat = float(rospy.get_param("~d_safe_lat", 3.0))
         self.lc_duration_s = float(rospy.get_param("~lc_duration_s", 2.0))
         self.lc_min_gap_s = float(rospy.get_param("~lc_min_gap_s", 0.8))
+        self.use_lane_conflict = bool(rospy.get_param("~use_lane_conflict", False))
 
         if self.dt <= 0.0:
             self.dt = 0.1
         if self.detour_sampling_step <= 0.1:
             self.detour_sampling_step = 0.3
-        self.detour_lat_m = max(0.1, min(1.0, self.detour_lat_m))
+        # Allow stronger lateral detour up to half lane width
+        self.detour_lat_m = max(0.1, min(self.lane_width * 0.5, self.detour_lat_m))
 
         self._lock = threading.RLock()
         self._tracks: Dict[str, Dict[str, object]] = {}
@@ -157,9 +159,12 @@ class ConflictDetector:
             )
             v_pair = max(pred_a["speed"], pred_b["speed"])
             r_safe = self.R0 + v_pair * self.tau
-            s_gap = abs(pred_a["s"] - pred_b["s"])
-            d_gap = abs(pred_a["d"] - pred_b["d"])
-            lane_conflict = s_gap < self.s_safe_long and d_gap < self.d_safe_lat
+            # Lane conflict disabled by default; relies on Euclidean safety radius
+            lane_conflict = False
+            if self.use_lane_conflict:
+                s_gap = abs(pred_a["s"] - pred_b["s"])
+                d_gap = abs(pred_a["d"] - pred_b["d"])
+                lane_conflict = s_gap < self.s_safe_long and d_gap < self.d_safe_lat
             if dist < r_safe or lane_conflict:
                 conflict_step = step
                 pred_a_hit = pred_a

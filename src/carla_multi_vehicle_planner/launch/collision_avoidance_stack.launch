@@ -3,12 +3,15 @@
 
   <node pkg="carla_multi_vehicle_planner" type="path_mux.py" name="path_mux" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="local_fresh_timeout" value="0.5" />
+    <param name="local_fresh_timeout" value="1.2" />
   </node>
 
   <node pkg="carla_multi_vehicle_planner" type="conflict_detector.py" name="conflict_detector" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="horizon_s" value="6.0" />
     <param name="dt" value="0.1" />
+    <param name="use_lane_conflict" value="false" />
+    <param name="detour_lat_m" value="1.6" />
+    <param name="min_switch_cooldown_s" value="1.2" />
   </node>
 </launch>
