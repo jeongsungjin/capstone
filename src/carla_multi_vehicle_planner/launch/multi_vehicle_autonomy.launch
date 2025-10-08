@@ -1,5 +1,6 @@
 <launch>
   <arg name="num_vehicles" default="3" />
+  <arg name="include_collision_avoidance" default="true" />
 
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
@@ -17,6 +18,10 @@
     <param name="max_destination_distance" value="400.0" />
     <param name="override_preempt_min_dist" value="6.0" />
   </node>
+
+  <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/collision_avoidance_stack.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  </include>
 
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />

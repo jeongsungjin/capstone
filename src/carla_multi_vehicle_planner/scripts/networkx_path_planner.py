@@ -135,7 +135,7 @@ class NetworkXPathPlanner:
         self.path_publishers: Dict[str, rospy.Publisher] = {}
         for index in range(self.num_vehicles):
             role = self._role_name(index)
-            topic = f"/planned_path_{role}"
+            topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
 
         self.override_subscribers = []

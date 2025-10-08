@@ -1,0 +1,14 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+
+  <node pkg="carla_multi_vehicle_planner" type="path_mux.py" name="path_mux" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="local_fresh_timeout" value="0.5" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="conflict_detector.py" name="conflict_detector" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="horizon_s" value="6.0" />
+    <param name="dt" value="0.1" />
+  </node>
+</launch>
