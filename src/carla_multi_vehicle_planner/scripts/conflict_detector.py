@@ -41,6 +41,9 @@ class ConflictDetector:
         self.lc_duration_s = float(rospy.get_param("~lc_duration_s", 2.0))
         self.lc_min_gap_s = float(rospy.get_param("~lc_min_gap_s", 0.8))
         self.use_lane_conflict = bool(rospy.get_param("~use_lane_conflict", False))
+        # Detour stability controls
+        self.detour_republish_min_s = float(rospy.get_param("~detour_republish_min_s", 0.8))
+        self.detour_side_stick_s = float(rospy.get_param("~detour_side_stick_s", 1.0))
 
         if self.dt <= 0.0:
             self.dt = 0.1
@@ -82,6 +85,7 @@ class ConflictDetector:
             self._detour_state[role] = {
                 "active": False,
                 "last_switch": rospy.Time(0),
+                "offset_sign": None,
             }
 
         timer_period = max(0.1, self.dt * 0.5)
@@ -531,10 +535,25 @@ class ConflictDetector:
                 and current_target is not None
                 and abs(float(current_target) - float(previous_target)) < 1.0
             ):
-                if last_publish is not None and (now - last_publish).to_sec() < 0.5:
+                if last_publish is not None and (now - last_publish).to_sec() < self.detour_republish_min_s:
                     return
 
-        path_msg = self._build_detour(role, conflict_info)
+        # Determine desired side and apply stickiness to avoid rapid flipping
+        track = self._tracks[role]
+        desired_sign = self._determine_offset(track, conflict_info)
+        state = self._detour_state.get(role)
+        effective_sign = desired_sign
+        if state is not None and state.get("offset_sign") is not None:
+            if (now - state.get("last_switch", rospy.Time(0))).to_sec() < self.detour_side_stick_s:
+                effective_sign = float(state["offset_sign"])  # stick to previous side briefly
+            elif desired_sign != state["offset_sign"]:
+                state["offset_sign"] = desired_sign
+                state["last_switch"] = now
+        elif state is not None:
+            state["offset_sign"] = desired_sign
+            state["last_switch"] = now
+
+        path_msg = self._build_detour(role, conflict_info, effective_sign)
         if path_msg is None:
             return
 
@@ -578,7 +597,7 @@ class ConflictDetector:
         empty.header.frame_id = self._tracks[role].get("frame_id", "map")
         self._publishers[role].publish(empty)
 
-    def _build_detour(self, role: str, info: Dict[str, object]) -> Optional[Path]:
+    def _build_detour(self, role: str, info: Dict[str, object], forced_sign: Optional[float] = None) -> Optional[Path]:
         track = self._tracks[role]
         if not track["points"] or track["path_length"] <= 0.0:
             return None
@@ -599,7 +618,7 @@ class ConflictDetector:
         if len(samples) < 2:
             return None
 
-        offset_sign = self._determine_offset(track, info)
+        offset_sign = forced_sign if forced_sign is not None else self._determine_offset(track, info)
         detour_points: List[Tuple[float, float]] = []
         for idx, (sx, sy, sample_s) in enumerate(samples):
             progress = 0.0

@@ -24,4 +24,5 @@ catkin_install_python(PROGRAMS
   scripts/path_mux.py
   scripts/conflict_detector.py
   scripts/udp_ackermann_sender.py
+  scripts/frenet_debug_visualizer.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

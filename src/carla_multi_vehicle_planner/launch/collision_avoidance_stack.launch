@@ -13,5 +13,7 @@
     <param name="use_lane_conflict" value="false" />
     <param name="detour_lat_m" value="1.6" />
     <param name="min_switch_cooldown_s" value="1.2" />
+    <param name="detour_republish_min_s" value="0.8" />
+    <param name="detour_side_stick_s" value="1.0" />
   </node>
 </launch>
