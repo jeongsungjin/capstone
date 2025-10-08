@@ -3,6 +3,7 @@ carla_multi_vehicle_planner
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig-version.cmake /home/ctrl/capstone/devel/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig-version.cmake
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/pkgconfig/carla_multi_vehicle_planner.pc /home/ctrl/capstone/devel/lib/pkgconfig/carla_multi_vehicle_planner.pc
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/key_selector.py /home/ctrl/capstone/devel/lib/carla_multi_vehicle_planner/key_selector.py
+/home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/udp_ackermann_sender.py /home/ctrl/capstone/devel/lib/carla_multi_vehicle_planner/udp_ackermann_sender.py
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/networkx_path_planner.py /home/ctrl/capstone/devel/lib/carla_multi_vehicle_planner/networkx_path_planner.py
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py /home/ctrl/capstone/devel/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py
 /home/ctrl/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/path_mux.py /home/ctrl/capstone/devel/lib/carla_multi_vehicle_planner/path_mux.py

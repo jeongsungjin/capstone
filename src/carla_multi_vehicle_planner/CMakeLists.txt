@@ -23,4 +23,5 @@ catkin_install_python(PROGRAMS
   scripts/rviz_goal_mux.py
   scripts/path_mux.py
   scripts/conflict_detector.py
+  scripts/udp_ackermann_sender.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

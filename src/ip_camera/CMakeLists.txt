@@ -17,7 +17,6 @@ include_directories(
 )
 
 catkin_install_python(PROGRAMS
-  scripts/low_latency_rtsp_streamer.py
-  scripts/gst_rtsp_ros_streamer.py
+  scripts/ip_camera_streamer.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
