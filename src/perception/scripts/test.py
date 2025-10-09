@@ -12,17 +12,13 @@ from PIL import Image
 from utils import LetterBox, DEFAULT_LETTERBOX_SIZE
 
 # chg pkg path
-ENGINE = '/home/guest5/2.5d-object-detection/checkpoints/model_v2_half.plan'
-IMG_ABS = '/home/guest5/2.5d-object-detection/samples/k729_cam1_1730382931-498000000.jpg'
+ENGINE = '/home/guest5/capstone/src/perception/engine/model_v2_half.plan'
+IMG_ABS = '/home/guest5/capstone/src/perception/samples/k729_cam1_1730382931-498000000.jpg'
 # 원하는 입력 크기 (동적 엔진일 때 필요). 고정 엔진이면 엔진에서 읽어옵니다.
 H, W = 832, 1440
 
 def fail(msg):
     print(f"[ERR] {msg}", file=sys.stderr); sys.exit(1)
-
-if not ENGINE or not IMG_ABS:
-    print(f"Usage: {sys.argv[0]} </abs/path/to/engine.plan> </abs/path/to/image.jpg>")
-    sys.exit(1)
 
 if not os.path.isabs(IMG_ABS):
     fail("image path must be ABSOLUTE (e.g., /home/user/pic.jpg)")
@@ -31,7 +27,7 @@ if not os.path.isfile(ENGINE):
 if not os.path.isfile(IMG_ABS):
     fail(f"image not found: {IMG_ABS}")
 
-logger = trt.Logger(trt.Logger.WARNING)
+logger = trt.Logger(trt.Logger.ERROR)
 with open(ENGINE, "rb") as f, trt.Runtime(logger) as rt:
     engine = rt.deserialize_cuda_engine(f.read())
 if engine is None: fail("engine deserialize failed")
@@ -68,6 +64,7 @@ if img is None: fail(f"failed to read image: {IMG_ABS}")
 draw_img = np.copy(img)
 original_width, original_height = (img.shape[1], img.shape[0])
 img = np.stack([LetterBox(DEFAULT_LETTERBOX_SIZE, auto=False, stride=32)(img)])
+print('fijfoeijjefofjeioj', img.shape)
 img = img[..., ::-1].transpose((0, 3, 1, 2))
 img = np.ascontiguousarray(img)
 nchw = img.astype(np.float32) / 255.0
@@ -75,6 +72,7 @@ nchw = img.astype(np.float32) / 255.0
 # match engine input dtype (fp32/fp16)
 in_dtype = trt.nptype(engine.get_binding_dtype(inp_idx))
 if nchw.dtype != in_dtype:
+    print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@2")
     nchw = nchw.astype(in_dtype, copy=False)
 
 # ---- buffers ----
@@ -88,8 +86,10 @@ host = [None] * engine.num_bindings
 dev  = [None] * engine.num_bindings
 for i in range(engine.num_bindings):
     nb = nbytes(i)
+    print('nb', nb)
     host[i] = cuda.pagelocked_empty(nb, dtype=np.uint8)
     dev[i]  = cuda.mem_alloc(nb)
+    print(i, nb)
     bindings[i] = int(dev[i])
 
 # copy input
@@ -199,10 +199,7 @@ def _non_max_suppression(
     # Settings
     multi_label &= nc > 1  # multiple labels per box (adds 0.5ms/img)
 
-    print('201', prediction.shape)
     prediction = prediction.transpose(0, 2, 1)  # shape(1,84,6300) to shape(1,6300,84)
-    print(prediction.shape)
-
     output = [np.zeros((0, 8 + nm))] * bs
 
     # TODO: get rid of loop, we're operating on a single image only anyway
@@ -301,4 +298,4 @@ for oid in out_ids:
 
     out_file_ext = IMG_ABS.split('.')[-1]
     out_file = f'{osp.basename(IMG_ABS).rstrip("." + out_file_ext)}_trt_out.{out_file_ext}'
-    visualize_detections(arr, draw_img, save_path=out_file)
+    visualize_detections(arr, draw_img, save_path=osp.join('/home/guest5/capstone/src/perception/output', out_file))
