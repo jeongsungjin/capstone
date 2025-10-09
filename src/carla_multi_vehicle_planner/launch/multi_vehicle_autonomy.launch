@@ -33,4 +33,17 @@
     <param name="max_vehicle_count" value="6" />
     <param name="update_rate" value="2.0" />
   </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="schedule_visualizer.py" name="schedule_visualizer" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="frame_id" value="map" />
+    <param name="text_scale" value="5.0" />
+    <param name="line_width" value="0.6" />
+    <param name="hide_past" value="true" />
+    <param name="time_window" value="40.0" />
+  </node>
 </launch>

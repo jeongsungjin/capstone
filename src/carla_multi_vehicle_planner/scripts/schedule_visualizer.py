@@ -13,7 +13,7 @@ class ScheduleVisualizer:
     def __init__(self):
         rospy.init_node("schedule_visualizer", anonymous=True)
 
-        self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        self.num_vehicles = int(rospy.get_param("~num_vehicles", 6))
         self.frame_id = rospy.get_param("~frame_id", "map")
         self.text_scale = float(rospy.get_param("~text_scale", 5.2))
         self.line_width = float(rospy.get_param("~line_width", 0.35))

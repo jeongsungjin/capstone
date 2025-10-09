@@ -12,6 +12,10 @@ from nav_msgs.msg import Path
 from std_msgs.msg import Header
 
 from setup_carla_path import CARLA_EGG, AGENTS_ROOT
+from time_aware_prioritized_planner import (
+    TimeAwarePrioritizedPlanner,
+    ScheduledVisit,
+)
 
 try:
     import carla
@@ -73,6 +77,37 @@ class NetworkXPathPlanner:
             self.start_search_radius = 5.0
         if self.start_search_radius_max < self.start_search_radius:
             self.start_search_radius_max = self.start_search_radius
+        # Time-aware scheduling (optional)
+        self.enable_time_aware_planning: bool = bool(
+            rospy.get_param("~enable_time_aware_planning", True)
+        )
+        if self.enable_time_aware_planning:
+            reservation_dt = float(rospy.get_param("~reservation_dt", 0.2))
+            reservation_nominal_speed = float(
+                rospy.get_param("~reservation_nominal_speed", 10.0)
+            )
+            reservation_buffer_time = float(
+                rospy.get_param("~reservation_buffer_time", 0.4)
+            )
+            reservation_wait_max = float(
+                rospy.get_param("~reservation_wait_max", 5.0)
+            )
+            reservation_horizon = float(
+                rospy.get_param("~reservation_horizon", 40.0)
+            )
+            reservation_proximity_resolution = float(
+                rospy.get_param("~reservation_proximity_resolution", 0.5)
+            )
+            self.time_planner = TimeAwarePrioritizedPlanner(
+                dt=reservation_dt,
+                nominal_speed=reservation_nominal_speed,
+                buffer_time=reservation_buffer_time,
+                max_wait_time=reservation_wait_max,
+                reservation_horizon=reservation_horizon,
+                proximity_resolution=reservation_proximity_resolution,
+            )
+        else:
+            self.time_planner = None
 
         self.replan_remaining_m = float(rospy.get_param("~replan_remaining_m", 30.0))
         self.replan_cooldown_sec = float(rospy.get_param("~replan_cooldown_sec", 0.5))
@@ -133,10 +168,17 @@ class NetworkXPathPlanner:
 
         # Publishers
         self.path_publishers: Dict[str, rospy.Publisher] = {}
+        self.schedule_publishers: Dict[str, rospy.Publisher] = {}
+        self.vehicle_schedules: Dict[str, List[ScheduledVisit]] = {}
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+            if self.time_planner is not None:
+                schedule_topic = f"/global_path_schedule_{role}"
+                self.schedule_publishers[role] = rospy.Publisher(
+                    schedule_topic, Path, queue_size=1, latch=True
+                )
 
         self.override_subscribers = []
         for index in range(self.num_vehicles):
@@ -311,6 +353,7 @@ class NetworkXPathPlanner:
                 index,
                 start_waypoint,
                 start_meta,
+                route,
                 sampled_points,
                 dest_index,
                 front_offset,
@@ -326,12 +369,16 @@ class NetworkXPathPlanner:
             return
 
         route_points = self._ensure_path_starts_at_vehicle(route_points, front_xy)
+        # Build CARLA route for scheduling
+        dest_loc = self.spawn_points[dest_index].location
+        route = self.route_planner.trace_route(start_waypoint.transform.location, dest_loc)
         goal_signature = ("spawn", (float(dest_index),))
         self._commit_path(
             role,
             index,
             start_waypoint,
             start_meta,
+            route,
             route_points,
             dest_index,
             front_offset,
@@ -509,6 +556,25 @@ class NetworkXPathPlanner:
             pose.header = header
             pose.pose.position.x = x
             pose.pose.position.y = y
+            pose.pose.orientation.w = 1.0
+            msg.poses.append(pose)
+        publisher.publish(msg)
+
+    def _publish_schedule_path(self, role: str, visits: List[ScheduledVisit]):
+        if not visits or self.time_planner is None:
+            return
+        publisher = self.schedule_publishers.get(role)
+        if publisher is None:
+            return
+        header = Header(stamp=rospy.Time.now(), frame_id="map")
+        msg = Path(header=header)
+        time_scale = self.time_planner.dt
+        for visit in visits:
+            pose = PoseStamped()
+            pose.header = header
+            pose.pose.position.x = visit.position[0]
+            pose.pose.position.y = visit.position[1]
+            pose.pose.position.z = float(visit.arrival) * time_scale
             pose.pose.orientation.w = 1.0
             msg.poses.append(pose)
         publisher.publish(msg)
@@ -695,6 +761,7 @@ class NetworkXPathPlanner:
         index: int,
         start_waypoint,
         start_meta: Optional[Dict[str, Any]],
+        route: Optional[List[Tuple[Any, Any]]],
         path_points: List[Tuple[float, float]],
         dest_index: Optional[int],
         front_offset: float,
@@ -703,6 +770,37 @@ class NetworkXPathPlanner:
         if len(path_points) < 2:
             self._handle_plan_failure(role, f"{role}: planned path invalid (len={len(path_points)})")
             return False
+
+        original_points = path_points[:]
+        if self.time_planner is not None:
+            # reset scheduling state for this agent
+            self.time_planner.release_agent(role)
+            if route:
+                waypoints = [item[0] for item in route if item and item[0] is not None]
+            else:
+                waypoints = []
+            if waypoints:
+                schedule_result = self.time_planner.schedule_route(
+                    agent_id=role,
+                    route_waypoints=waypoints,
+                    base_path_points=None,
+                )
+                if schedule_result.success:
+                    visits = schedule_result.visits or []
+                    self.vehicle_schedules[role] = visits
+                    if schedule_result.expanded_path:
+                        path_points = schedule_result.expanded_path
+                    else:
+                        path_points = original_points
+                    self._publish_schedule_path(role, visits)
+                else:
+                    rospy.logwarn(
+                        "%s: time-aware scheduling failed (%s); using spatial path only",
+                        role,
+                        schedule_result.reason if schedule_result.reason else "unknown",
+                    )
+                    self.vehicle_schedules.pop(role, None)
+                    path_points = original_points
 
         self.vehicle_paths[role] = path_points
         self._store_path_geometry(role, path_points)
