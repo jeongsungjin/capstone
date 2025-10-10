@@ -36,7 +36,7 @@ class MultiVehicleController:
         self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
         self.wheelbase = rospy.get_param("~wheelbase", 2.8)
         self.max_steer = rospy.get_param("~max_steer", 0.7)
-        self.target_speed = rospy.get_param("~target_speed", 8.0)
+        self.target_speed = rospy.get_param("~target_speed", 3.0)
         self.control_frequency = rospy.get_param("~control_frequency", 50.0)
 
         self.client = carla.Client("localhost", 2000)
