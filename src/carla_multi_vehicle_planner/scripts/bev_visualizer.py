@@ -15,10 +15,10 @@ from visualization_msgs.msg import Marker, MarkerArray
 # =======================
 # Vehicle Visualization Settings
 # =======================
-VEHICLE_RECT_W = 16    # 직사각형 가로 (픽셀)
-VEHICLE_RECT_H = 12    # 직사각형 세로 (픽셀)
+VEHICLE_RECT_W = 4    # 직사각형 가로 (픽셀)
+VEHICLE_RECT_H = 2    # 직사각형 세로 (픽셀)
 
-VEHICLE_MARKER_SCALE = 6.0    # RViz 마커 큐브 크기 (meter 단위)
+VEHICLE_MARKER_SCALE = 2.0    # RViz 마커 큐브 크기 (meter 단위)
 VEHICLE_MARKER_TYPE = Marker.CUBE  # RViz 마커: CUBE 로 변경
 
 CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
