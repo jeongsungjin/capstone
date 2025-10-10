@@ -15,12 +15,12 @@ class ScheduleVisualizer:
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 6))
         self.frame_id = rospy.get_param("~frame_id", "map")
-        self.text_scale = float(rospy.get_param("~text_scale", 5.2))
+        self.text_scale = float(rospy.get_param("~text_scale", 3.2))
         self.line_width = float(rospy.get_param("~line_width", 0.35))
         self.time_window = float(rospy.get_param("~time_window", 20.0))  # seconds of future to show; <=0 to disable
         self.hide_past = bool(rospy.get_param("~hide_past", True))
         self.clear_each_tick = bool(rospy.get_param("~clear_each_tick", True))
-        self.label_count = int(rospy.get_param("~label_count", 12))  # approx labels per vehicle
+        self.label_count = int(rospy.get_param("~label_count", 6))  # approx labels per vehicle
 
         self._lock = threading.RLock()
         # role -> (samples, base_stamp_sec)
