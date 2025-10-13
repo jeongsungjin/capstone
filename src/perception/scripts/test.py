@@ -190,6 +190,7 @@ def _non_max_suppression(
     if isinstance(prediction, (list, tuple)):  # YOLOv8 model in validation model, output = (inference_out, loss_out)
         prediction = prediction[0]  # select only inference output
 
+    print(prediction.shape)
     bs = prediction.shape[0]  # batch size (BCN, i.e. 1,84,6300)
     nc = nc or (prediction.shape[1] - 6)  # number of classes
     nm = prediction.shape[1] - nc - 6  # number of masks
@@ -291,11 +292,11 @@ for oid in out_ids:
     dtype = trt.nptype(engine.get_binding_dtype(oid))
     oshape= tuple(ctx.get_binding_shape(oid))
     arr = np.frombuffer(host[oid], dtype=np.uint8).view(dtype).reshape(oshape)
-    print(arr.dtype, arr.shape)
+    print('###############', arr.dtype, arr.shape)
 
     arr = _non_max_suppression(arr)[0]
     results = _scale_triangles(arr[:, :6], DEFAULT_LETTERBOX_SIZE, (original_height, original_width, 3))
 
     out_file_ext = IMG_ABS.split('.')[-1]
     out_file = f'{osp.basename(IMG_ABS).rstrip("." + out_file_ext)}_trt_out.{out_file_ext}'
-    visualize_detections(arr, draw_img, save_path=osp.join('/home/guest5/capstone/src/perception/output', out_file))
+    visualize_detections(results, draw_img, save_path=osp.join('/home/guest5/capstone/src/perception/output', out_file))
