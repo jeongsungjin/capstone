@@ -1,0 +1,51 @@
+- 
+  bp_name: "vehicle.vehicle.kintax"
+  location:
+    x: -5.0
+    y: -16.0
+    z: 0.5999999642372131
+  rotation:
+    yaw: 0
+    pitch: 0
+    roll: 0
+  path:
+    - x: -5.0
+      y: -16.0
+      z: 0.5999999642372131
+    - x: -5.0
+      y: -16.0
+      z: 0.5999999642372131
+- 
+  bp_name: "vehicle.vehicle.kintax"
+  location:
+    x: 6.0
+    y: -6.0
+    z: 0.5999999642372131
+  rotation:
+    yaw: 0
+    pitch: 0
+    roll: 0
+  path:
+    - x: 6.0
+      y: 6.0
+      z: 0.5999999642372131
+    - x: -6.0
+      y: 6.0
+      z: 0.5999999642372131
+- 
+  bp_name: "vehicle.vehicle.kintax"
+  location:
+    x: 0.0
+    y: 6.0
+    z: 0.5999999642372131
+  rotation:
+    yaw: 0
+    pitch: 0
+    roll: 0
+  path:
+    - x: 0.0
+      y: -6.0
+      z: 0.5999999642372131
+    - x: -6.0
+      y: -6.0
+      z: 0.5999999642372131
