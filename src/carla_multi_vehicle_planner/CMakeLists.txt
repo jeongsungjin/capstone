@@ -23,4 +23,6 @@ catkin_install_python(PROGRAMS
   scripts/rviz_goal_mux.py
   scripts/path_mux.py
   scripts/conflict_detector.py
+  scripts/rccar_udp_sender.py
+  scripts/carla_cleanup.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

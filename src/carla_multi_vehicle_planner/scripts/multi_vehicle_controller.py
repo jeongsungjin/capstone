@@ -38,9 +38,10 @@ class MultiVehicleController:
         if carla is None:
             raise RuntimeError("CARLA Python API unavailable")
 
-        self.sock = sock
-        self.dest = dest
-        self.seq = seq_start
+        # RC카로 UDP를 직접 송신하던 테스트 코드는 분리되었습니다.
+        self.sock = None
+        self.dest = None
+        self.seq = 0
 
         # === Xycar 송신 튜닝(하드코딩) ===
         self._xy_scale = 500.0      # 라디안 조향각 → 정수 스케일 (≈ 도수 변환)
@@ -51,11 +52,11 @@ class MultiVehicleController:
         self._last_xy_angle = 0
         self._hold_count = 0
         # ============================
-        self.num_vehicles = rospy.get_param("~num_vehicles", 3)
-        self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
-        self.wheelbase = rospy.get_param("~wheelbase", 2.8)
+        self.num_vehicles = rospy.get_param("~num_vehicles", 1)
+        self.lookahead_distance = rospy.get_param("~lookahead_distance", 0.8)
+        self.wheelbase = rospy.get_param("~wheelbase", 0.68)
         self.max_steer = rospy.get_param("~max_steer", 0.7)
-        self.target_speed = rospy.get_param("~target_speed", 8.0)
+        self.target_speed = rospy.get_param("~target_speed", 3.0)
         self.control_frequency = rospy.get_param("~control_frequency", 50.0)
 
         self.client = carla.Client("localhost", 2000)
@@ -284,40 +285,7 @@ class MultiVehicleController:
             control.throttle = 0.0
             control.brake = min(1.0, -speed_error / max(1.0, self.target_speed))
         vehicle.apply_control(control)
-        if role == self._role_name(0) and self.sock is not None and self.dest is not None:
-            # 라디안 steer → 직접 스케일링 (정규화 없이)
-            # steer는 라디안 단위이므로 직접 스케일링하여 더 정확한 매핑
-            xy_angle = int(round(steer * self._xy_scale))
-
-            # 최소각 보정: 0으로 깎여 '안 먹는' 느낌 방지(데드밴드 우회)
-            if 0 < abs(xy_angle) < self._xy_min_abs:
-                xy_angle = self._xy_min_abs if xy_angle > 0 else -self._xy_min_abs
-
-            # 좌우 반전 필요시
-            if self._xy_invert:
-                xy_angle = -xy_angle
-
-            # 클램핑
-            xy_angle = max(-self._xy_clip, min(self._xy_clip, xy_angle))
-
-            # (옵션) 홀드: 0이 잠깐 나올 때 직전 유효각 1~2프레임 유지
-            if xy_angle == 0 and self._last_xy_angle != 0 and self._hold_count < self._xy_hold_frames:
-                xy_angle = self._last_xy_angle
-                self._hold_count += 1
-            else:
-                self._last_xy_angle = xy_angle
-                self._hold_count = 0
-
-            # 속도는 정수화 후 안전 클램프
-            xy_speed = int(round(speed))
-            xy_speed = max(-50, min(50, xy_speed))
-
-            # (디버그) 우리가 실제로 무엇을 보내는지 0.2s마다 출력
-            rospy.loginfo_throttle(0.2, f"[UDP] angle={xy_angle}, speed={xy_speed}, steer={steer:.3f}rad, degrees={math.degrees(steer):.1f}°")
-
-            pkt = struct.pack(FMT, xy_angle, xy_speed, self.seq & 0xFFFFFFFF)
-            self.sock.sendto(pkt, self.dest)
-            self.seq += 1
+        # RC카 UDP 송신은 별도 노드로 분리됨
 
 
     def _publish_ackermann(self, role, steer, speed):
@@ -327,28 +295,12 @@ class MultiVehicleController:
         self.control_publishers[role].publish(msg)
 
     def _shutdown(self):
-        try:
-            if self.sock is not None and self.dest is not None:
-                for _ in range(5):
-                    pkt = struct.pack(FMT, 0, 0, self.seq & 0xFFFFFFFF)
-                    self.sock.sendto(pkt, self.dest)
-                    self.seq += 1
-                    time.sleep(0.01)
-        except Exception:
-            pass
+        pass
 
 
 if __name__ == "__main__":
     try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 256 * 1024)
-        except OSError:
-            pass
-        sock.bind(("10.30.75.241", 0))
-        dest = ("10.30.78.103", 5555)
-        seq = 0
-        MultiVehicleController(sock=sock, dest=dest, seq_start=seq)
+        MultiVehicleController()
         rospy.spin()
     except rospy.ROSInterruptException:
         pass

@@ -41,10 +41,10 @@ class CarlaOccupancyGridPublisher:
 
     def __init__(self) -> None:
         self._node_name = rospy.get_name() or "occupancy_grid_publisher"
-        self._resolution = float(rospy.get_param("~resolution", 0.25))
+        self._resolution = float(rospy.get_param("~resolution", 0.10))
         if self._resolution <= 0:
             rospy.logwarn("%s: resolution <= 0 requested, falling back to 0.25", self._node_name)
-            self._resolution = 0.25
+            self._resolution = 0.10
 
         self._update_rate = float(rospy.get_param("~update_rate", 1.0))
         if self._update_rate <= 0:

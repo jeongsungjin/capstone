@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Standalone CARLA Cleanup Launch File -->
+    <!-- Use this to manually clean up all CARLA actors -->
+    
+    <arg name="instant" default="false" doc="If true, runs instant cleanup and exits immediately"/>
+    
+    <!-- Instant cleanup mode - runs once and exits -->
+    <group if="$(arg instant)">
+        <node name="carla_instant_cleanup" pkg="carla_multi_vehicle_planner" 
+              type="carla_cleanup.py" args="--instant" output="screen"/>
+    </group>
+    
+    <!-- Regular cleanup mode - runs as a node and waits for shutdown signal -->
+    <group unless="$(arg instant)">
+        <node name="carla_cleanup" pkg="carla_multi_vehicle_planner" 
+              type="carla_cleanup.py" output="screen" required="true"/>
+        
+        <node name="cleanup_info" pkg="rostopic" type="rostopic" 
+              args="pub -1 /cleanup/status std_msgs/String 'CARLA Cleanup Node Running - Press Ctrl+C to clean and exit'"
+              output="screen"/>
+    </group>
+</launch> 
