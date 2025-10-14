@@ -62,27 +62,6 @@ private:
     bool auto_, scale_fill_, scale_up_, center_, stride_;
 };
 
-class Logger : public ILogger {
-    void log(Severity severity, const char* msg) noexcept override
-    {
-        if (severity <= Severity::kWARNING)
-            std::cout << msg << std::endl;
-    }
-} gLogger;
-
-std::vector<char> readPlanFile(const std::string& filename){
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Failed to open plan file");
-
-    file.seekg(0, file.end);
-    size_t size = file.tellg();
-    file.seekg(0, file.beg);
-
-    std::vector<char> buffer(size);
-    file.read(buffer.data(), size);
-    return buffer;
-}
-
 xt::xarray<half> cvMatToXTensor(const cv::Mat& img, const float scale_factor=1.0){
     CV_Assert(img.depth() == CV_8U);
     int rows = img.rows;
@@ -321,44 +300,6 @@ xt::xarray<float> scale_triangles(xt::xarray<float> triangles,
     xt::view(triangles, xt::all(), xt::range(0, 6)) /= gain;
 
     return triangles;
-}
-
-void visualize_detections(const xt::xarray<float>& detections,
-                          cv::Mat& image,
-                          const std::string& save_path = "")
-{
-    for (std::size_t i = 0; i < detections.shape()[0]; ++i)
-    {
-        auto det = xt::view(detections, i, xt::range(0, 6));
-
-        float x1 = det(0);
-        float y1 = det(1);
-        float x2 = det(2);
-        float y2 = det(3);
-        float x3 = det(4);
-        float y3 = det(5);
-
-        // mirrored points
-        float x2_mirror = 2.0f * x1 - x2;
-        float y2_mirror = 2.0f * y1 - y2;
-        float x3_mirror = 2.0f * x1 - x3;
-        float y3_mirror = 2.0f * y1 - y3;
-
-        std::vector<cv::Point> triangle_points = {
-            cv::Point(static_cast<int>(x2), static_cast<int>(y2)),
-            cv::Point(static_cast<int>(x3), static_cast<int>(y3)),
-            cv::Point(static_cast<int>(x2_mirror), static_cast<int>(y2_mirror)),
-            cv::Point(static_cast<int>(x3_mirror), static_cast<int>(y3_mirror))
-        };
-
-        const cv::Point* pts[1] = { triangle_points.data() };
-        int npts[] = { static_cast<int>(triangle_points.size()) };
-
-        cv::polylines(image, pts, npts, 1, true, cv::Scalar(0, 255, 0), 2);
-    }
-
-    if (!save_path.empty())
-        cv::imwrite(save_path, image);
 }
 
 #endif

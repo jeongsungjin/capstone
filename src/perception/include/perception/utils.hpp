@@ -6,16 +6,21 @@
 
 #include <typeinfo>
 
-#include <xtensor/xarray.hpp>
-#include <xtensor/xadapt.hpp>
-#include <xtensor/xview.hpp>
-#include <xtensor/xsort.hpp>
-#include <xtensor/xmath.hpp>
-#include <xtensor/xcontainer.hpp>
-#include <xtensor/xmanipulation.hpp>
-#include <xtensor/xio.hpp>
-#include <xtensor/xbuilder.hpp>
-#include <xtensor/xindex_view.hpp>
+#include <xtensor/containers/xarray.hpp>
+#include <xtensor/containers/xadapt.hpp>
+#include <xtensor/containers/xcontainer.hpp>
+
+#include <xtensor/views/xview.hpp>
+#include <xtensor/views/xindex_view.hpp>
+
+#include <xtensor/misc/xsort.hpp>
+#include <xtensor/misc/xmanipulation.hpp>
+
+#include <xtensor/io/xio.hpp>
+
+#include <xtensor/core/xmath.hpp>
+
+#include <xtensor/generators/xbuilder.hpp>
 
 constexpr int LETTERBOX_SIZE[2] = {832, 1440};
 
@@ -61,6 +66,27 @@ public:
 private:
     bool auto_, scale_fill_, scale_up_, center_, stride_;
 };
+
+class Logger : public ILogger {
+    void log(Severity severity, const char* msg) noexcept override
+    {
+        if (severity <= Severity::kWARNING)
+            std::cout << msg << std::endl;
+    }
+} gLogger;
+
+std::vector<char> readPlanFile(const std::string& filename){
+    std::ifstream file(filename, std::ios::binary);
+    if (!file) throw std::runtime_error("Failed to open plan file");
+
+    file.seekg(0, file.end);
+    size_t size = file.tellg();
+    file.seekg(0, file.beg);
+
+    std::vector<char> buffer(size);
+    file.read(buffer.data(), size);
+    return buffer;
+}
 
 xt::xarray<half> cvMatToXTensor(const cv::Mat& img, const float scale_factor=1.0){
     CV_Assert(img.depth() == CV_8U);

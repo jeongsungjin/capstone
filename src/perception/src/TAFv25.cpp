@@ -1,6 +1,6 @@
-#include "TAFv25.h"
+#include "perception/TAFv25.h"
 
-#include "utils.hpp"
+#include "perception/utils.hpp"
 
 TAFv25::TAFv25(int original_width, int original_height):
     ORIGINAL_WIDTH(original_width), ORIGINAL_HEIGHT(original_height)
@@ -71,9 +71,10 @@ xt::xarray<half> TAFv25::preprocess(cv::Mat img){
     auto nhwc = xt::reshape_view(hwc, {1, rows, cols, channels});
 
     xt::xarray<half> nchw = xt::transpose(nhwc, {0, 3, 1, 2});
+    return nchw;
 }
 
-xt::xarray<float> TAFv25::inference(){
+xt::xarray<float> TAFv25::inference(xt::xarray<half>& model_input){
     CUDA_CHECK(cudaMemcpyAsync(
         buffers_[INPUT_INDEX], 
         nchw.data(), 
@@ -87,7 +88,7 @@ xt::xarray<float> TAFv25::inference(){
     half prob[IO_SIZE[output_idx] / sizeof(half)];
     CUDA_CHECK(cudaMemcpyAsync(prob, buffers[1], IO_SIZE[output_idx], cudaMemcpyDeviceToHost, stream));
     
-    cudaStreamSynchronize(stream); // GPU 비동기 동작을 대기하는 blocking 함수
+    cudaStreamSynchronize(stream);
 
     std::vector<float> _output(output_shape_.d[0] * output_shape_.d[1] * output_shape_.d[2]);
     for(int i = 0; i < _output.size(); i++){
@@ -106,65 +107,86 @@ xt::xarray<float> TAFv25::inference(){
     return output;
 }
 
-void pixel_to_world_plane();
-void complete_parallelograms();
-
-void TAFv25::postprocess(){
+xt::array<float> TAFv25::postprocess(xt::xarray<float> output){
     auto nms = non_max_suppression(output)[0];
-    auto results = scale_triangles(xt::view(nms, xt::all(), xt::range(0, 6)), {832, 1440}, {ori_h, ori_w});
-    visualize_detections(
-        results,
-        img,
-        "/home/ivsp/capstone/src/perception/output/result.png"
+    xt::array<float> ret = scale_triangles(xt::view(nms, xt::all(), xt::range(0, 6)), {832, 1440}, {ori_h, ori_w});
+
+    return ret;
+}
+
+template <typename E>
+xt::array<float> TAFv25::pixelToWorldPlane(const xt::xexpression<E>&, const xt::array<float>& H){
+    auto hom = xt::concatenate(xt::xtuple(x, xt::ones({x.shape()[0], 1})), 1);
+    auto res = xt::linalg::dot(hom, xt::transpose(H));
+    res /= xt::view(res, xt::all(), xt::keep(2));
+    return xt::eval(xt::view(res, xt::all(), xt::range(0, 1)));
+}
+
+xt::array<float> TAFv25::completeParallelogramse(xt::array<float>& corners1, xt::array<float>& corners2, xt::array<float>& centers, bool include_centers){
+    auto corners3 = centers * 2 - corners1;
+    auto corners4 = centers * 2 - corners2;
+
+    auto dir = corners1 - corners3;
+    auto rads = xt::atan2(
+        xt::view(dir, xt::all(), xt::keep(1)),
+        xt::view(dir, xt::all(), xt::keep(0))
     );
 
-    auto v_centers_p = xt::view(results, xt::all(), xt::range(0, 1));
-    auto v_front_1_p = xt::view(results, xt::all(), xt::range(2, 3));
-    auto v_front_2_p = xt::view(results, xt::all(), xt::range(4, 5));
+    auto widths = xt::linalg::norm(corners2 - corners1, 2, 1);
+    auto heights = xt::linalg::norm(corners3 - corners1, 2, 1);
 
-    auto r_centers_w = pixel_to_world_plane();
-    auto r_front_1_w = pixel_to_world_plane();
-    auto r_front_2_w = pixel_to_world_plane();
+    xt::array<float> ret = xt::concatenate(
+        xt::xtuple(
+            centers,
+            widths,
+            heights,
+            rads
+        ), 1
+    );
 
-    auto oriented_bbox = complete_parallelograms(r_front_1_w, r_front_2_w, r_centers_w);
+    return xt::eval(ret);
+}
+
+void TAFv25::visualizeDetections(cv::Mat& image, const xt::xarray<float>& detections){
+    for (std::size_t i = 0; i < detections.shape()[0]; ++i){
+        auto det = xt::view(detections, i, xt::range(0, 6));
+
+        float x1 = det(0);
+        float y1 = det(1);
+        float x2 = det(2);
+        float y2 = det(3);
+        float x3 = det(4);
+        float y3 = det(5);
+
+        float x2_mirror = 2.0f * x1 - x2;
+        float y2_mirror = 2.0f * y1 - y2;
+        float x3_mirror = 2.0f * x1 - x3;
+        float y3_mirror = 2.0f * y1 - y3;
+
+        std::vector<cv::Point> triangle_points = {
+            cv::Point(static_cast<int>(x2), static_cast<int>(y2)),
+            cv::Point(static_cast<int>(x3), static_cast<int>(y3)),
+            cv::Point(static_cast<int>(x2_mirror), static_cast<int>(y2_mirror)),
+            cv::Point(static_cast<int>(x3_mirror), static_cast<int>(y3_mirror))
+        };
+
+        const cv::Point* pts[1] = { triangle_points.data() };
+        int npts[] = { static_cast<int>(triangle_points.size()) };
+
+        cv::polylines(image, pts, npts, 1, true, cv::Scalar(0, 255, 0), 2);
+    }
+}
+
+xt::array<float> TAFv25::toBEV(xt::array<float>& model_output){
+    auto v_centers_p = xt::view(model_output, xt::all(), xt::range(0, 1));
+    auto v_front_1_p = xt::view(model_output, xt::all(), xt::range(2, 3));
+    auto v_front_2_p = xt::view(model_output, xt::all(), xt::range(4, 5));
+
+    auto r_centers_w = pixel_to_world_plane(v_centers_p);
+    auto r_front_1_w = pixel_to_world_plane(v_front_1_p);
+    auto r_front_2_w = pixel_to_world_plane(v_front_2_p);
+
+    xt::array<float> oriented_bbox = complete_parallelograms(r_front_1_w, r_front_2_w, r_centers_w, true);
 
     return oriented_bbox;
 }
-
-
-/*
-def norm_homogeneous2(x: np.ndarray) -> np.ndarray:
-    return x / x[:, 2:3] 
-
-# (N, 2) -> (N, 3)
-def homogeneous(x: np.ndarray) -> np.ndarray:
-    return np.concatenate([x, np.ones((x.shape[0], 1))], axis=1)
-
-def pixel_to_world_plane(x: np.ndarray, H: np.ndarray, rescale: Optional[Callable[[np.ndarray], np.ndarray]]) -> np.ndarray:
-    x = x.reshape(1, 2) if x.ndim == 1 else x
-    x = rescale(x) if rescale is not None else x
-    hom = homogeneous(x)
-    res = norm_homogeneous2(hom @ H.T)
-    return res[:, :2]
-*/
-
-
-/*
-def mirror_points(points: np.ndarray, centers: np.ndarray) -> np.ndarray:
-    assert points.shape == centers.shape
-    return centers - (points - centers)
-
-def get_heading(p1: np.ndarray, p2: np.ndarray, degrees: bool=False) -> np.ndarray:
-    p1 = p1.reshape((1, 2)) if p1.ndim == 1 else p1
-    p2 = p2.reshape((1, 2)) if p2.ndim == 1 else p2
-    dir = p1 - p2
-    radians = np.arctan2(dir[:,1], dir[:,0])
-    return np.degrees(radians) if degrees else radianss
-
-def complete_parallelograms(corners1: np.ndarray, corners2: np.ndarray, centers: np.ndarray, include_centers: bool = True) -> np.ndarray:
-    corners3 = mirror_points(corners1, centers)
-    corners4 = mirror_points(corners2, centers)
-    corners = np.array([corners1, corners2, corners4, corners3])  # e.g. fl, fr, bl, br
-    corners = np.vstack([corners, centers.reshape(1, -1, 2)]) if include_centers else corners
-    return np.moveaxis(corners, 0, 1)  # (N, 4, 2)  or (N, 5, 2)
-*/

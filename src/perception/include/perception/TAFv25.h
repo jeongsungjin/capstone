@@ -1,7 +1,10 @@
+#ifndef __TAFv25_H__
+#define __TAFv25_H__
+
 #include <vector>
 #include <iostream>
 
-#include <xtensor/xarray.hpp>
+#include <xtensor/containers/xarray.hpp>
 
 #include <cuda_fp16.h>
 #include "cuda_utils.h"
@@ -22,9 +25,11 @@ public:
     TAFv25(int original_width, int original_height);
     ~TAFv25();
 
-    xt::xarray<half> preprocess();
-    xt::xarray<float> inference();
-    xt::xarray<float> postprocess();
+    xt::xarray<half> preprocess(cv::Mat img);
+    xt::xarray<float> inference(xt::xarray<half>& model_input);
+    xt::xarray<float> postprocess(xt::xarray<float> model_output);
+    xt::xarray<float> toBEV(xt::array<float>& model_output);
+    void TAFv25::visualizeDetections(cv::Mat& image, const xt::xarray<float>& detections);
 
 private:
     const int ORIGINAL_WIDTH;
@@ -42,4 +47,12 @@ private:
 
     // ouput layer shape
     Dims output_shape_;
+
+private:
+    xt::array<float> completeParallelogramse(xt::array<float>& corners1, xt::array<float>& corners2, xt::array<float>& centers, bool include_centers);
+
+    template <typename E>
+    xt::array<float> pixelToWorldPlane(const xt::xexpression<E>&, const xt::array<float>& H);
 };
+
+#endif
