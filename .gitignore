@@ -23,3 +23,6 @@ engine/
 samples/
 reference/
 output/
+
+.catkin_tools/
+
