@@ -14,34 +14,9 @@
 
 #include "cuda_utils.h"
 
-constexpr char* INPUT_NAME = "x";
-constexpr char* OUTPUT_NAME = "y";
-
 #include <opencv2/opencv.hpp>
 
 using namespace nvinfer1;
-
-class Logger : public ILogger {
-    void log(Severity severity, const char* msg) noexcept override
-    {
-        if (severity <= Severity::kWARNING)
-            std::cout << msg << std::endl;
-    }
-} gLogger;
-
-std::vector<char> readPlanFile(const std::string& filename){
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) throw std::runtime_error("Failed to open plan file");
-
-    file.seekg(0, file.end);
-    size_t size = file.tellg();
-    file.seekg(0, file.beg);
-
-    std::vector<char> buffer(size);
-    file.read(buffer.data(), size);
-    return buffer;
-}
-
 
 int main(){
     std::vector<char> engineData = readPlanFile("/home/ivsp/capstone/src/perception/engine/model_cm86.plan");
