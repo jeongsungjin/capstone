@@ -14,8 +14,8 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="graph_resolution" value="1.0" />
     <param name="path_sampling" value="1.0" />
-    <param name="min_destination_distance" value="80.0" />
-    <param name="max_destination_distance" value="400.0" />
+    <param name="min_destination_distance" value="15.0" />
+    <param name="max_destination_distance" value="200.0" />
     <param name="override_preempt_min_dist" value="6.0" />
   </node>
 

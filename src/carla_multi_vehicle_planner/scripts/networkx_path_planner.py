@@ -479,6 +479,7 @@ class NetworkXPathPlanner:
             index,
             start_waypoint,
             start_meta,
+            route,
             sampled_points,
             None,
             front_offset,
