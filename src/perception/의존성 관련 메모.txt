@@ -1,10 +1,8 @@
-Ubuntu 20.04 환경에서는 패키지 리스트에 xtensor 가 존재하지 않음.
-그래서 소스를 직접 빌드해주어야 함.
-의존성으로는 xtl 이 있는데 이놈은 패키지 리스트에 있지만, 버전이 낮아서 활용할 수 없음.
+conda 에서 환경을 하나 만들고
+conda install -c conda-forge xtensor
+conda install -c conda-forge xtensor-blas
 
-그래서 먼저 xtl 을 빌드 후 설치해야 함.
-그런데 여기서도 하나 문제가 ROS의 경우에는 cmake 3.16 버전을 쓰는데 
-xtl 0.8.0 버전은 cmake 버전이 이거 보다 높아서 cmake 가 안 됨.
+설치해주고, CMakeLists.txt 에서 그 xtensor 주석 달린 부분의 경로를 수정해주면 됨..
+이때 ros 랑 호환성을 위해서 conda deactivate 를 한 상태에서 빌드 해야 함!!
 
-그래서 conda 로 임시 환경을 하나 만들어서 cmake 최신 버전을 
-설치 후 xtl 과 xtensor 를 모두 잘 빌드하면 됨.
+즉, conda 를 이용해서 필요한 C++ 라이브러리를 설치하고, include 폴더만 쏙쏙 빼먹겠다는 이야기임.
