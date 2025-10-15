@@ -1,0 +1,8 @@
+conda 에서 환경을 하나 만들고
+conda install -c conda-forge xtensor
+conda install -c conda-forge xtensor-blas
+
+설치해주고, CMakeLists.txt 에서 그 xtensor 주석 달린 부분의 경로를 수정해주면 됨..
+이때 ros 랑 호환성을 위해서 conda deactivate 를 한 상태에서 빌드 해야 함!!
+
+즉, conda 를 이용해서 필요한 C++ 라이브러리를 설치하고, include 폴더만 쏙쏙 빼먹겠다는 이야기임.
