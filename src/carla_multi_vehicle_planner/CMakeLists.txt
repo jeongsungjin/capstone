@@ -24,5 +24,4 @@ catkin_install_python(PROGRAMS
   scripts/udp_ackermann_sender.py
   scripts/path_relay.py
   scripts/schedule_visualizer.py
-  scripts/frenet_sd_visualizer.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

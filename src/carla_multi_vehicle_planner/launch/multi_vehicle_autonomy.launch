@@ -6,7 +6,7 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.tesla.model3" />
-    <param name="target_speed" value="7.0" />
+    <param name="target_speed" value="13.0" />
   </node>
 
   <node pkg="carla_multi_vehicle_planner" type="networkx_path_planner.py" name="networkx_path_planner" output="screen">
