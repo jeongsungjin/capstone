@@ -16,11 +16,19 @@ include_directories(/usr/local/cuda/include)
 
 # TensorRT
 link_directories(/usr/lib/x86_64-linux-gnu)
-include_directories(/usr/lib/x86_64-linux-gnu)
+include_directories(/usr/include/x86_64-linux-gnu)
+
+# TensorRT (환경변수 경로 우선)
+if(DEFINED ENV{TENSORRT_ROOT})
+  message(STATUS "Using TENSORRT_ROOT=$ENV{TENSORRT_ROOT}")
+  include_directories($ENV{TENSORRT_ROOT}/include)
+  link_directories($ENV{TENSORRT_ROOT}/lib)
+endif()
 
 # xtensor
-link_directories(/home/ivsp/miniconda3/envs/25od/include)
-include_directories(/home/ivsp/miniconda3/envs/25od/include)
+
+link_directories(/home/ctrl/miniconda3/envs/perception/include)
+include_directories(/home/ctrl/miniconda3/envs/perception/include)
 
 find_package(BLAS REQUIRED)
 message(${BLAS_LIBRARIES})

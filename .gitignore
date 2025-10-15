@@ -19,3 +19,4 @@ __pycache__/
 .idea/
 .DS_Store
 *.bag
+*.onnx

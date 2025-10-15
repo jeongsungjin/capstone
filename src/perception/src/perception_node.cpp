@@ -12,6 +12,9 @@ PerceptionNode::PerceptionNode(): nh_(), perception_model_(1920, 1080){
     );
     
     image_sub_ = nh_.subscribe(image_topic_name_, 10, &PerceptionNode::imageCallback, this);
+
+    running_ = true;
+    perception_thread = std::thread(&PerceptionNode::processing, this);
 }
 
 void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
@@ -47,5 +50,13 @@ void PerceptionNode::processing(){
             auto bev_info = perception_model_.toBEV(detections);
             perception_model_.visualizeDetections(*img_ptr, detections);
         }
+    }
+}
+
+PerceptionNode::~PerceptionNode(){
+    running_ = false;
+    cv_buf_.notify_all();
+    if (perception_thread.joinable()){
+        perception_thread.join();
     }
 }
