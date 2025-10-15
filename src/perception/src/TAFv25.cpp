@@ -2,6 +2,9 @@
 
 #include "perception/utils.hpp"
 
+#include <xtensor-blas/xlinalg.hpp>
+#include <xtensor/xshape.hpp>
+
 TAFv25::TAFv25(int original_width, int original_height):
     ORIGINAL_WIDTH(original_width), ORIGINAL_HEIGHT(original_height)
 {
@@ -23,9 +26,9 @@ TAFv25::TAFv25(int original_width, int original_height):
         throw std::runtime_error("output shape is not correct");
     }
 
-    if(output_shape.d[0] == 1 
-        && output_shape.d[1] == 7
-        && output_shape.d[2] == 24570)
+    if(output_shape_.d[0] == 1 
+        && output_shape_.d[1] == 7
+        && output_shape_.d[2] == 24570)
     {    
         throw std::runtime_error("output shape is not correct");
     }
@@ -41,12 +44,12 @@ TAFv25::TAFv25(int original_width, int original_height):
     for(int i = 0; i < 2; i++){
         auto bshape = engine_->getBindingDimensions(i);
         for(int j = 0; j < bshape.nbDims; j++){
-            IO_SIZE_[i] *= bshape.d[j];
+            io_size_[i] *= bshape.d[j];
         }
     }
 
-    CUDA_CHECK(cudaMalloc(&buffers_[INPUT_INDEX], IO_SIZE_[INPUT_INDEX]));
-    CUDA_CHECK(cudaMalloc(&buffers_[OUTPUT_INDEX], IO_SIZE_[OUTPUT_INDEX]));
+    CUDA_CHECK(cudaMalloc(&buffers_[INPUT_INDEX], io_size_[INPUT_INDEX]));
+    CUDA_CHECK(cudaMalloc(&buffers_[OUTPUT_INDEX], io_size_[OUTPUT_INDEX]));
 
     CUDA_CHECK(cudaStreamCreate(&stream_));
 }
@@ -54,8 +57,8 @@ TAFv25::TAFv25(int original_width, int original_height):
 TAFv25::~TAFv25(){
     cudaStreamDestroy(stream_);
 
-    CUDA_CHECK(cudaFree(buffers[INPUT_INDEX]));
-    CUDA_CHECK(cudaFree(buffers[OUTPUT_INDEX]));
+    CUDA_CHECK(cudaFree(buffers_[INPUT_INDEX]));
+    CUDA_CHECK(cudaFree(buffers_[OUTPUT_INDEX]));
 
     context_->destroy();
     engine_->destroy();
@@ -77,18 +80,18 @@ xt::xarray<half> TAFv25::preprocess(cv::Mat img){
 xt::xarray<float> TAFv25::inference(xt::xarray<half>& model_input){
     CUDA_CHECK(cudaMemcpyAsync(
         buffers_[INPUT_INDEX], 
-        nchw.data(), 
-        IO_SIZE[INPUT_INDEX], 
+        model_input.data(), 
+        io_size_[INPUT_INDEX], 
         cudaMemcpyHostToDevice, 
-        stream
+        stream_
     ));
 
-    context->enqueueV2(buffers, stream, nullptr);
+    context_->enqueueV2(buffers_, stream_, nullptr);
     
-    half prob[IO_SIZE[output_idx] / sizeof(half)];
-    CUDA_CHECK(cudaMemcpyAsync(prob, buffers[1], IO_SIZE[output_idx], cudaMemcpyDeviceToHost, stream));
+    half prob[io_size_[OUTPUT_INDEX] / sizeof(half)];
+    CUDA_CHECK(cudaMemcpyAsync(prob, buffers_[1], io_size_[OUTPUT_INDEX], cudaMemcpyDeviceToHost, stream_));
     
-    cudaStreamSynchronize(stream);
+    cudaStreamSynchronize(stream_);
 
     std::vector<float> _output(output_shape_.d[0] * output_shape_.d[1] * output_shape_.d[2]);
     for(int i = 0; i < _output.size(); i++){
@@ -107,22 +110,26 @@ xt::xarray<float> TAFv25::inference(xt::xarray<half>& model_input){
     return output;
 }
 
-xt::array<float> TAFv25::postprocess(xt::xarray<float> output){
+xt::xarray<float> TAFv25::postprocess(xt::xarray<float> output){
     auto nms = non_max_suppression(output)[0];
-    xt::array<float> ret = scale_triangles(xt::view(nms, xt::all(), xt::range(0, 6)), {832, 1440}, {ori_h, ori_w});
+    xt::xarray<float> ret = scale_triangles(xt::view(nms, xt::all(), xt::range(0, 6)), {832, 1440}, {ORIGINAL_HEIGHT, ORIGINAL_WIDTH});
 
     return ret;
 }
 
 template <typename E>
-xt::array<float> TAFv25::pixelToWorldPlane(const xt::xexpression<E>&, const xt::array<float>& H){
-    auto hom = xt::concatenate(xt::xtuple(x, xt::ones({x.shape()[0], 1})), 1);
-    auto res = xt::linalg::dot(hom, xt::transpose(H));
+xt::xarray<float> TAFv25::pixelToWorldPlane(const xt::xexpression<E>& x, const xt::xarray<float>& H){
+    xt::xarray<float> x_concrete = x;
+    auto homogeneous = xt::concatenate(
+        xt::xtuple(x_concrete, xt::ones<float>({x_concrete.shape()[0], static_cast<std::size_t>(1)})), 
+        1
+    );
+    auto res = xt::linalg::dot(homogeneous, xt::transpose(H));
     res /= xt::view(res, xt::all(), xt::keep(2));
     return xt::eval(xt::view(res, xt::all(), xt::range(0, 1)));
 }
 
-xt::array<float> TAFv25::completeParallelogramse(xt::array<float>& corners1, xt::array<float>& corners2, xt::array<float>& centers, bool include_centers){
+xt::xarray<float> TAFv25::completeParallelograms(xt::xarray<float>& corners1, xt::xarray<float>& corners2, xt::xarray<float>& centers, bool include_centers){
     auto corners3 = centers * 2 - corners1;
     auto corners4 = centers * 2 - corners2;
 
@@ -132,10 +139,13 @@ xt::array<float> TAFv25::completeParallelogramse(xt::array<float>& corners1, xt:
         xt::view(dir, xt::all(), xt::keep(0))
     );
 
-    auto widths = xt::linalg::norm(corners2 - corners1, 2, 1);
-    auto heights = xt::linalg::norm(corners3 - corners1, 2, 1);
+    xt::xarray<float> diff1 = corners2 - corners1;
+    xt::xarray<float> diff2 = corners3 - corners1;
 
-    xt::array<float> ret = xt::concatenate(
+    auto widths = xt::sqrt(xt::sum(diff1 * diff1, {1}));
+    auto heights = xt::sqrt(xt::sum(diff2 * diff2, {1}));
+
+    xt::xarray<float> ret = xt::concatenate(
         xt::xtuple(
             centers,
             widths,
@@ -177,16 +187,18 @@ void TAFv25::visualizeDetections(cv::Mat& image, const xt::xarray<float>& detect
     }
 }
 
-xt::array<float> TAFv25::toBEV(xt::array<float>& model_output){
+xt::xarray<float> TAFv25::toBEV(xt::xarray<float>& model_output){
     auto v_centers_p = xt::view(model_output, xt::all(), xt::range(0, 1));
     auto v_front_1_p = xt::view(model_output, xt::all(), xt::range(2, 3));
     auto v_front_2_p = xt::view(model_output, xt::all(), xt::range(4, 5));
 
-    auto r_centers_w = pixel_to_world_plane(v_centers_p);
-    auto r_front_1_w = pixel_to_world_plane(v_front_1_p);
-    auto r_front_2_w = pixel_to_world_plane(v_front_2_p);
+    xt::xarray<float> H({1, 2, 3, 4, 5});
 
-    xt::array<float> oriented_bbox = complete_parallelograms(r_front_1_w, r_front_2_w, r_centers_w, true);
+    auto r_centers_w = pixelToWorldPlane(v_centers_p, H);
+    auto r_front_1_w = pixelToWorldPlane(v_front_1_p, H);
+    auto r_front_2_w = pixelToWorldPlane(v_front_2_p, H);
+
+    xt::xarray<float> oriented_bbox = completeParallelograms(r_front_1_w, r_front_2_w, r_centers_w, true);
 
     return oriented_bbox;
 }

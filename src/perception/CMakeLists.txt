@@ -19,8 +19,12 @@ link_directories(/usr/lib/x86_64-linux-gnu)
 include_directories(/usr/lib/x86_64-linux-gnu)
 
 # xtensor
-link_directories(/usr/local/include)
-include_directories(/usr/local/include)
+link_directories(/home/ivsp/miniconda3/envs/25od/include)
+include_directories(/home/ivsp/miniconda3/envs/25od/include)
+
+find_package(BLAS REQUIRED)
+message(${BLAS_LIBRARIES})
+
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -44,7 +48,7 @@ target_link_libraries(perception
   nvinfer
   nvinfer_plugin
   cudart
-  xtensor
+  ${BLAS_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
 )

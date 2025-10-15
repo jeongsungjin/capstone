@@ -11,6 +11,10 @@
 #include <queue>
 #include <memory>
 
+#include <mutex>
+#include <thread>
+#include <condition_variable>
+
 typedef std::shared_ptr<cv::Mat> MatPtr;
 
 class PerceptionNode{
@@ -26,7 +30,7 @@ private:
     std::queue<MatPtr> buf_img_;
     std::mutex m_buf_;
     std::condition_variable cv_buf_;
-    std::thread perception_thread+;
+    std::thread perception_thread;
     bool running_;
 
     TAFv25 perception_model_;

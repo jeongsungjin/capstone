@@ -4,13 +4,15 @@
 #include <vector>
 #include <iostream>
 
-#include <xtensor/containers/xarray.hpp>
+#include <xtensor/xarray.hpp>
 
 #include <cuda_fp16.h>
 #include "cuda_utils.h"
 
 #include <NvInfer.h>
 #include <NvInferRuntime.h>
+
+#include <opencv2/opencv.hpp>
 
 using namespace nvinfer1;
 
@@ -28,8 +30,8 @@ public:
     xt::xarray<half> preprocess(cv::Mat img);
     xt::xarray<float> inference(xt::xarray<half>& model_input);
     xt::xarray<float> postprocess(xt::xarray<float> model_output);
-    xt::xarray<float> toBEV(xt::array<float>& model_output);
-    void TAFv25::visualizeDetections(cv::Mat& image, const xt::xarray<float>& detections);
+    xt::xarray<float> toBEV(xt::xarray<float>& model_output);
+    void visualizeDetections(cv::Mat& image, const xt::xarray<float>& detections);
 
 private:
     const int ORIGINAL_WIDTH;
@@ -37,11 +39,11 @@ private:
 
     // TensorRT 객체
     IRuntime* runtime_;
-    ICudaEngine* engine_
+    ICudaEngine* engine_;
     IExecutionContext* context_;
     cudaStream_t stream_;
 
-    int io_size_[] = { sizeof(half), sizeof(half) };
+    int io_size_[2] = { sizeof(half), sizeof(half) };
     
     void* buffers_[2];
 
@@ -49,10 +51,10 @@ private:
     Dims output_shape_;
 
 private:
-    xt::array<float> completeParallelogramse(xt::array<float>& corners1, xt::array<float>& corners2, xt::array<float>& centers, bool include_centers);
+    xt::xarray<float> completeParallelograms(xt::xarray<float>& corners1, xt::xarray<float>& corners2, xt::xarray<float>& centers, bool include_centers);
 
     template <typename E>
-    xt::array<float> pixelToWorldPlane(const xt::xexpression<E>&, const xt::array<float>& H);
+    xt::xarray<float> pixelToWorldPlane(const xt::xexpression<E>&, const xt::xarray<float>& H);
 };
 
 #endif

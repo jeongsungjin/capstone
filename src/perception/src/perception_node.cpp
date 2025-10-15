@@ -25,13 +25,13 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
     cv_buf_.notify_one();
 }
 
-void PerceptionNode::process(){
+void PerceptionNode::processing(){
     ROS_INFO("Processing thread started.");
     while (running_){
         MatPtr img_ptr = nullptr;
         {
             std::unique_lock<std::mutex> lock(m_buf_);
-            cv_.wait(lock, [this] { return !buf_img_.empty() || !running_; });
+            cv_buf_.wait(lock, [this] { return !buf_img_.empty() || !running_; });
      
             if (!running_) break;
         

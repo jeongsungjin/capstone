@@ -6,21 +6,21 @@
 
 #include <typeinfo>
 
-#include <xtensor/containers/xarray.hpp>
-#include <xtensor/containers/xadapt.hpp>
-#include <xtensor/containers/xcontainer.hpp>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xadapt.hpp>
+#include <xtensor/xcontainer.hpp>
 
-#include <xtensor/views/xview.hpp>
-#include <xtensor/views/xindex_view.hpp>
+#include <xtensor/xview.hpp>
+#include <xtensor/xindex_view.hpp>
 
-#include <xtensor/misc/xsort.hpp>
-#include <xtensor/misc/xmanipulation.hpp>
+#include <xtensor/xsort.hpp>
+#include <xtensor/xmanipulation.hpp>
 
-#include <xtensor/io/xio.hpp>
+#include <xtensor/xio.hpp>
 
-#include <xtensor/core/xmath.hpp>
+#include <xtensor/xmath.hpp>
 
-#include <xtensor/generators/xbuilder.hpp>
+#include <xtensor/xbuilder.hpp>
 
 constexpr int LETTERBOX_SIZE[2] = {832, 1440};
 
