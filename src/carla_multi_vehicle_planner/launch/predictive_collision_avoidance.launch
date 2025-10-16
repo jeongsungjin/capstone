@@ -1,0 +1,18 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="prediction_loop_hz" default="10.0" />
+  <arg name="collision_threshold" default="4.0" />
+  <arg name="release_threshold" default="6.0" />
+
+  <!-- Predictive Conflict Manager for collision avoidance -->
+  <node pkg="carla_multi_vehicle_planner"
+        type="predictive_conflict_manager.py"
+        name="predictive_conflict_manager"
+        output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="loop_rate_hz" value="$(arg prediction_loop_hz)" />
+    <param name="collision_threshold" value="$(arg collision_threshold)" />
+    <param name="release_threshold" value="$(arg release_threshold)" />
+    <param name="prediction_horizon" value="10" />
+  </node>
+</launch>

@@ -15,18 +15,18 @@ try:
 except ImportError:
     setup_carla_path = None  # noqa: F841 so linters do not complain
 
-default_egg = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-CARLA_EGG_PATH = os.environ.get("CARLA_EGG") or getattr(setup_carla_path, "CARLA_EGG", None) or default_egg
+default_build_path = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+CARLA_BUILD_PATH = os.environ.get("CARLA_BUILD_PATH") or getattr(setup_carla_path, "CARLA_BUILD_PATH", None) or default_build_path
 
-if CARLA_EGG_PATH and CARLA_EGG_PATH not in sys.path:
-    sys.path.insert(0, CARLA_EGG_PATH)
+if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla  # type: ignore
 except ImportError as exc:  # pragma: no cover - handled at runtime with ROS logging
     rospy.logfatal(
-        "occupancy_grid_publisher: failed to import CARLA egg %s under Python %s: %s",
-        CARLA_EGG_PATH,
+        "occupancy_grid_publisher: failed to import CARLA build path %s under Python %s: %s",
+        CARLA_BUILD_PATH,
         sys.version.replace("\n", " "),
         exc,
     )

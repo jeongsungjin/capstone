@@ -50,7 +50,7 @@ roslaunch carla_multi_vehicle_planner integrated_multi_vehicle_system.launch rvi
 
 ## 사전 요구사항
 
-Start the CARLA simulator (0.9.16) before launching the ROS stack. The nodes expect CARLA to run on `localhost:2000` and the CARLA Python egg to be located at `/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg`.
+Start the CARLA simulator (0.9.16) before launching the ROS stack. The nodes expect CARLA to run on `localhost:2000` and the CARLA Python build path to be located at `/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38`.
 
 ## RViz 설정
 
