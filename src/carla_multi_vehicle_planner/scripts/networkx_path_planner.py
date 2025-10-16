@@ -11,7 +11,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
 
-from setup_carla_path import CARLA_EGG, AGENTS_ROOT
+from setup_carla_path import CARLA_BUILD_PATH, AGENTS_ROOT
 
 try:
     import carla

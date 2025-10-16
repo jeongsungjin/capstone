@@ -10,9 +10,9 @@ from geometry_msgs.msg import Pose, PoseStamped, Quaternion, Twist, Vector3
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Header
 
-CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-if CARLA_EGG not in sys.path:
-    sys.path.insert(0, CARLA_EGG)
+CARLA_BUILD_PATH = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+if CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
