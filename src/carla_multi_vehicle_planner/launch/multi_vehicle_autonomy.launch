@@ -5,7 +5,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
-    <param name="vehicle_model" value="vehicle.vehicle.xycar" />
+    <param name="vehicle_model" value="vehicle.tesla.model3" />
     <param name="target_speed" value="3.0" />
   </node>
 
@@ -14,9 +14,10 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="graph_resolution" value="0.25" />
     <param name="path_sampling" value="0.02" />
-    <param name="min_destination_distance" value="5.0" />
-    <param name="max_destination_distance" value="25.0" />
+    <param name="min_destination_distance" value="15.0" />
+    <param name="max_destination_distance" value="200.0" />
     <param name="override_preempt_min_dist" value="6.0" />
+    <param name="destination_retry_limit" value="50" />
   </node>
 
   <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/collision_avoidance_stack.launch">
