@@ -21,9 +21,9 @@ VEHICLE_RECT_H = 2    # 직사각형 세로 (픽셀)
 VEHICLE_MARKER_SCALE = 1.0    # RViz 마커 큐브 크기 (meter 단위)
 VEHICLE_MARKER_TYPE = Marker.CUBE  # RViz 마커: CUBE 로 변경
 
-CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-if CARLA_EGG not in sys.path:
-    sys.path.insert(0, CARLA_EGG)
+CARLA_BUILD_PATH = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+if CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
@@ -59,7 +59,7 @@ class BEVVisualizer:
         for index in range(1, self.max_vehicle_count + 1):
             role = f"ego_vehicle_{index}"
             rospy.Subscriber(f"/carla/{role}/odometry", Odometry, self._odom_cb, callback_args=role)
-            rospy.Subscriber(f"/planned_path_{role}", Path, self._path_cb, callback_args=role)
+            rospy.Subscriber(f"/global_path_{role}", Path, self._path_cb, callback_args=role)
 
         rospy.Timer(rospy.Duration(1.0 / max(self.update_rate, 0.1)), self._timer_cb)
 

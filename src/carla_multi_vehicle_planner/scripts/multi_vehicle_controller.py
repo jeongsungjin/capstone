@@ -10,12 +10,13 @@ import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Bool
 
 FMT = "!iiI"
 
-CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-if CARLA_EGG not in sys.path:
-    sys.path.insert(0, CARLA_EGG)
+CARLA_BUILD_PATH = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+if CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
@@ -67,6 +68,7 @@ class MultiVehicleController:
         self.states = {}
         self.control_publishers = {}
         self.pose_publishers = {}
+        self.stop_flags = {}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -80,7 +82,7 @@ class MultiVehicleController:
                 "progress_s": 0.0,
                 "remaining_distance": None,
             }
-            path_topic = f"/planned_path_{role}"
+            path_topic = f"/global_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
             control_topic = f"/carla/{role}/vehicle_control_cmd"
             pose_topic = f"/{role}/pose"
@@ -88,6 +90,8 @@ class MultiVehicleController:
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role)
             self.control_publishers[role] = rospy.Publisher(control_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+            rospy.Subscriber(f"/stop_flag_{role}", Bool, self._stop_flag_cb, callback_args=role)
+            self.stop_flags[role] = False
 
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._control_loop)
@@ -215,6 +219,8 @@ class MultiVehicleController:
             steer, speed = self._compute_control(state)
             if steer is None:
                 continue
+            if self.stop_flags.get(role, False):
+                speed = 0.0
             self._apply_carla_control(role, vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 
@@ -293,6 +299,9 @@ class MultiVehicleController:
         msg.steering_angle = steer
         msg.speed = speed
         self.control_publishers[role].publish(msg)
+
+    def _stop_flag_cb(self, msg: Bool, role: str):
+        self.stop_flags[role] = bool(msg.data)
 
     def _shutdown(self):
         pass

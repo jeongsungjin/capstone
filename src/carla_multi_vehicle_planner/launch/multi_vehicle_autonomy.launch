@@ -1,34 +1,36 @@
 <launch>
-  <arg name="num_vehicles" default="3" />
+  <arg name="num_vehicles" default="6" />
   <arg name="include_collision_avoidance" default="False" />
 
-  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
-    <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="enable_autopilot" value="false" />
-    <param name="vehicle_model" value="vehicle.tesla.model3" />
-    <param name="target_speed" value="3.0" />
-  </node>
+  <group unless="$(arg include_collision_avoidance)">
+    <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
+      <param name="num_vehicles" value="$(arg num_vehicles)" />
+      <param name="enable_autopilot" value="false" />
+      <param name="vehicle_model" value="vehicle.tesla.model3" />
+      <param name="target_speed" value="3.0" />
+    </node>
 
-  <node pkg="carla_multi_vehicle_planner" type="networkx_path_planner.py" name="networkx_path_planner" output="screen">
-    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
-    <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="graph_resolution" value="0.25" />
-    <param name="path_sampling" value="0.02" />
-    <param name="min_destination_distance" value="15.0" />
-    <param name="max_destination_distance" value="200.0" />
-    <param name="override_preempt_min_dist" value="6.0" />
-    <param name="destination_retry_limit" value="50" />
-  </node>
+    <node pkg="carla_multi_vehicle_planner" type="networkx_path_planner.py" name="networkx_path_planner" output="screen">
+      <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+      <param name="num_vehicles" value="$(arg num_vehicles)" />
+      <param name="graph_resolution" value="0.25" />
+      <param name="path_sampling" value="0.02" />
+      <param name="min_destination_distance" value="15.0" />
+      <param name="max_destination_distance" value="100.0" />
+      <param name="override_preempt_min_dist" value="6.0" />
+      <param name="destination_retry_limit" value="50" />
+    </node>
 
-  <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/collision_avoidance_stack.launch">
+    <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+      <param name="num_vehicles" value="$(arg num_vehicles)" />
+      <param name="lookahead_distance" value="2.0" />
+      <param name="target_speed" value="3.0" />
+    </node>
+  </group>
+
+  <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/predictive_collision_avoidance.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
   </include>
-
-  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
-    <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="lookahead_distance" value="2.0" />
-    <param name="target_speed" value="3.0" />
-  </node>
 
   <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
     <param name="max_vehicle_count" value="6" />

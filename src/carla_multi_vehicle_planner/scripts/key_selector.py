@@ -52,6 +52,9 @@ class KeySelectorNode:
             "1": "ego_vehicle_1",
             "2": "ego_vehicle_2",
             "3": "ego_vehicle_3",
+            "4": "ego_vehicle_4",
+            "5": "ego_vehicle_5",
+            "6": "ego_vehicle_6",
         }
         if key in mapping:
             self._publish_selection(mapping[key])
