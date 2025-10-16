@@ -48,17 +48,20 @@ public:
         int dh = (LETTERBOX_SIZE[0] - new_unpad_h) / 2;
         int dw = (LETTERBOX_SIZE[1] - new_unpad_w) / 2;
 
-        if(img_h != new_unpad_h && img_w != new_unpad_w){
-            cv::resize(img, img, cv::Size(new_unpad_w, new_unpad_h), cv::INTER_LINEAR);
+        cv::Mat resized;
+        if (img_h != new_unpad_h || img_w != new_unpad_w){
+            cv::resize(img, resized, cv::Size(new_unpad_w, new_unpad_h), 0, 0, cv::INTER_LINEAR);
+        } else {
+            resized = img.clone();
         }
 
         int top = static_cast<int>(std::round(dh - 0.1));
         int bottom = static_cast<int>(std::round(dh + 0.1));
         int left = static_cast<int>(std::round(dw - 0.1));
-        int right = static_cast<int>(std::round(dw - 0.1));
+        int right = static_cast<int>(std::round(dw + 0.1));
         
         cv::Mat ret;
-        cv::copyMakeBorder(img, ret, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
+        cv::copyMakeBorder(resized, ret, top, bottom, left, right, cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
         
         return ret;
     }

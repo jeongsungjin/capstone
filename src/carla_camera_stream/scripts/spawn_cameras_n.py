@@ -136,6 +136,7 @@ class MultiCameraSpawner:
             camera_bp.set_attribute('image_size_x', str(self.image_width))
             camera_bp.set_attribute('image_size_y', str(self.image_height))
             camera_bp.set_attribute('fov', str(self.fov))
+            camera_bp.set_attribute('sensor_tick', str(1.0/10.0))  # FPS 30으로 고정
 
             specs = self._resolve_camera_specs()
 

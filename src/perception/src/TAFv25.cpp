@@ -5,10 +5,12 @@
 #include <xtensor-blas/xlinalg.hpp>
 #include <xtensor/xshape.hpp>
 
+#include <chrono>
+
 TAFv25::TAFv25(int original_width, int original_height):
     ORIGINAL_WIDTH(original_width), ORIGINAL_HEIGHT(original_height)
 {
-    std::vector<char> engineData = readPlanFile("/home/ivsp/capstone/src/perception/engine/model_cm86.plan");
+    std::vector<char> engineData = readPlanFile("/home/ctrl/capstone/src/perception/engine/model_cm89.plan");
 
     runtime_ = createInferRuntime(gLogger);
     engine_ = runtime_->deserializeCudaEngine(engineData.data(), engineData.size());
@@ -26,9 +28,9 @@ TAFv25::TAFv25(int original_width, int original_height):
         throw std::runtime_error("output shape is not correct");
     }
 
-    if(output_shape_.d[0] == 1 
-        && output_shape_.d[1] == 7
-        && output_shape_.d[2] == 24570)
+    if(output_shape_.d[0] != 1 
+        || output_shape_.d[1] != 7
+        || output_shape_.d[2] != 24570)
     {    
         throw std::runtime_error("output shape is not correct");
     }
@@ -78,6 +80,7 @@ xt::xarray<half> TAFv25::preprocess(cv::Mat img){
 }
 
 xt::xarray<float> TAFv25::inference(xt::xarray<half>& model_input){
+    std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
     CUDA_CHECK(cudaMemcpyAsync(
         buffers_[INPUT_INDEX], 
         model_input.data(), 
@@ -92,11 +95,21 @@ xt::xarray<float> TAFv25::inference(xt::xarray<half>& model_input){
     CUDA_CHECK(cudaMemcpyAsync(prob, buffers_[1], io_size_[OUTPUT_INDEX], cudaMemcpyDeviceToHost, stream_));
     
     cudaStreamSynchronize(stream_);
+    std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
+    std::cout << "real inference time: " 
+            << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() 
+            << " ms" << std::endl;
 
+
+    std::chrono::high_resolution_clock::time_point t3 = std::chrono::high_resolution_clock::now();
     std::vector<float> _output(output_shape_.d[0] * output_shape_.d[1] * output_shape_.d[2]);
     for(int i = 0; i < _output.size(); i++){
         _output[i] =__half2float(prob[i]);
     }
+    std::chrono::high_resolution_clock::time_point t4 = std::chrono::high_resolution_clock::now();
+    std::cout << "float -> half time: " 
+            << std::chrono::duration_cast<std::chrono::milliseconds>(t4 - t3).count() 
+            << " ms" << std::endl;
 
     xt::xarray<float> output = xt::adapt(
         std::move(_output),

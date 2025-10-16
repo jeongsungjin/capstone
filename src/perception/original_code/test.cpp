@@ -19,7 +19,7 @@
 using namespace nvinfer1;
 
 int main(){
-    std::vector<char> engineData = readPlanFile("/home/ivsp/capstone/src/perception/engine/model_cm86.plan");
+    std::vector<char> engineData = readPlanFile("/home/ctrl/capstone/src/perception/engine/model_cm89.plan");
 
     IRuntime* runtime = createInferRuntime(gLogger);
     ICudaEngine* engine = runtime->deserializeCudaEngine(engineData.data(), engineData.size());
@@ -40,7 +40,7 @@ int main(){
         return -1; 
     }
     
-    std::string path = "/home/ivsp/capstone/src/perception/samples/k729_cam1_1730382931-498000000.jpg";
+    std::string path = "/home/ctrl/capstone/src/perception/samples/k729_cam1_1730382931-498000000.jpg";
     cv::Mat img = cv::imread(path, cv::IMREAD_COLOR);
     int ori_w = img.cols, ori_h = img.rows;
 
@@ -96,7 +96,7 @@ int main(){
     visualize_detections(
         tri,
         img,
-        "/home/ivsp/capstone/src/perception/output/result.png"
+        "/home/ctrl/capstone/src/perception/output/result.png"
     );
 
     cudaStreamDestroy(stream);
