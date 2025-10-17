@@ -75,7 +75,15 @@ class MultiVehicleSpawner:
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
         self.world = self.client.get_world()
-        self.traffic_manager = self.client.get_trafficmanager()
+        # Initialize Traffic Manager only if autopilot is enabled to avoid
+        # triggering TM map build on custom maps that may crash.
+        self.traffic_manager = None
+        if self.enable_autopilot:
+            try:
+                self.traffic_manager = self.client.get_trafficmanager()
+            except Exception as exc:
+                rospy.logwarn("Traffic Manager init failed: %s; continuing without autopilot", exc)
+                self.enable_autopilot = False
         self.carla_map = self.world.get_map()
         self.spawn_points = self.carla_map.get_spawn_points()
         if not self.spawn_points:
@@ -132,9 +140,14 @@ class MultiVehicleSpawner:
                 rospy.logerr(f"Failed to spawn vehicle {role_name} after {self.spawn_retry_limit} attempts")
                 continue
 
-            vehicle.set_autopilot(self.enable_autopilot, self.traffic_manager.get_port())
-            if self.enable_autopilot:
-                self.traffic_manager.vehicle_percentage_speed_difference(vehicle, max(0, 100 - self.target_speed * 2))
+            if self.enable_autopilot and self.traffic_manager is not None:
+                try:
+                    vehicle.set_autopilot(True, self.traffic_manager.get_port())
+                    self.traffic_manager.vehicle_percentage_speed_difference(
+                        vehicle, max(0, 100 - self.target_speed * 2)
+                    )
+                except Exception as exc:
+                    rospy.logwarn("Traffic Manager config failed for %s: %s", role_name, exc)
 
             self.vehicles.append(vehicle)
             topic = f"/carla/{role_name}/odometry"

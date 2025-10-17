@@ -21,8 +21,7 @@ catkin_install_python(PROGRAMS
   scripts/occupancy_grid_publisher.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
-  scripts/path_mux.py
-  scripts/conflict_detector.py
   scripts/udp_ackermann_sender.py
-  scripts/frenet_debug_visualizer.py
+  scripts/path_relay.py
+  scripts/schedule_visualizer.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

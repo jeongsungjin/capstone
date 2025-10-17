@@ -20,6 +20,7 @@ typedef std::shared_ptr<cv::Mat> MatPtr;
 class PerceptionNode{
 public:
     PerceptionNode();
+    ~PerceptionNode();
 
 private:
     ros::NodeHandle nh_;

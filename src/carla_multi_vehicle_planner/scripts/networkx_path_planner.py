@@ -10,8 +10,13 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
+from visualization_msgs.msg import Marker, MarkerArray
 
 from setup_carla_path import CARLA_EGG, AGENTS_ROOT
+from time_aware_prioritized_planner import (
+    TimeAwarePrioritizedPlanner,
+    ScheduledVisit,
+)
 
 try:
     import carla
@@ -73,6 +78,37 @@ class NetworkXPathPlanner:
             self.start_search_radius = 5.0
         if self.start_search_radius_max < self.start_search_radius:
             self.start_search_radius_max = self.start_search_radius
+        # Time-aware scheduling (optional)
+        self.enable_time_aware_planning: bool = bool(
+            rospy.get_param("~enable_time_aware_planning", True)
+        )
+        if self.enable_time_aware_planning:
+            reservation_dt = float(rospy.get_param("~reservation_dt", 0.2))
+            reservation_nominal_speed = float(
+                rospy.get_param("~reservation_nominal_speed", 10.0)
+            )
+            reservation_buffer_time = float(
+                rospy.get_param("~reservation_buffer_time", 0.4)
+            )
+            reservation_wait_max = float(
+                rospy.get_param("~reservation_wait_max", 5.0)
+            )
+            reservation_horizon = float(
+                rospy.get_param("~reservation_horizon", 40.0)
+            )
+            reservation_proximity_resolution = float(
+                rospy.get_param("~reservation_proximity_resolution", 0.5)
+            )
+            self.time_planner = TimeAwarePrioritizedPlanner(
+                dt=reservation_dt,
+                nominal_speed=reservation_nominal_speed,
+                buffer_time=reservation_buffer_time,
+                max_wait_time=reservation_wait_max,
+                reservation_horizon=reservation_horizon,
+                proximity_resolution=reservation_proximity_resolution,
+            )
+        else:
+            self.time_planner = None
 
         self.replan_remaining_m = float(rospy.get_param("~replan_remaining_m", 30.0))
         self.replan_cooldown_sec = float(rospy.get_param("~replan_cooldown_sec", 0.5))
@@ -117,6 +153,8 @@ class NetworkXPathPlanner:
         self.vehicle_path_lengths: Dict[str, float] = {}
         self.vehicle_destinations: Dict[str, int] = {}
         self.previous_paths: Dict[str, List[Tuple[float, float]]] = {}
+        # Store CARLA route waypoints per vehicle for continuous scheduling
+        self.vehicle_routes: Dict[str, List] = {}
         self.active_destinations: set[int] = set()
         self.override_goal: Dict[str, Optional[Tuple[float, float, rospy.Time]]] = {
             self._role_name(i): None for i in range(self.num_vehicles)
@@ -133,10 +171,17 @@ class NetworkXPathPlanner:
 
         # Publishers
         self.path_publishers: Dict[str, rospy.Publisher] = {}
+        self.schedule_publishers: Dict[str, rospy.Publisher] = {}
+        self.vehicle_schedules: Dict[str, List[ScheduledVisit]] = {}
+        # Unified marker publisher for schedule visualisation
+        self.schedule_marker_pub = rospy.Publisher(
+            "/carla_multi_vehicle_planner/schedule_markers", MarkerArray, queue_size=1, latch=True
+        )
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+            # Deprecated: Path-based schedule publisher (z encodes time). Replaced by MarkerArray.
 
         self.override_subscribers = []
         for index in range(self.num_vehicles):
@@ -170,6 +215,9 @@ class NetworkXPathPlanner:
         with self._planning_lock:
             self._refresh_vehicles()
             self._plan_for_all()
+            # Continuously recompute and publish time-aware schedules
+            if self.time_planner is not None:
+                self._recompute_all_schedules()
 
     def _progress_timer_cb(self, _event):
         with self._planning_lock:
@@ -311,6 +359,7 @@ class NetworkXPathPlanner:
                 index,
                 start_waypoint,
                 start_meta,
+                route,
                 sampled_points,
                 dest_index,
                 front_offset,
@@ -326,12 +375,16 @@ class NetworkXPathPlanner:
             return
 
         route_points = self._ensure_path_starts_at_vehicle(route_points, front_xy)
+        # Build CARLA route for scheduling
+        dest_loc = self.spawn_points[dest_index].location
+        route = self.route_planner.trace_route(start_waypoint.transform.location, dest_loc)
         goal_signature = ("spawn", (float(dest_index),))
         self._commit_path(
             role,
             index,
             start_waypoint,
             start_meta,
+            route,
             route_points,
             dest_index,
             front_offset,
@@ -432,6 +485,7 @@ class NetworkXPathPlanner:
             index,
             start_waypoint,
             start_meta,
+            route,
             sampled_points,
             None,
             front_offset,
@@ -465,6 +519,11 @@ class NetworkXPathPlanner:
             self.vehicle_path_lengths.pop(role, None)
             self.remaining_cache.pop(role, None)
             self.path_goal_signature.pop(role, None)
+            # Release reservations and drop stored routes/schedules
+            if self.time_planner is not None:
+                self.time_planner.release_agent(role)
+            self.vehicle_routes.pop(role, None)
+            self.vehicle_schedules.pop(role, None)
             self._reset_destination_tracking(role)
             return True
         return False
@@ -492,6 +551,11 @@ class NetworkXPathPlanner:
             self.remaining_cache.pop(role, None)
             self.path_goal_signature.pop(role, None)
             self.override_goal[role] = None
+            # Release reservations and drop stored routes/schedules
+            if self.time_planner is not None:
+                self.time_planner.release_agent(role)
+            self.vehicle_routes.pop(role, None)
+            self.vehicle_schedules.pop(role, None)
             return True
         return False
 
@@ -512,6 +576,104 @@ class NetworkXPathPlanner:
             pose.pose.orientation.w = 1.0
             msg.poses.append(pose)
         publisher.publish(msg)
+
+    def _publish_all_schedule_markers(self) -> None:
+        if self.time_planner is None or self.schedule_marker_pub is None:
+            return
+        header = Header(stamp=rospy.Time.now(), frame_id="map")
+        markers: List[Marker] = []
+
+        def _role_index(role_name: str) -> int:
+            try:
+                return max(0, int(role_name.split("_")[-1]) - 1)
+            except Exception:
+                return 0
+
+        def _color_for_index(idx: int) -> Tuple[float, float, float, float]:
+            color = self.colors[idx % len(self.colors)] if self.colors else carla.Color(r=255, g=255, b=255)
+            return float(color.r) / 255.0, float(color.g) / 255.0, float(color.b) / 255.0, 0.95
+
+        # Build markers for each role deterministically
+        present_roles = set()
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            visits = self.vehicle_schedules.get(role)
+            ns = f"schedule/{role}"
+            if not visits:
+                # Issue DELETEALL for roles without schedule to clear stale markers
+                delete_all = Marker()
+                delete_all.header = header
+                delete_all.ns = ns
+                delete_all.id = 0
+                delete_all.action = Marker.DELETEALL
+                markers.append(delete_all)
+                continue
+            present_roles.add(role)
+
+            r, g, b, a = _color_for_index(index)
+
+            # Line strip connecting scheduled node positions
+            line = Marker()
+            line.header = header
+            line.ns = ns
+            line.id = 1
+            line.type = Marker.LINE_STRIP
+            line.action = Marker.ADD
+            line.scale.x = 0.25  # line width
+            line.color.r = r
+            line.color.g = g
+            line.color.b = b
+            line.color.a = a
+            for v in visits:
+                p = carla.Location(x=v.position[0], y=v.position[1], z=0.5)
+                # Convert to geometry_msgs/Point
+                from geometry_msgs.msg import Point
+                line.points.append(Point(x=p.x, y=p.y, z=p.z))
+            markers.append(line)
+
+            # Node markers (spheres)
+            node_id = 1000
+            for idx, v in enumerate(visits):
+                sphere = Marker()
+                sphere.header = header
+                sphere.ns = ns
+                sphere.id = node_id + idx
+                sphere.type = Marker.SPHERE
+                sphere.action = Marker.ADD
+                sphere.pose.position.x = v.position[0]
+                sphere.pose.position.y = v.position[1]
+                sphere.pose.position.z = 0.5
+                sphere.scale.x = 0.6
+                sphere.scale.y = 0.6
+                sphere.scale.z = 0.6
+                sphere.color.r = r
+                sphere.color.g = g
+                sphere.color.b = b
+                sphere.color.a = a
+                markers.append(sphere)
+
+            # Arrival time text markers
+            text_id = 2000
+            time_scale = self.time_planner.dt
+            for idx, v in enumerate(visits):
+                text = Marker()
+                text.header = header
+                text.ns = ns
+                text.id = text_id + idx
+                text.type = Marker.TEXT_VIEW_FACING
+                text.action = Marker.ADD
+                text.pose.position.x = v.position[0]
+                text.pose.position.y = v.position[1]
+                text.pose.position.z = 1.4
+                text.scale.z = 0.8
+                text.color.r = r
+                text.color.g = g
+                text.color.b = b
+                text.color.a = 0.95
+                text.text = f"t={v.arrival * time_scale:.1f}s"
+                markers.append(text)
+
+        self.schedule_marker_pub.publish(MarkerArray(markers=markers))
 
     def _draw_path(self, path_points: List[Tuple[float, float]], index: int):
         if not self.enable_visualization or len(path_points) < 2:
@@ -551,6 +713,11 @@ class NetworkXPathPlanner:
         for role in list(self.previous_paths.keys()):
             self._clear_path(role)
         self.previous_paths.clear()
+        # Clear any reservations on shutdown
+        if self.time_planner is not None:
+            self.time_planner.clear()
+        self.vehicle_routes.clear()
+        self.vehicle_schedules.clear()
 
     # ------------------------------------------------------------------
     # Utility
@@ -575,6 +742,11 @@ class NetworkXPathPlanner:
             self.remaining_cache.pop(role, None)
             self.path_goal_signature.pop(role, None)
             self._clear_path(role)
+            # Release reservations and drop stored routes/schedules
+            if self.time_planner is not None:
+                self.time_planner.release_agent(role)
+            self.vehicle_routes.pop(role, None)
+            self.vehicle_schedules.pop(role, None)
             rospy.loginfo(
                 "override set for %s: (%.1f, %.1f)", role, goal_info[0], goal_info[1]
             )
@@ -695,6 +867,7 @@ class NetworkXPathPlanner:
         index: int,
         start_waypoint,
         start_meta: Optional[Dict[str, Any]],
+        route: Optional[List[Tuple[Any, Any]]],
         path_points: List[Tuple[float, float]],
         dest_index: Optional[int],
         front_offset: float,
@@ -703,6 +876,40 @@ class NetworkXPathPlanner:
         if len(path_points) < 2:
             self._handle_plan_failure(role, f"{role}: planned path invalid (len={len(path_points)})")
             return False
+
+        original_points = path_points[:]
+        # Persist CARLA route waypoints for continuous scheduling
+        route_waypoints = [item[0] for item in route] if route else []
+        if route_waypoints:
+            self.vehicle_routes[role] = route_waypoints
+        else:
+            self.vehicle_routes.pop(role, None)
+        if self.time_planner is not None:
+            # reset scheduling state for this agent
+            self.time_planner.release_agent(role)
+            waypoints = [wp for wp in route_waypoints if wp is not None]
+            if waypoints:
+                schedule_result = self.time_planner.schedule_route(
+                    agent_id=role,
+                    route_waypoints=waypoints,
+                    base_path_points=None,
+                )
+                if schedule_result.success:
+                    visits = schedule_result.visits or []
+                    self.vehicle_schedules[role] = visits
+                    if schedule_result.expanded_path:
+                        path_points = schedule_result.expanded_path
+                    else:
+                        path_points = original_points
+                    self._publish_all_schedule_markers()
+                else:
+                    rospy.logwarn(
+                        "%s: time-aware scheduling failed (%s); using spatial path only",
+                        role,
+                        schedule_result.reason if schedule_result.reason else "unknown",
+                    )
+                    self.vehicle_schedules.pop(role, None)
+                    path_points = original_points
 
         self.vehicle_paths[role] = path_points
         self._store_path_geometry(role, path_points)
@@ -741,6 +948,35 @@ class NetworkXPathPlanner:
         self._publish_path(path_points, role)
         rospy.loginfo("%s: new path swapped (%d poses)", role, len(path_points))
         return True
+
+    # ------------------------------------------------------------------
+    # Continuous time-aware scheduling across all vehicles
+    # ------------------------------------------------------------------
+    def _recompute_all_schedules(self) -> None:
+        if self.time_planner is None:
+            return
+        # Rebuild reservation table from scratch based on currently stored routes
+        self.time_planner.clear()
+        # Deterministic order for prioritization
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            route_waypoints = self.vehicle_routes.get(role)
+            if not route_waypoints or len(route_waypoints) < 2:
+                # Clear any old schedule if present
+                self.vehicle_schedules.pop(role, None)
+                continue
+            result = self.time_planner.schedule_route(
+                agent_id=role,
+                route_waypoints=route_waypoints,
+                base_path_points=None,
+            )
+            if result.success and result.visits:
+                visits = result.visits
+                self.vehicle_schedules[role] = visits
+            else:
+                self.vehicle_schedules.pop(role, None)
+        # Publish all roles' schedules as markers in one message
+        self._publish_all_schedule_markers()
 
     def get_forward_aligned_start_node(
         self,
