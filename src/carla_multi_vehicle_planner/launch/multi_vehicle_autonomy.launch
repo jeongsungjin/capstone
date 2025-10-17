@@ -28,7 +28,7 @@
     <!-- Time-aware scheduling parameters -->
     <param name="reservation_dt" value="0.2" />
     <param name="reservation_nominal_speed" value="2.78" />
-    <param name="reservation_buffer_time" value="1.0" />
+    <param name="reservation_buffer_time" value="0.6" />
     <param name="reservation_wait_max" value="6.0" />
     <!-- 0 = unlimited horizon to avoid long-route failures -->
     <param name="reservation_horizon" value="0.0" />

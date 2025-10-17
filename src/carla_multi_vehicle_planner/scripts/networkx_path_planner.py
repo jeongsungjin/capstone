@@ -3,6 +3,8 @@
 import heapq
 import math
 import random
+import os
+import sys
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -13,6 +15,15 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker, MarkerArray
 
 from setup_carla_path import CARLA_EGG, AGENTS_ROOT
+DEFAULT_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
+DEFAULT_PYAPI = "/home/ctrl/carla/PythonAPI"
+_EGG = os.environ.get("CARLA_EGG") or CARLA_EGG or DEFAULT_EGG
+_PYAPI = os.environ.get("CARLA_PYTHONAPI_ROOT") or AGENTS_ROOT or DEFAULT_PYAPI
+if _EGG and _EGG not in sys.path:
+    sys.path.insert(0, _EGG)
+if _PYAPI and _PYAPI not in sys.path:
+    sys.path.insert(0, _PYAPI)
+
 from time_aware_prioritized_planner import (
     TimeAwarePrioritizedPlanner,
     ScheduledVisit,
