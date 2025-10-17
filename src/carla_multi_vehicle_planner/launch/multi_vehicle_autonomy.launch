@@ -5,7 +5,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
-    <param name="vehicle_model" value="vehicle.vehicle.bigxycar" />
+    <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
     <param name="target_speed" value="13.0" />
   </node>
 

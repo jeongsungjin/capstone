@@ -9,11 +9,12 @@
   <arg name="image_height" default="720" />
   <arg name="fov" default="90.0" />
   
-  <!-- 카메라 스폰 노드 -->
+  <!-- 카메라 스폰 노드 (N대, YAML 로드: private namespace) -->
   <node pkg="carla_camera_stream" 
-        type="spawn_cameras.py" 
-        name="carla_camera_stream" 
+        type="spawn_cameras_n.py" 
+        name="carla_camera_spawner" 
         output="screen">
+    <rosparam file="$(find carla_camera_stream)/config/positions.yaml" command="load" />
     <param name="host" value="$(arg host)" />
     <param name="port" value="$(arg port)" />
     <param name="image_width" value="$(arg image_width)" />

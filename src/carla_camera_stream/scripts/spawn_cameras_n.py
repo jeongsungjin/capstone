@@ -53,6 +53,20 @@ class MultiCameraSpawner:
         self.default_yaw = float(rospy.get_param('~default_yaw', -65.0))
         self.default_roll = float(rospy.get_param('~default_roll', 0.0))
 
+        # 코너 기반 자동 배치 파라미터 (좌상, 우상, 우하, 좌하 순)
+        # boundary_corners/corners/cover_quad 중 첫 번째로 발견되는 값을 사용
+        self.boundary_corners = rospy.get_param(
+            '~boundary_corners', rospy.get_param('~corners', rospy.get_param('~cover_quad', []))
+        )
+        self.corner_z = float(rospy.get_param('~corner_z', 6.0))
+        self.corner_pitch = float(rospy.get_param('~corner_pitch', -40.0))
+        self.corner_roll = float(rospy.get_param('~corner_roll', 0.0))
+
+        # 중앙점(yaw 수렴) 설정: center_x/center_y 우선, 없으면 boundary_corners로 평균
+        self.center_x_param = rospy.get_param('~center_x', None)
+        self.center_y_param = rospy.get_param('~center_y', None)
+        self.force_center_yaw = rospy.get_param('~force_center_yaw', True)
+
         # positions는 list[dict] 형태 기대 ({x,y,z,pitch,yaw,roll,name})
         self.positions = rospy.get_param('~positions', [])
         if not isinstance(self.positions, list):
@@ -73,20 +87,70 @@ class MultiCameraSpawner:
         self._connect_and_spawn()
 
     def _resolve_camera_specs(self) -> List[Dict[str, object]]:
-        """positions 파라미터가 있으면 사용, 없으면 기본값으로 num_cameras 만큼 생성."""
+        """카메라 스펙 목록 생성.
+        우선순위: boundary_corners(또는 동의어) → positions → 기본값 num_cameras
+        """
         specs: List[Dict[str, object]] = []
+        # 중앙점 해석 (가능하다면 미리 계산)
+        center_xy = self._get_center_xy()
+        # 1) 코너 기반 자동 배치: 좌상→우상→우하→좌하 순으로 제공된 4개 좌표
+        if isinstance(self.boundary_corners, list) and len(self.boundary_corners) >= 4:
+            # 4개까지만 사용 (초과분 무시)
+            corners = self.boundary_corners[:4]
+            try:
+                cx = sum(float(c.get('x')) for c in corners) / 4.0
+                cy = sum(float(c.get('y')) for c in corners) / 4.0
+            except Exception:
+                rospy.logwarn("boundary_corners 항목에 x,y 값이 올바르지 않습니다. positions 로직으로 대체합니다.")
+                corners = []
+
+            if corners:
+                for idx, c in enumerate(corners, start=1):
+                    x = float(c.get('x', 0.0))
+                    y = float(c.get('y', 0.0))
+                    z = float(c.get('z', self.corner_z))
+                    pitch = float(c.get('pitch', self.corner_pitch))
+                    roll = float(c.get('roll', self.corner_roll))
+                    yaw = math.degrees(math.atan2(cy - y, cx - x))
+                    specs.append({
+                        'name': f'camera_{idx}',
+                        'x': x,
+                        'y': y,
+                        'z': z,
+                        'pitch': pitch,
+                        'yaw': yaw,
+                        'roll': roll,
+                    })
+                rospy.loginfo(
+                    f"코너 기반 자동 배치 활성화 (center=({cx:.2f}, {cy:.2f}), z={self.corner_z:.1f}, pitch={self.corner_pitch:.1f})"
+                )
+                return specs
+
+        # 2) 명시적 positions 사용
         if len(self.positions) > 0:
             for idx, p in enumerate(self.positions, start=1):
                 name = p.get('name', f'camera_{idx}')
+                x = float(p.get('x', self.default_x))
+                y = float(p.get('y', self.default_y))
+                z = float(p.get('z', self.default_z))
+                pitch = float(p.get('pitch', self.default_pitch))
+                roll = float(p.get('roll', self.default_roll))
+                if self.force_center_yaw and center_xy is not None:
+                    cx, cy = center_xy
+                    yaw = math.degrees(math.atan2(cy - y, cx - x))
+                else:
+                    yaw = float(p.get('yaw', self.default_yaw))
                 specs.append({
                     'name': name,
-                    'x': float(p.get('x', self.default_x)),
-                    'y': float(p.get('y', self.default_y)),
-                    'z': float(p.get('z', self.default_z)),
-                    'pitch': float(p.get('pitch', self.default_pitch)),
-                    'yaw': float(p.get('yaw', self.default_yaw)),
-                    'roll': float(p.get('roll', self.default_roll)),
+                    'x': x,
+                    'y': y,
+                    'z': z,
+                    'pitch': pitch,
+                    'yaw': yaw,
+                    'roll': roll,
                 })
+            if self.force_center_yaw and center_xy is not None:
+                rospy.loginfo(f"positions 기반 배치에 중앙 수렴 yaw 적용 (center=({center_xy[0]:.2f}, {center_xy[1]:.2f}))")
         else:
             for idx in range(1, self.num_cameras + 1):
                 specs.append({
@@ -99,6 +163,31 @@ class MultiCameraSpawner:
                     'roll': self.default_roll,
                 })
         return specs
+
+    def _get_center_xy(self):
+        """중앙점(cx, cy) 결정: center_x/center_y가 있으면 우선 사용, 없으면 코너 평균.
+        유효한 중앙점을 계산하지 못하면 None 반환.
+        """
+        # 1) 명시적 center 파라미터
+        try:
+            if self.center_x_param is not None and self.center_y_param is not None:
+                cx = float(self.center_x_param)
+                cy = float(self.center_y_param)
+                return (cx, cy)
+        except Exception:
+            rospy.logwarn("center_x/center_y 파라미터 파싱 실패. 코너 기반 계산으로 시도합니다.")
+
+        # 2) 코너 평균
+        try:
+            if isinstance(self.boundary_corners, list) and len(self.boundary_corners) >= 4:
+                corners = self.boundary_corners[:4]
+                cx = sum(float(c.get('x')) for c in corners) / 4.0
+                cy = sum(float(c.get('y')) for c in corners) / 4.0
+                return (cx, cy)
+        except Exception:
+            rospy.logwarn("boundary_corners에서 중앙점 계산 실패")
+
+        return None
 
     def _build_camera_info(self, cam_name: str) -> CameraInfo:
         info = CameraInfo()
