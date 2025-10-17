@@ -123,15 +123,16 @@ class ScheduleVisualizer:
 
     @staticmethod
     def _role_color_rgba(role: str, alpha: float = 1.0) -> ColorRGBA:
-        palette_bgr = {
-            "ego_vehicle_1": (0, 255, 0),
-            "ego_vehicle_2": (255, 0, 0),
-            "ego_vehicle_3": (0, 0, 255),
-            "ego_vehicle_4": (255, 255, 0),
-            "ego_vehicle_5": (255, 0, 255),
-            "ego_vehicle_6": (0, 255, 255),
+        # Keep a single canonical palette consistent with RViz vehicle colors
+        palette_rgb = {
+            "ego_vehicle_1": (0, 255, 0),      # green
+            "ego_vehicle_2": (255, 0, 0),      # red
+            "ego_vehicle_3": (0, 0, 255),      # blue
+            "ego_vehicle_4": (255, 255, 0),    # yellow
+            "ego_vehicle_5": (255, 0, 255),    # magenta
+            "ego_vehicle_6": (0, 255, 255),    # cyan
         }
-        b, g, r = palette_bgr.get(role, (200, 200, 200))
+        r, g, b = palette_rgb.get(role, (200, 200, 200))
         return ColorRGBA(r=r / 255.0, g=g / 255.0, b=b / 255.0, a=alpha)
 
 

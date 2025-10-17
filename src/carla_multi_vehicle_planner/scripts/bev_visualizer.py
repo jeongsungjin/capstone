@@ -188,12 +188,14 @@ class BEVVisualizer:
     @staticmethod
     def _role_color(role):
         palette = {
-            "ego_vehicle_1": (0, 255, 0),
-            "ego_vehicle_2": (255, 0, 0),
-            "ego_vehicle_3": (0, 0, 255),
-            "ego_vehicle_4": (255, 255, 0),
-            "ego_vehicle_5": (255, 0, 255),
-            "ego_vehicle_6": (0, 255, 255),
+            # BGR palette (converted to RGB when publishing markers)
+            # 1: green, 2: red, 3: blue, 4: yellow, 5: magenta, 6: cyan
+            "ego_vehicle_1": (0, 255, 0),     # green -> BGR(0,255,0)
+            "ego_vehicle_2": (0, 0, 255),     # red   -> BGR(0,0,255)
+            "ego_vehicle_3": (255, 0, 0),     # blue  -> BGR(255,0,0)
+            "ego_vehicle_4": (0, 255, 255),   # yellow-> BGR(0,255,255)
+            "ego_vehicle_5": (255, 0, 255),   # magenta->BGR(255,0,255)
+            "ego_vehicle_6": (255, 255, 0),   # cyan  -> BGR(255,255,0)
         }
         return palette.get(role, (200, 200, 200))
 

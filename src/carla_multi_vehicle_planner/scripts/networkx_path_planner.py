@@ -88,7 +88,7 @@ class NetworkXPathPlanner:
                 rospy.get_param("~reservation_nominal_speed", 10.0)
             )
             reservation_buffer_time = float(
-                rospy.get_param("~reservation_buffer_time", 0.4)
+                rospy.get_param("~reservation_buffer_time", 3.0)
             )
             reservation_wait_max = float(
                 rospy.get_param("~reservation_wait_max", 5.0)
@@ -97,7 +97,7 @@ class NetworkXPathPlanner:
                 rospy.get_param("~reservation_horizon", 40.0)
             )
             reservation_proximity_resolution = float(
-                rospy.get_param("~reservation_proximity_resolution", 0.5)
+                rospy.get_param("~reservation_proximity_resolution", 8.0)
             )
             self.time_planner = TimeAwarePrioritizedPlanner(
                 dt=reservation_dt,
@@ -190,13 +190,15 @@ class NetworkXPathPlanner:
             sub = rospy.Subscriber(topic, PoseStamped, self._make_override_cb(role), queue_size=1)
             self.override_subscribers.append(sub)
 
+        # Match BEVVisualizer/ScheduleVisualizer palette by role index:
+        # 1: green, 2: red, 3: blue, 4: yellow, 5: magenta, 6: cyan
         self.colors = [
-            carla.Color(r=255, g=0, b=0),
-            carla.Color(r=0, g=255, b=0),
-            carla.Color(r=0, g=0, b=255),
-            carla.Color(r=255, g=255, b=0),
-            carla.Color(r=255, g=0, b=255),
-            carla.Color(r=0, g=255, b=255),
+            carla.Color(r=0, g=255, b=0),      # ego_vehicle_1
+            carla.Color(r=255, g=0, b=0),      # ego_vehicle_2
+            carla.Color(r=0, g=0, b=255),      # ego_vehicle_3
+            carla.Color(r=255, g=255, b=0),    # ego_vehicle_4
+            carla.Color(r=255, g=0, b=255),    # ego_vehicle_5
+            carla.Color(r=0, g=255, b=255),    # ego_vehicle_6
         ]
 
         # Initial planning
@@ -955,8 +957,41 @@ class NetworkXPathPlanner:
     def _recompute_all_schedules(self) -> None:
         if self.time_planner is None:
             return
+        # Ensure vehicle list is up to date for front-point lookup
+        self._refresh_vehicles()
+
         # Rebuild reservation table from scratch based on currently stored routes
         self.time_planner.clear()
+
+        # Helper: project current front position onto a polyline to get index
+        def _project_index(path_pts: List[Tuple[float, float]], px: float, py: float) -> int:
+            if len(path_pts) < 2:
+                return 0
+            best_dist_sq = float("inf")
+            best_index = 0
+            best_t = 0.0
+            for idx in range(len(path_pts) - 1):
+                x1, y1 = path_pts[idx]
+                x2, y2 = path_pts[idx + 1]
+                seg_dx = x2 - x1
+                seg_dy = y2 - y1
+                seg_len_sq = seg_dx * seg_dx + seg_dy * seg_dy
+                if seg_len_sq < 1e-6:
+                    continue
+                t = ((px - x1) * seg_dx + (py - y1) * seg_dy) / seg_len_sq
+                t = max(0.0, min(1.0, t))
+                proj_x = x1 + seg_dx * t
+                proj_y = y1 + seg_dy * t
+                dist_sq = (proj_x - px) * (proj_x - px) + (proj_y - py) * (proj_y - py)
+                if dist_sq < best_dist_sq:
+                    best_dist_sq = dist_sq
+                    best_index = idx
+                    best_t = t
+            # Advance to next point if projection is close to the end of the segment
+            if best_t > 0.8:
+                best_index = min(best_index + 1, len(path_pts) - 1)
+            return best_index
+
         # Deterministic order for prioritization
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -965,16 +1000,80 @@ class NetworkXPathPlanner:
                 # Clear any old schedule if present
                 self.vehicle_schedules.pop(role, None)
                 continue
+
+            vehicle = self.vehicles[index] if index < len(self.vehicles) else None
+            # Slice the route from the nearest upcoming waypoint to build a rolling schedule
+            sliced_waypoints = route_waypoints
+            try:
+                if vehicle is not None:
+                    front_loc, _front_offset, _yaw = self._vehicle_front_location(vehicle)
+                    # Find nearest waypoint ahead (by Euclidean)
+                    nearest_idx = 0
+                    nearest_dist = float("inf")
+                    for i, wp in enumerate(route_waypoints):
+                        loc = wp.transform.location
+                        d = loc.distance(front_loc)
+                        if d < nearest_dist:
+                            nearest_dist = d
+                            nearest_idx = i
+                    if nearest_idx < len(route_waypoints) - 1:
+                        sliced_waypoints = route_waypoints[nearest_idx:]
+            except Exception:
+                # Fallback: keep original list if anything goes wrong
+                sliced_waypoints = route_waypoints
+
+            # Provide base geometry from current planned path (sliced at current progress) for stable visuals
+            base_points: Optional[List[Tuple[float, float]]] = None
+            try:
+                path_pts = self.vehicle_paths.get(role)
+                if path_pts and vehicle is not None:
+                    front_loc, _fo, _ = self._vehicle_front_location(vehicle)
+                    start_idx = _project_index(path_pts, front_loc.x, front_loc.y)
+                    if start_idx is not None and 0 <= start_idx < len(path_pts):
+                        base_points = path_pts[start_idx:]
+            except Exception:
+                base_points = None
+
             result = self.time_planner.schedule_route(
                 agent_id=role,
-                route_waypoints=route_waypoints,
-                base_path_points=None,
+                route_waypoints=sliced_waypoints,
+                base_path_points=base_points,
             )
+
             if result.success and result.visits:
                 visits = result.visits
                 self.vehicle_schedules[role] = visits
+                # Compute total wait introduced by scheduling to report potential conflict resolution
+                try:
+                    total_wait_steps = 0
+                    for v in visits:
+                        # Each visit contains arrival/departure in discrete steps
+                        arrival = getattr(v, "arrival", 0)
+                        departure = getattr(v, "departure", arrival)
+                        if isinstance(arrival, (int, float)) and isinstance(departure, (int, float)):
+                            total_wait_steps += max(0, int(departure - arrival))
+                    if total_wait_steps > 0:
+                        wait_time = total_wait_steps * float(self.time_planner.dt)
+                        higher_priority_roles = [self._role_name(i) for i in range(index)]
+                        rospy.logwarn(
+                            "%s: time-aware scheduling inserted waits (%.2fs); planned after %s",
+                            role,
+                            wait_time,
+                            ", ".join(higher_priority_roles) if higher_priority_roles else "none",
+                        )
+                except Exception:
+                    pass
+                # If expanded geometry is provided, swap-in and republish so controller tracks wait segments
+                if result.expanded_path and len(result.expanded_path) >= 2:
+                    new_path = result.expanded_path
+                    self.vehicle_paths[role] = new_path
+                    self._store_path_geometry(role, new_path)
+                    self.remaining_cache[role] = self.vehicle_path_lengths.get(role, 0.0)
+                    self._publish_path(new_path, role)
+                    rospy.loginfo("%s: republished scheduled path (%d points) to controller", role, len(new_path))
             else:
                 self.vehicle_schedules.pop(role, None)
+
         # Publish all roles' schedules as markers in one message
         self._publish_all_schedule_markers()
 

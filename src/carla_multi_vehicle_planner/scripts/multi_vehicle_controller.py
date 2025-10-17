@@ -33,11 +33,11 @@ class MultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 3)
-        self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
-        self.wheelbase = rospy.get_param("~wheelbase", 2.8)
+        self.lookahead_distance = rospy.get_param("~lookahead_distance", 4.0)
+        self.wheelbase = rospy.get_param("~wheelbase", 2.7)
         self.max_steer = rospy.get_param("~max_steer", 0.7)
-        self.target_speed = rospy.get_param("~target_speed", 3.0)
-        self.control_frequency = rospy.get_param("~control_frequency", 50.0)
+        self.target_speed = rospy.get_param("~target_speed", 6.0)
+        self.control_frequency = rospy.get_param("~control_frequency", 30.0)
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
@@ -86,12 +86,35 @@ class MultiVehicleController:
     def _path_cb(self, msg, role):
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
         self.states[role]["path"] = points
-        self.states[role]["current_index"] = 0
+
+        # Precompute arc-length profile for the new path
         s_profile, total_len = self._compute_path_profile(points)
         self.states[role]["s_profile"] = s_profile
         self.states[role]["path_length"] = total_len
-        self.states[role]["progress_s"] = 0.0
-        self.states[role]["remaining_distance"] = total_len if total_len > 0.0 else None
+
+        # Project current vehicle front point onto the new path to preserve progress
+        preserved_index = 0
+        preserved_progress_s = 0.0
+        try:
+            vehicle = self.vehicles.get(role)
+            front = self._front_point(role, self.states[role], vehicle)
+            if front is not None:
+                projection = self._project_progress(points, s_profile, front[0], front[1])
+                if projection is not None:
+                    s_now, idx = projection
+                    preserved_index = max(0, min(idx, len(points) - 1))
+                    preserved_progress_s = max(0.0, s_now)
+        except Exception:
+            preserved_index = 0
+            preserved_progress_s = 0.0
+
+        self.states[role]["current_index"] = preserved_index
+        self.states[role]["progress_s"] = preserved_progress_s
+        if total_len > 0.0:
+            self.states[role]["remaining_distance"] = max(0.0, total_len - preserved_progress_s)
+        else:
+            self.states[role]["remaining_distance"] = None
+
         rospy.loginfo(f"{role}: received path with {len(points)} points")
 
     def _odom_cb(self, msg, role):

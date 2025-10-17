@@ -14,7 +14,7 @@
         type="spawn_cameras_n.py" 
         name="carla_camera_spawner" 
         output="screen">
-    <rosparam file="$(find carla_camera_stream)/config/positions.yaml" command="load" />
+    <!-- <rosparam file="$(find carla_camera_stream)/config/positions.yaml" command="load" /> -->
     <param name="host" value="$(arg host)" />
     <param name="port" value="$(arg port)" />
     <param name="image_width" value="$(arg image_width)" />
