@@ -1,5 +1,5 @@
 <launch>
-  <arg name="num_vehicles" default="6" />
+  <arg name="num_vehicles" default="4" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="include_collision_avoidance" default="true" />

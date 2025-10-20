@@ -2,6 +2,7 @@ carla_multi_vehicle_planner
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/pkgconfig/carla_multi_vehicle_planner.pc /home/jamie/capstone/devel/lib/pkgconfig/carla_multi_vehicle_planner.pc
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/networkx_path_planner.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/networkx_path_planner.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py
+/home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/predictive_conflict_manager.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/predictive_conflict_manager.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/occupancy_grid_publisher.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/occupancy_grid_publisher.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/path_mux.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/path_mux.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/key_selector.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/key_selector.py

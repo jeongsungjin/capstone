@@ -71,6 +71,7 @@ class MultiVehicleSpawner:
         self.randomize_spawn = rospy.get_param("~randomize_spawn", True)
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
+        self.reset_world_on_shutdown = bool(rospy.get_param("~reset_world_on_shutdown", False))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -188,6 +189,24 @@ class MultiVehicleSpawner:
             if vehicle is not None and vehicle.is_alive:
                 vehicle.destroy()
         self.vehicles.clear()
+        # Optionally reset the CARLA world when this node is shutting down,
+        # so that actor IDs start from 1 on the next run without impacting startup.
+        if self.reset_world_on_shutdown:
+            try:
+                current_map = None
+                try:
+                    current_map = self.world.get_map().name if self.world is not None else None
+                except RuntimeError:
+                    current_map = None
+                self.client.reload_world()
+                if current_map:
+                    try:
+                        self.client.load_world(current_map)
+                    except RuntimeError:
+                        pass
+                rospy.loginfo("multi_vehicle_spawner: CARLA world reloaded on shutdown")
+            except RuntimeError as exc:
+                rospy.logwarn(f"multi_vehicle_spawner: failed to reload CARLA world on shutdown: {exc}")
 
     def publish_initial_pose(self, transform):
         if self.initial_pose_pub is None:

@@ -15,11 +15,16 @@ from visualization_msgs.msg import Marker, MarkerArray
 # =======================
 # Vehicle Visualization Settings
 # =======================
-VEHICLE_RECT_W = 4    # 직사각형 가로 (픽셀)
-VEHICLE_RECT_H = 2    # 직사각형 세로 (픽셀)
+# Map scale is meters-per-pixel (default 0.25). For a ~4 m car:
+# 4.0 m / 0.25 m/px = 16 px width, 2.0 m ~ 8 px height
+VEHICLE_RECT_W = 16   # 직사각형 가로 (픽셀)
+VEHICLE_RECT_H = 8    # 직사각형 세로 (픽셀)
 
-VEHICLE_MARKER_SCALE = 1.0    # RViz 마커 큐브 크기 (meter 단위)
-VEHICLE_MARKER_TYPE = Marker.CUBE  # RViz 마커: CUBE 로 변경
+# RViz marker (meters)
+VEHICLE_MARKER_TYPE = Marker.CUBE
+VEHICLE_MARKER_SIZE_X = 4.0   # length
+VEHICLE_MARKER_SIZE_Y = 2.0   # width
+VEHICLE_MARKER_SIZE_Z = 1.6   # height
 
 CARLA_BUILD_PATH = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
 if CARLA_BUILD_PATH not in sys.path:
@@ -137,9 +142,9 @@ class BEVVisualizer:
                 marker.type = VEHICLE_MARKER_TYPE  # CUBE
                 marker.action = Marker.ADD
                 marker.pose = pose
-                marker.scale.x = VEHICLE_MARKER_SCALE
-                marker.scale.y = VEHICLE_MARKER_SCALE/2
-                marker.scale.z = VEHICLE_MARKER_SCALE
+                marker.scale.x = VEHICLE_MARKER_SIZE_X
+                marker.scale.y = VEHICLE_MARKER_SIZE_Y
+                marker.scale.z = VEHICLE_MARKER_SIZE_Z
                 marker.color = ColorRGBA(
                     r=color_bgr[2] / 255.0,
                     g=color_bgr[1] / 255.0,
