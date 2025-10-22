@@ -28,7 +28,7 @@ constexpr char* NAME_CLS = "";
 
 class Model {
 public:
-    Model();
+    Model(const std::string& pkg_path);
     ~Model();
 
     cv::Mat preprocess(const cv::Mat& image);

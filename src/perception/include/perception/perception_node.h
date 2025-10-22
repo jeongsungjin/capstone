@@ -6,7 +6,7 @@
 
 #include <opencv2/opencv.hpp>
 
-#include "TAFv25.h"
+#include "Model.h"
 
 #include <queue>
 #include <memory>
@@ -19,8 +19,15 @@ typedef std::shared_ptr<cv::Mat> MatPtr;
 
 class PerceptionNode{
 public:
-    PerceptionNode();
+    PerceptionNode(const std::string& pkg_path);
     ~PerceptionNode();
+
+private:
+    void imageCallback(const sensor_msgs::ImageConstPtr& msg);
+    void processing();
+
+    void publishBEVInfo();
+    void publishVizResult();
 
 private:
     ros::NodeHandle nh_;
@@ -28,16 +35,13 @@ private:
     
     std::string image_topic_name_;
 
+    bool running_;
     std::queue<MatPtr> buf_img_;
     std::mutex m_buf_;
     std::condition_variable cv_buf_;
     std::thread perception_thread;
-    bool running_;
-
-    TAFv25 perception_model_;
-
-    void imageCallback(const sensor_msgs::ImageConstPtr& msg);
-    void processing();
+    
+    Model perception_model_;
 };
 
 #endif

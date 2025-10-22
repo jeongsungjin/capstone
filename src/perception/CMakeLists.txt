@@ -4,6 +4,7 @@ project(perception)
 find_package(catkin REQUIRED COMPONENTS
   cv_bridge
   roscpp
+  roslib
   sensor_msgs
 )
 
@@ -26,13 +27,10 @@ if(DEFINED ENV{TENSORRT_ROOT})
 endif()
 
 # xtensor
-
 link_directories(/home/ctrl/miniconda3/envs/perception/include)
 include_directories(/home/ctrl/miniconda3/envs/perception/include)
 
 find_package(BLAS REQUIRED)
-message(${BLAS_LIBRARIES})
-
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -49,7 +47,7 @@ include_directories(
 add_executable(perception
   src/perception.cpp
   src/perception_node.cpp
-  src/TAFv25.cpp
+  src/Model.cpp
 )
 
 target_link_libraries(perception 

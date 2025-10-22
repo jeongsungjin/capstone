@@ -1,9 +1,13 @@
-#include "Model.h"
+#include "perception/Model.h"
+
+#include "perception/utils.hpp"
 
 #include "utils.hpp"
 
-Model::Model(){
-    std::vector<char> engineData = readPlanFile("/home/ctrl/capstone/src/perception/engine/model_cm89.plan");
+Model::Model(const std::string& pkg_path){
+    std::vector<char> engineData = readPlanFile(
+        pkg_path + "/engine/model_cm89.plan"
+    );
 
     runtime_ = createInferRuntime(gLogger);
     engine_ = runtime_->deserializeCudaEngine(engineData.data(), engineData.size());

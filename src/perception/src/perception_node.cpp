@@ -7,7 +7,7 @@
 
 #include <chrono>
 
-PerceptionNode::PerceptionNode(): nh_(), perception_model_(1280, 720){
+PerceptionNode::PerceptionNode(const std::string& pkg_path): nh_(), perception_model_(pkg_path){
     ros::param::param<std::string>(
         "~image_topic", 
         image_topic_name_, 
