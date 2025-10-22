@@ -26,24 +26,24 @@ constexpr int W = 1536;
 constexpr int H = 864;
 
 namespace layer_names {
-    constexpr char* INPUT = "images";
-    constexpr char* HIDDEN_IN = "h_in";
-    constexpr char* CELL_IN = "c_in";
+    constexpr const char* INPUT = "images";
+    constexpr const char* HIDDEN_IN = "h_in";
+    constexpr const char* CELL_IN = "c_in";
 
-    constexpr char* HIDDEN_OUT = "h_out";
-    constexpr char* CELL_OUT = "c_out";
+    constexpr const char* HIDDEN_OUT = "h_out";
+    constexpr const char* CELL_OUT = "c_out";
 
-    constexpr char* P0_REG = "p0_reg";
-    constexpr char* P0_OBJ = "p0_obj";
-    constexpr char* P0_CLS = "p0_cls";
+    constexpr const char* P0_REG = "p0_reg";
+    constexpr const char* P0_OBJ = "p0_obj";
+    constexpr const char* P0_CLS = "p0_cls";
     
-    constexpr char* P1_REG = "p1_reg";
-    constexpr char* P1_OBJ = "p1_obj";
-    constexpr char* P1_CLS = "p1_cls";
+    constexpr const char* P1_REG = "p1_reg";
+    constexpr const char* P1_OBJ = "p1_obj";
+    constexpr const char* P1_CLS = "p1_cls";
     
-    constexpr char* P2_REG = "p2_reg";
-    constexpr char* P2_OBJ = "p2_obj";
-    constexpr char* P2_CLS = "p2_cls";
+    constexpr const char* P2_REG = "p2_reg";
+    constexpr const char* P2_OBJ = "p2_obj";
+    constexpr const char* P2_CLS = "p2_cls";
 };
 
 struct TensorInfo {
@@ -58,7 +58,7 @@ public:
     Model(const std::string& pkg_path);
     ~Model();
 
-    void preprocess(const cv::Mat& image);
+    int preprocess(const cv::Mat& image);
     void inference();
     void postprocess();
 

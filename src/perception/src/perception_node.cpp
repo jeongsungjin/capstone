@@ -47,8 +47,13 @@ void PerceptionNode::processing(){
         }
 
         if(img_ptr != nullptr) {
-            auto model_input = perception_model_.preprocess(*img_ptr);
-                      
+            int ret = perception_model_.preprocess(*img_ptr);
+            if (ret != 0) {
+                running_ = false;
+                std::cerr << "Preprocessing failed!" << std::endl;
+                break;
+            }
+
             // perception_model_.inference(model_input);
                       
             // auto detections = perception_model_.postprocess(model_output);

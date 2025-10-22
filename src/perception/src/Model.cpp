@@ -34,7 +34,7 @@ Model::~Model(){
     cudaStreamDestroy(stream_);
 }
 
-void Model::preprocess(const cv::Mat& img){
+int Model::preprocess(const cv::Mat& img){
     input_width_ = img.cols;
     input_height_ = img.rows;
 
@@ -60,6 +60,8 @@ void Model::preprocess(const cv::Mat& img){
 
     void* hostPtr = buffers_->getHostBuffer(layer_names::INPUT);
     std::memcpy(hostPtr, model_input.data, bytes);
+
+    return 0;
 }
 
 void Model::inference(){

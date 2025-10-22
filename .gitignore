@@ -21,3 +21,5 @@ __pycache__/
 *.bag
 *.onnx
 src/perception/engine/
+
+.catkin_tools/
