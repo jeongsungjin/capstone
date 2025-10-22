@@ -25,10 +25,26 @@ using namespace nvinfer1;
 constexpr int W = 1536;
 constexpr int H = 864;
 
-constexpr char* NAME_INPUT = "";
-constexpr char* NAME_REG = "";
-constexpr char* NAME_OBJ = "";
-constexpr char* NAME_CLS = "";
+namespace layer_names {
+    constexpr char* INPUT = "images";
+    constexpr char* HIDDEN_IN = "h_in";
+    constexpr char* CELL_IN = "c_in";
+
+    constexpr char* HIDDEN_OUT = "h_out";
+    constexpr char* CELL_OUT = "c_out";
+
+    constexpr char* P0_REG = "p0_reg";
+    constexpr char* P0_OBJ = "p0_obj";
+    constexpr char* P0_CLS = "p0_cls";
+    
+    constexpr char* P1_REG = "p1_reg";
+    constexpr char* P1_OBJ = "p1_obj";
+    constexpr char* P1_CLS = "p1_cls";
+    
+    constexpr char* P2_REG = "p2_reg";
+    constexpr char* P2_OBJ = "p2_obj";
+    constexpr char* P2_CLS = "p2_cls";
+};
 
 struct TensorInfo {
     int index;
@@ -42,8 +58,8 @@ public:
     Model(const std::string& pkg_path);
     ~Model();
 
-    cv::Mat preprocess(const cv::Mat& image);
-    void inference(const cv::Mat& model_input);
+    void preprocess(const cv::Mat& image);
+    void inference();
     void postprocess();
 
     void publishBEVInfo(); // 판단에 필요한 데이터 발행
