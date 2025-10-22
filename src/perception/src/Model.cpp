@@ -2,74 +2,36 @@
 
 #include "perception/utils.hpp"
 
-#include "utils.hpp"
+#include <numeric>
 
 Model::Model(const std::string& pkg_path){
     std::vector<char> engineData = readPlanFile(
         pkg_path + "/engine/model_cm89.plan"
     );
 
-    runtime_ = createInferRuntime(gLogger);
-    engine_ = runtime_->deserializeCudaEngine(engineData.data(), engineData.size());
+    runtime_ = std::shared_ptr<IRuntime>(
+        createInferRuntime(gLogger),
+        samplesCommon::InferDeleter()
+    );
+    if (!runtime_) throw std::runtime_error("Failed to create runtime");
+
+    engine_ = std::shared_ptr<ICudaEngine>(
+        runtime_->deserializeCudaEngine(engineData.data(), engineData.size()),
+        samplesCommon::InferDeleter()
+    );
     if (!engine_) throw std::runtime_error("Failed to deserialize engine");
     
-    context_ = engine_->createExecutionContext();
+    context_ = std::unique_ptr<IExecutionContext, samplesCommon::InferDeleter>(
+        engine_->createExecutionContext()
+    );
     if (!context_) throw std::runtime_error("Failed to create context");
     
-    int total_io_binding = engine_->getNbIOTensors();
-    for(int i = 0; i < total_io_binding; i++){
-        const char* tensor_name = engine_->getIOTensorName(i);
-        const auto io_mode = engine_->getTensorIOMode(tensor_name);
-        if(io_mode == TensorIOMode::kNONE)
-            throw std::runtime_error("Invalid model");
-
-        int size = getTensorBytesPerComponent(tensor_name);
-        Dims shape = engine_->getTensorShape(tensor_name);
-        for(int j = 0; j < shape.nbDims; j++){
-            size *= shape.d[j];
-        }
-
-        if(io_mode == TensorIOMode::kOUTPUT){
-            output_names_.push_back(tensor_name);
-            output_sizes_.push_back(size);
-            output_shapes_.push_back(shape);
-        }
-        
-        else { // io_mode == TensorIOMode::kINPUT
-            input_names_.push_back(tensor_name);
-            input_sizes_.push_back(size);
-            input_shapes_.push_back(shape);
-        }
-    }
-
-    std::vector<void *>(input_names_.size()).swap(input_buffers_);
-    std::vector<void *>(output_names_.size()).swap(output_buffers_);
-
-    for(int input_idx = 0; input_idx < input_sizes_.size(); input_idx++){
-        CUDA_CHECK(cudaMalloc(&input_buffers_[input_idx], input_sizes_[input_idx]));
-    }
-
-    for(int output_idx = 0; output_idx < output_sizes_.size(); output_idx++){
-        CUDA_CHECK(cudaMalloc(&output_buffers_[output_idx], output_sizes_[output_idx]));
-    }
-
+    buffers_ = std::make_unique<samplesCommon::BufferManager>(engine_, /*batchSize=*/0, context_.get());
     CUDA_CHECK(cudaStreamCreate(&stream_));
 }
 
 Model::~Model(){
     cudaStreamDestroy(stream_);
-
-    for(auto in_ptr: input_buffers_){
-        CUDA_CHECK(cudaFree(in_ptr));
-    }
-
-    for(auto out_ptr: output_buffers_){
-        CUDA_CHECK(cudaFree(out_ptr));
-    }
-
-    context_->destroy();
-    engine_->destroy();
-    runtime_->destroy();
 }
 
 cv::Mat Model::preprocess(const cv::Mat& img){
@@ -89,22 +51,20 @@ cv::Mat Model::preprocess(const cv::Mat& img){
         CV_16FC3            // output data type
     );
 
-    io_size_[INPUT_INDEX] = model_input.total() * model_input.elemSize();
-
     return model_input;
 }
 
 void Model::inference(const cv::Mat& model_input){
-    CUDA_CHECK(cudaMemcpyAsync(
-        input_buffers_[INPUT_INDEX], 
-        model_input.data, 
-        io_size_[INPUT_INDEX], 
-        cudaMemcpyHostToDevice, 
-        stream_
-    ));
+    // CUDA_CHECK(cudaMemcpyAsync(
+    //     name_to_info_[NAME_INPUT].ptr,
+    //     model_input.data,
+    //     name_to_info_[NAME_INPUT].size,
+    //     cudaMemcpyHostToDevice,
+    //     stream_
+    // ));
 
-    context_->enqueueV2(input_buffers_, stream_, nullptr);
-    cudaStreamSynchronize(stream_);
+    // context_->enqueueV3(stream_);
+    // cudaStreamSynchronize(stream_);
 }
 
 void Model::postprocess(){
