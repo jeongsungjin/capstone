@@ -47,6 +47,7 @@ include_directories(
 add_executable(perception
   src/perception.cpp
   src/perception_node.cpp
+  src/timer.cpp
   src/Model.cpp
 )
 
