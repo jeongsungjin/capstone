@@ -14,12 +14,12 @@ PerceptionNode::PerceptionNode(const std::string& pkg_path): nh_(), perception_m
         "/camera/image_raw"
     );
     
-    // std::cout << image_topic_name_ << std::endl;
+    std::cout << image_topic_name_ << std::endl;
 
-    // image_sub_ = nh_.subscribe(image_topic_name_, 10, &PerceptionNode::imageCallback, this);
+    image_sub_ = nh_.subscribe(image_topic_name_, 10, &PerceptionNode::imageCallback, this);
 
-    // running_ = true;
-    // perception_thread = std::thread(&PerceptionNode::processing, this);
+    running_ = true;
+    perception_thread = std::thread(&PerceptionNode::processing, this);
 }
 
 void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
@@ -54,7 +54,7 @@ void PerceptionNode::processing(){
                 break;
             }
 
-            // perception_model_.inference(model_input);
+            perception_model_.inference();
                       
             // auto detections = perception_model_.postprocess(model_output);
             

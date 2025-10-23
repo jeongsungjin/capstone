@@ -46,6 +46,9 @@ int Model::preprocess(const cv::Mat& img){
     input_height_ = img.rows;
 
     std::vector<cv::Mat> imgs = {
+        img,
+        img,
+        img,
         img
     };
 

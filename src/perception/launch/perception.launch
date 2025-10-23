@@ -1,5 +1,6 @@
 <?xml version="1.0"?>
 <launch>
+    <node name="rosbag" pkg="rosbag" type="play" args="$(find perception)/dataset/one_cam.bag" />
     <node name="perception" pkg="perception" type="perception" output="screen">
         <param name="image_topic" value="/carla/camera_1/image_raw"/>
     </node>
