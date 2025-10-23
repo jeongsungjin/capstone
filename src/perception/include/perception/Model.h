@@ -66,8 +66,9 @@ public:
     void publishVizResult(); // 결과 시각화용 데이터 발행
 
 private:
-    void __decode_predictions();
-    void __tiny_filter_on_dets();
+    void __copyLSTMOutputsToInputs();
+    void __decodePredictions(float conf_th=0.15, float nms_iou=0.5, int topk=300);
+    void __tinyFilterOnDets();
 
 private:
     // TensorRT 객체
@@ -82,6 +83,8 @@ private:
     const int strides_[3] = {8, 16, 32};
 
     int input_width_, input_height_;
+
+    bool first_inference_;
 };
 
 #endif

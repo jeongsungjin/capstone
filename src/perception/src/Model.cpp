@@ -1,5 +1,7 @@
 #include "perception/Model.h"
 
+#include "timer.h"
+
 #include "perception/utils.hpp"
 
 #include <numeric>
@@ -7,7 +9,7 @@
 int W = 1536;
 int H = 864;
 
-Model::Model(const std::string& pkg_path){
+Model::Model(const std::string& pkg_path): first_inference_(true) {
     std::vector<char> engineData = readPlanFile(
         pkg_path + "/engine/static_model.plan"
     );
@@ -38,6 +40,8 @@ Model::~Model(){
 }
 
 int Model::preprocess(const cv::Mat& img){
+    Timer timer("Model::preprocess");
+
     input_width_ = img.cols;
     input_height_ = img.rows;
 
@@ -65,10 +69,16 @@ int Model::preprocess(const cv::Mat& img){
     void* hostPtr = buffers_->getHostBuffer(layer_names::INPUT);
     std::memcpy(hostPtr, model_input.data, bytes);
 
+    __copyLSTMOutputsToInputs();
+
+    first_inference_ = false;
+
     return 0;
 }
 
 void Model::inference(){
+    Timer timer("Model::inference");
+
     buffers_->copyInputToDeviceAsync(stream_);
     context_->enqueueV2(buffers_->getDeviceBindings().data(), stream_, nullptr);
     buffers_->copyOutputToHostAsync(stream_);
@@ -76,5 +86,37 @@ void Model::inference(){
 }
 
 void Model::postprocess(){
+    Timer timer("Model::postprocess");
+
+    __decodePredictions();
+    __tinyFilterOnDets();
+}
+
+void Model::__copyLSTMOutputsToInputs(){
+    void* hiddenIn = buffers_->getHostBuffer(layer_names::HIDDEN_IN);
+    auto hiddenTensorSize = buffers_->size(layer_names::HIDDEN_IN);
     
+    void* cellIn = buffers_->getHostBuffer(layer_names::CELL_IN);
+    auto cellTensorSize = buffers_->size(layer_names::CELL_IN);
+    
+    if(!first_inference_){
+        void* hiddenOut = buffers_->getHostBuffer(layer_names::HIDDEN_OUT);
+        std::memcpy(hiddenIn, hiddenOut, hiddenTensorSize);
+        
+        void* cellOut = buffers_->getHostBuffer(layer_names::CELL_OUT);
+        std::memcpy(cellIn, cellOut, cellTensorSize);
+    }
+
+    else {
+        std::memset(hiddenIn, 0, hiddenTensorSize);        
+        std::memset(cellIn, 0, cellTensorSize);
+    }
+}
+
+void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
+    // xtensor 가 필요할 듯
+}
+
+void Model::__tinyFilterOnDets(){
+    // xtensor 가 필요할 듯
 }
