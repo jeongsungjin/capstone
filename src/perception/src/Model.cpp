@@ -4,9 +4,12 @@
 
 #include <numeric>
 
+int W = 1536;
+int H = 864;
+
 Model::Model(const std::string& pkg_path){
     std::vector<char> engineData = readPlanFile(
-        pkg_path + "/engine/model_cm89.plan"
+        pkg_path + "/engine/static_model.plan"
     );
 
     runtime_ = std::shared_ptr<IRuntime>(
@@ -38,17 +41,18 @@ int Model::preprocess(const cv::Mat& img){
     input_width_ = img.cols;
     input_height_ = img.rows;
 
-    // @TODO : 일단 이미지 1장에 대한 처리로 진행을 하고
-    // 이후에 이미지 4장을 std::vector<cv::Mat>에 담고, 
-    // cv::dnn::blobFromImages에 태워야 함.
-    cv::Mat model_input = cv::dnn::blobFromImage(
-        img,                // src img
+    std::vector<cv::Mat> imgs = {
+        img
+    };
+
+    cv::Mat model_input = cv::dnn::blobFromImages(
+        imgs,               // src img
         1. / 255.,          // scale factor
         cv::Size(W, H),     // resize size
         cv::Scalar(),       // mean
         true,               // swapRB
         false,              // crop
-        CV_16FC3            // output data type
+        CV_32F              // output data type
     );
 
     size_t bytes = model_input.total() * model_input.elemSize();

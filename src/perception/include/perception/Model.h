@@ -22,8 +22,8 @@ using namespace nvinfer1;
 #include <xtensor/xarray.hpp>
 #include <xtensor/xadapt.hpp>
 
-constexpr int W = 1536;
-constexpr int H = 864;
+extern int W;
+extern int H;
 
 namespace layer_names {
     constexpr const char* INPUT = "images";
