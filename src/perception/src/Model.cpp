@@ -9,7 +9,9 @@
 int W = 1536;
 int H = 864;
 
-Model::Model(const std::string& pkg_path): first_inference_(true) {
+Model::Model(const std::string& pkg_path, const int batch_size): 
+    first_inference_(true), batch_size_(batch_size) 
+{
     std::vector<char> engineData = readPlanFile(
         pkg_path + "/engine/static_model.plan"
     );
@@ -46,9 +48,6 @@ int Model::preprocess(const cv::Mat& img){
     input_height_ = img.rows;
 
     std::vector<cv::Mat> imgs = {
-        img,
-        img,
-        img,
         img
     };
 
@@ -117,6 +116,29 @@ void Model::__copyLSTMOutputsToInputs(){
 }
 
 void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
+    // nms_iou = 0.2
+    // topk = 50
+    std::vector<int> ret;
+    for(int b = 0; b < batch_size_; b++){
+        for(int l = 0; l < strides_.size(); l++){
+            float* d_reg_ptr = static_cast<float *>(
+                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::REG])
+            );
+
+            float* d_reg_ptr = static_cast<float *>(
+                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::OBJ])
+            );
+            
+            float* d_cls_ptr = static_cast<float *>(
+                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::CLS])
+            );
+            
+            
+
+
+        }
+    }
+    
     // xtensor 가 필요할 듯
 }
 

@@ -7,16 +7,13 @@
 
 #include <chrono>
 
-PerceptionNode::PerceptionNode(const std::string& pkg_path): nh_(), perception_model_(pkg_path){
-    ros::param::param<std::string>(
-        "~image_topic", 
-        image_topic_name_, 
-        "/camera/image_raw"
-    );
-    
-    std::cout << image_topic_name_ << std::endl;
-
-    image_sub_ = nh_.subscribe(image_topic_name_, 10, &PerceptionNode::imageCallback, this);
+PerceptionNode::PerceptionNode(
+    const std::string& pkg_path, 
+    const std::string& image_topic_name, 
+    const int batch_size
+): nh_(), perception_model_(pkg_path, batch_size)
+{
+    image_sub_ = nh_.subscribe(image_topic_name, 10, &PerceptionNode::imageCallback, this);
 
     running_ = true;
     perception_thread = std::thread(&PerceptionNode::processing, this);

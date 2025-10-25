@@ -44,6 +44,13 @@ namespace layer_names {
     constexpr const char* P2_REG = "p2_reg";
     constexpr const char* P2_OBJ = "p2_obj";
     constexpr const char* P2_CLS = "p2_cls";
+
+    constexpr const int REG = 0, OBJ = 1, CLS = 2;
+    const std::vector<std::vector<const char *>> name_iter = {
+        { P0_REG, P0_OBJ, P0_CLS },
+        { P1_REG, P1_OBJ, P1_CLS },
+        { P2_REG, P2_OBJ, P2_CLS }
+    };
 };
 
 struct TensorInfo {
@@ -55,7 +62,7 @@ struct TensorInfo {
 
 class Model {
 public:
-    Model(const std::string& pkg_path);
+    Model(const std::string& pkg_path, const int batch_size);
     ~Model();
 
     int preprocess(const cv::Mat& image);
@@ -80,9 +87,10 @@ private:
     // model 관련 정보
     std::unique_ptr<samplesCommon::BufferManager> buffers_;
 
-    const int strides_[3] = {8, 16, 32};
+    const std::vector<int> strides_ = {8, 16, 32};
 
     int input_width_, input_height_;
+    int batch_size_;
 
     bool first_inference_;
 };

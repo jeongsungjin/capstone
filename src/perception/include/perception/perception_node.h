@@ -19,7 +19,10 @@ typedef std::shared_ptr<cv::Mat> MatPtr;
 
 class PerceptionNode{
 public:
-    PerceptionNode(const std::string& pkg_path);
+    PerceptionNode(
+        const std::string& pkg_path,
+        const std::string& image_topic_name,
+        const int batch_size);
     ~PerceptionNode();
 
 private:
@@ -33,8 +36,6 @@ private:
     ros::NodeHandle nh_;
     ros::Subscriber image_sub_;
     
-    std::string image_topic_name_;
-
     bool running_;
     std::queue<MatPtr> buf_img_;
     std::mutex m_buf_;
