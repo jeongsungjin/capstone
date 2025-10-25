@@ -53,9 +53,28 @@ void PerceptionNode::processing(){
 
             perception_model_.inference();         
             perception_model_.postprocess();
-            
-            // publishVizResult(*img_ptr, detections);
-            // publishBEVInfo(*img_ptr, detections);
+
+            const auto& detections = perception_model_.getDetections();
+            if(!detections.empty() && !detections[0].poly4s.empty()){   
+                for(int i = 0; i < detections[0].poly4s.size(); i++){
+                    cv::polylines(*img_ptr, 
+                        std::vector<std::vector<cv::Point>>{
+                            {
+                                cv::Point(detections[0].poly4s[i](0, 0), detections[0].poly4s[i](0, 1)),
+                                cv::Point(detections[0].poly4s[i](2, 0), detections[0].poly4s[i](2, 1)),
+                                cv::Point(detections[0].poly4s[i](4, 0), detections[0].poly4s[i](4, 1)),
+                                cv::Point(detections[0].poly4s[i](6, 0), detections[0].poly4s[i](6, 1))
+                            }
+                        }, 
+                        true, 
+                        cv::Scalar(0, 255, 0), 
+                        2
+                    );
+                }
+            }
+                
+            cv::imshow("Perception Result", *img_ptr);
+            cv::waitKey(1);
         }
     }
 }

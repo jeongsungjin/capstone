@@ -19,10 +19,10 @@ int H = 864;
 using namespace layer_names;
 
 Model::Model(const std::string& pkg_path, const int batch_size): 
-    first_inference_(true), batch_size_(batch_size) 
+    first_inference_(true), batch_size_(batch_size), detections_info_(batch_size)
 {
     std::vector<char> engineData = readPlanFile(
-        pkg_path + "/engine/static_model.plan"
+        pkg_path + "/engine/static_model_batch_4.plan"
     );
 
     runtime_ = std::shared_ptr<IRuntime>(
@@ -57,6 +57,9 @@ int Model::preprocess(const cv::Mat& img){
     input_height_ = img.rows;
 
     std::vector<cv::Mat> imgs = {
+        img,
+        img,
+        img,
         img
     };
 
@@ -100,7 +103,6 @@ void Model::postprocess(){
     Timer timer("Model::postprocess");
 
     __decodePredictions();
-    __tinyFilterOnDets();
 }
 
 void Model::__copyLSTMOutputsToInputs(){
@@ -150,6 +152,8 @@ xt::xarray<float> Model::__toXTensor(const char* tensor_name) {
 void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
     // nms_iou = 0.2
     // topk = 50
+
+    std::vector<DetectionInfo>(batch_size_).swap(detections_info_);
 
     std::vector<DetectionInfo> batch_results(batch_size_);
     std::vector<std::vector<cv::Rect2d>> bboxes_for_nms(batch_size_);
@@ -212,18 +216,55 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
                 batch_results[b].poly4s.push_back(xt::eval(xt::stack(xt::xtuple(p1, p2, p3, p4), 0)));
                 batch_results[b].tri_ptss.push_back(xt::eval(xt::view(tri_np, i, xt::all(), xt::all())));
 
-                // float x0 = xt::amin(batch_results[b].poly4s.back(), {1});
-                // float y0 = xt::amin(batch_results[b].poly4s.back(), {1});
-                // float x1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 0));
-                // float y1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 1));
+                float x0 = xt::amin(xt::view(batch_results[b].poly4s.back(), xt::all(), 0))();
+                float y0 = xt::amin(xt::view(batch_results[b].poly4s.back(), xt::all(), 1))();
+                float x1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 0))();
+                float y1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 1))();
 
-                // bboxes_for_nms[b].push_back(cv::Rect2d(x0, y0, x1 - x0, y1 - y0));
-                // scores_for_nms[b].push_back(static_cast<float>(scores(i)));
+                bboxes_for_nms[b].push_back(cv::Rect2d(x0, y0, x1 - x0, y1 - y0));
+                scores_for_nms[b].push_back(static_cast<float>(scores(i)));
             }
         }
     }
-}
 
-void Model::__tinyFilterOnDets(){
-    // xtensor 가 필요할 듯
+    for(int b = 0; b < batch_size_; b++){
+        std::vector<int> batch_detections_indices_;
+
+        cv::dnn::NMSBoxes(
+            bboxes_for_nms[b],
+            scores_for_nms[b],
+            conf_th,
+            nms_iou,
+            batch_detections_indices_,
+            1.0f,
+            topk
+        );
+
+        for(auto idx: batch_detections_indices_){
+            std::vector<cv::Point2f> pts = {
+                cv::Point2f(batch_results[b].poly4s[idx](0, 0), batch_results[b].poly4s[idx](0, 1)),
+                cv::Point2f(batch_results[b].poly4s[idx](2, 0), batch_results[b].poly4s[idx](2, 1)),
+                cv::Point2f(batch_results[b].poly4s[idx](4, 0), batch_results[b].poly4s[idx](4, 1)),
+                cv::Point2f(batch_results[b].poly4s[idx](6, 0), batch_results[b].poly4s[idx](6, 1))
+            };
+
+            cv::RotatedRect rect = cv::minAreaRect(pts);
+
+            float width  = rect.size.width;
+            float height = rect.size.height;
+            float angle  = rect.angle;
+
+            if(width < 0.3 || height < 0.3){
+                continue;
+            }
+
+            if(width * height < 20.0){
+                continue;
+            }
+
+            detections_info_[b].scores.push_back(batch_results[b].scores[idx]);
+            detections_info_[b].poly4s.push_back(batch_results[b].poly4s[idx]);
+            detections_info_[b].tri_ptss.push_back(batch_results[b].tri_ptss[idx]);
+        }
+    }
 }

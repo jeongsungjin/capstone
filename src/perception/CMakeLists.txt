@@ -27,8 +27,8 @@ if(DEFINED ENV{TENSORRT_ROOT})
 endif()
 
 # xtensor
-link_directories(/home/ctrl/miniconda3/envs/perception/include)
-include_directories(/home/ctrl/miniconda3/envs/perception/include)
+link_directories(/home/ctrl/miniconda3/envs/xtensor/include)
+include_directories(/home/ctrl/miniconda3/envs/xtensor/include)
 
 find_package(BLAS REQUIRED)
 

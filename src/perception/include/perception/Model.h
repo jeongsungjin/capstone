@@ -67,13 +67,14 @@ public:
     void inference();
     void postprocess();
 
-    void publishBEVInfo(); // 판단에 필요한 데이터 발행
-    void publishVizResult(); // 결과 시각화용 데이터 발행
+    const std::vector<DetectionInfo>& getDetections() {
+        return detections_info_;
+    }
 
 private:
     void __copyLSTMOutputsToInputs();
     xt::xarray<float> __toXTensor(const char* tensor_name);
-    void __decodePredictions(float conf_th=0.15, float nms_iou=0.5, int topk=300);
+    void __decodePredictions(float conf_th=0.15, float nms_iou=0.2, int topk=50);
     void __tinyFilterOnDets();
 
 private:
@@ -85,6 +86,8 @@ private:
 
     // model 관련 정보
     std::unique_ptr<samplesCommon::BufferManager> buffers_;
+
+    std::vector<DetectionInfo> detections_info_;
 
     const std::vector<int> strides_ = {8, 16, 32};
 
