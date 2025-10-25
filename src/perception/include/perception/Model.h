@@ -20,7 +20,6 @@ using namespace nvinfer1;
 #include <opencv2/dnn.hpp>
 
 #include <xtensor/xarray.hpp>
-#include <xtensor/xadapt.hpp>
 
 extern int W;
 extern int H;
@@ -53,11 +52,10 @@ namespace layer_names {
     };
 };
 
-struct TensorInfo {
-    int index;
-    Dims shape;
-    size_t size;
-    void* ptr;
+struct DetectionInfo {
+    std::vector<int> scores;
+    std::vector<xt::xarray<float>> poly4s;
+    std::vector<xt::xarray<float>> tri_ptss;
 };
 
 class Model {
@@ -74,6 +72,7 @@ public:
 
 private:
     void __copyLSTMOutputsToInputs();
+    xt::xarray<float> __toXTensor(const char* tensor_name);
     void __decodePredictions(float conf_th=0.15, float nms_iou=0.5, int topk=300);
     void __tinyFilterOnDets();
 

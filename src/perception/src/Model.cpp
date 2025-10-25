@@ -2,12 +2,21 @@
 
 #include "timer.h"
 
+#include <ros/ros.h>
+
 #include "perception/utils.hpp"
 
 #include <numeric>
 
+#include <xtensor/xio.hpp>
+#include <xtensor/xmath.hpp>
+#include <xtensor/xview.hpp>
+#include <xtensor/xadapt.hpp>
+
 int W = 1536;
 int H = 864;
+
+using namespace layer_names;
 
 Model::Model(const std::string& pkg_path, const int batch_size): 
     first_inference_(true), batch_size_(batch_size) 
@@ -62,13 +71,13 @@ int Model::preprocess(const cv::Mat& img){
     );
 
     size_t bytes = model_input.total() * model_input.elemSize();
-    size_t expected = buffers_->size(layer_names::INPUT);
+    size_t expected = buffers_->size(INPUT);
     if (expected != samplesCommon::BufferManager::kINVALID_SIZE_VALUE && expected != bytes) {
         std::cerr << "Warning: input bytes (" << bytes << ") != buffer size (" << expected << ")\n";
         return -1;
     }
 
-    void* hostPtr = buffers_->getHostBuffer(layer_names::INPUT);
+    void* hostPtr = buffers_->getHostBuffer(INPUT);
     std::memcpy(hostPtr, model_input.data, bytes);
 
     __copyLSTMOutputsToInputs();
@@ -95,17 +104,17 @@ void Model::postprocess(){
 }
 
 void Model::__copyLSTMOutputsToInputs(){
-    void* hiddenIn = buffers_->getHostBuffer(layer_names::HIDDEN_IN);
-    auto hiddenTensorSize = buffers_->size(layer_names::HIDDEN_IN);
+    void* hiddenIn = buffers_->getHostBuffer(HIDDEN_IN);
+    auto hiddenTensorSize = buffers_->size(HIDDEN_IN);
     
-    void* cellIn = buffers_->getHostBuffer(layer_names::CELL_IN);
-    auto cellTensorSize = buffers_->size(layer_names::CELL_IN);
+    void* cellIn = buffers_->getHostBuffer(CELL_IN);
+    auto cellTensorSize = buffers_->size(CELL_IN);
     
     if(!first_inference_){
-        void* hiddenOut = buffers_->getHostBuffer(layer_names::HIDDEN_OUT);
+        void* hiddenOut = buffers_->getHostBuffer(HIDDEN_OUT);
         std::memcpy(hiddenIn, hiddenOut, hiddenTensorSize);
         
-        void* cellOut = buffers_->getHostBuffer(layer_names::CELL_OUT);
+        void* cellOut = buffers_->getHostBuffer(CELL_OUT);
         std::memcpy(cellIn, cellOut, cellTensorSize);
     }
 
@@ -115,31 +124,104 @@ void Model::__copyLSTMOutputsToInputs(){
     }
 }
 
+xt::xarray<float> Model::__toXTensor(const char* tensor_name) {
+    if(engine_->getTensorShape(tensor_name).nbDims != 4){
+        throw std::runtime_error("Unexpected tensor shape dimension");
+    }
+
+    float* h_ptr = reinterpret_cast<float *>(buffers_->getHostBuffer(tensor_name));
+    
+    auto shape = engine_->getTensorShape(tensor_name);
+    std::vector<size_t> v_shape;
+    for(int i = 0; i < shape.nbDims; i++){
+        v_shape.emplace_back(shape.d[i]);
+    }
+
+    xt::xarray<float> ret = xt::adapt(
+        std::move(h_ptr),
+        buffers_->size(tensor_name) / sizeof(float),
+        xt::no_ownership(),
+        v_shape
+    );
+    
+    return ret;
+}
+
 void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
     // nms_iou = 0.2
     // topk = 50
-    std::vector<int> ret;
-    for(int b = 0; b < batch_size_; b++){
-        for(int l = 0; l < strides_.size(); l++){
-            float* d_reg_ptr = static_cast<float *>(
-                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::REG])
+
+    std::vector<DetectionInfo> batch_results(batch_size_);
+    std::vector<std::vector<cv::Rect2d>> bboxes_for_nms(batch_size_);
+    std::vector<std::vector<float>> scores_for_nms(batch_size_);
+
+    for(int l = 0; l < strides_.size(); l++){
+        auto reg = __toXTensor(name_iter[l][REG]);
+        auto obj = __toXTensor(name_iter[l][OBJ]);
+        auto cls = __toXTensor(name_iter[l][CLS]);
+        
+        for(int b = 0; b < batch_size_; b++){
+            int stride = strides_[l];
+
+            auto obj_view = xt::view(obj, b, 0, xt::all(), xt::all());
+            
+            // @TODO 추후 multi class 추가 시 업데이트 해야 함.
+            if(cls.shape(1) > 1)
+                throw std::runtime_error("mutli class is not support");
+            
+            auto cls_view = xt::view(cls, b, 0, xt::all(), xt::all());
+            
+            auto obj_map = 1.0f / (1.0f + xt::exp(-obj_view));
+            auto cls_map = 1.0f / (1.0f + xt::exp(-cls_view));
+            auto score_map = obj_map * cls_map;
+            
+            auto cond = score_map > conf_th;
+            if(!xt::any(cond)) continue;
+            
+            auto scores = xt::filter(score_map, cond);
+            
+            auto reg_view = xt::view(reg, b, xt::all(), xt::all(), xt::all());
+            auto reg_map = xt::reshape_view(
+                xt::transpose(reg_view, {1, 2, 0}), 
+                {
+                    static_cast<int>(cond.shape(0)) * static_cast<int>(cond.shape(1)), 
+                    3,
+                    2
+                }
             );
 
-            float* d_reg_ptr = static_cast<float *>(
-                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::OBJ])
-            );
+            auto reg_all_indicies = xt::arange<size_t>(reg_map.shape(0));
+            auto reg_threshold_indicies = xt::filter(reg_all_indicies, xt::reshape_view(cond, { reg_map.shape(0) }));
+            auto pred_off = xt::eval(xt::view(reg_map, xt::keep(reg_threshold_indicies), xt::all(), xt::all()));
             
-            float* d_cls_ptr = static_cast<float *>(
-                buffers_->getHostBuffer(layer_names::name_iter[l][layer_names::CLS])
-            );
-            
-            
+            auto indicies = xt::from_indices(xt::argwhere(cond));        
+            auto pts = (xt::cast<float>(indicies) + 0.5);
+            auto tri = xt::view(pts, xt::all(), xt::newaxis(), xt::all());
 
+            auto tri_np = (tri + pred_off) * stride;
+            int n = tri_np.shape(0);
+            for(int i = 0; i < n; i++){
+                auto p0 = xt::view(tri_np, i, 0, xt::all());
+                auto p1 = xt::view(tri_np, i, 1, xt::all());
+                auto p2 = xt::view(tri_np, i, 2, xt::all());
+                
+                auto p3 = 2 * p0 - p1;
+                auto p4 = 2 * p0 - p2;
 
+                batch_results[b].scores.push_back(static_cast<float>(scores(i)));
+                batch_results[b].poly4s.push_back(xt::eval(xt::stack(xt::xtuple(p1, p2, p3, p4), 0)));
+                batch_results[b].tri_ptss.push_back(xt::eval(xt::view(tri_np, i, xt::all(), xt::all())));
+
+                // float x0 = xt::amin(batch_results[b].poly4s.back(), {1});
+                // float y0 = xt::amin(batch_results[b].poly4s.back(), {1});
+                // float x1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 0));
+                // float y1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 1));
+
+                // bboxes_for_nms[b].push_back(cv::Rect2d(x0, y0, x1 - x0, y1 - y0));
+                // scores_for_nms[b].push_back(static_cast<float>(scores(i)));
+            }
         }
     }
-    
-    // xtensor 가 필요할 듯
 }
 
 void Model::__tinyFilterOnDets(){

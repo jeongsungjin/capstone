@@ -51,9 +51,8 @@ void PerceptionNode::processing(){
                 break;
             }
 
-            perception_model_.inference();
-                      
-            // auto detections = perception_model_.postprocess(model_output);
+            perception_model_.inference();         
+            perception_model_.postprocess();
             
             // publishVizResult(*img_ptr, detections);
             // publishBEVInfo(*img_ptr, detections);
