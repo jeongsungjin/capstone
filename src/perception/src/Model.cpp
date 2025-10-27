@@ -22,7 +22,7 @@ Model::Model(const std::string& pkg_path, const int batch_size):
     first_inference_(true), batch_size_(batch_size), detections_info_(batch_size)
 {
     std::vector<char> engineData = readPlanFile(
-        pkg_path + "/engine/static_model_batch_4.plan"
+        pkg_path + "/engine/static_model_batch_" + std::to_string(batch_size) + ".plan"
     );
 
     runtime_ = std::shared_ptr<IRuntime>(
@@ -57,9 +57,6 @@ int Model::preprocess(const cv::Mat& img){
     input_height_ = img.rows;
 
     std::vector<cv::Mat> imgs = {
-        img,
-        img,
-        img,
         img
     };
 
@@ -183,7 +180,11 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
             if(!xt::any(cond)) continue;
             
             auto scores = xt::filter(score_map, cond);
-            
+            for(auto& s: scores.shape()){
+                std::cout << s << " ";
+            }
+            std::cout << std::endl;
+
             auto reg_view = xt::view(reg, b, xt::all(), xt::all(), xt::all());
             auto reg_map = xt::reshape_view(
                 xt::transpose(reg_view, {1, 2, 0}), 
@@ -198,11 +199,11 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
             auto reg_threshold_indicies = xt::filter(reg_all_indicies, xt::reshape_view(cond, { reg_map.shape(0) }));
             auto pred_off = xt::eval(xt::view(reg_map, xt::keep(reg_threshold_indicies), xt::all(), xt::all()));
             
-            auto indicies = xt::from_indices(xt::argwhere(cond));        
-            auto pts = (xt::cast<float>(indicies) + 0.5);
+            auto indicies = xt::from_indices(xt::argwhere(cond));
+            auto pts = (xt::cast<float>(indicies) + 0.5) * stride;
             auto tri = xt::view(pts, xt::all(), xt::newaxis(), xt::all());
 
-            auto tri_np = (tri + pred_off) * stride;
+            auto tri_np = (tri + pred_off * stride);
             int n = tri_np.shape(0);
             for(int i = 0; i < n; i++){
                 auto p0 = xt::view(tri_np, i, 0, xt::all());
