@@ -16,7 +16,7 @@ PerceptionNode::PerceptionNode(
     image_sub_ = nh_.subscribe(image_topic_name, 10, &PerceptionNode::imageCallback, this);
 
     running_ = true;
-    perception_thread = std::thread(&PerceptionNode::processing, this);
+    // perception_thread = std::thread(&PerceptionNode::processing, this);
 }
 
 void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
@@ -40,15 +40,15 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
     perception_model_.postprocess();
 
     const auto& detections = perception_model_.getDetections();
-    if(!detections.empty() && !detections[0].poly4s.empty()){   
+    if(!detections.empty() && !detections[0].poly4s.empty()){
         for(int i = 0; i < detections[0].poly4s.size(); i++){
             cv::polylines(img, 
                 std::vector<std::vector<cv::Point>>{
                     {
                         cv::Point(detections[0].poly4s[i](0, 0), detections[0].poly4s[i](0, 1)),
+                        cv::Point(detections[0].poly4s[i](1, 0), detections[0].poly4s[i](1, 1)),
                         cv::Point(detections[0].poly4s[i](2, 0), detections[0].poly4s[i](2, 1)),
-                        cv::Point(detections[0].poly4s[i](4, 0), detections[0].poly4s[i](4, 1)),
-                        cv::Point(detections[0].poly4s[i](6, 0), detections[0].poly4s[i](6, 1))
+                        cv::Point(detections[0].poly4s[i](3, 0), detections[0].poly4s[i](3, 1))
                     }
                 }, 
                 true, 
