@@ -24,4 +24,5 @@ catkin_install_python(PROGRAMS
   scripts/predictive_conflict_manager.py
   scripts/rccar_udp_sender.py
   scripts/carla_cleanup.py
+  scripts/udp_recv.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

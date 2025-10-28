@@ -34,6 +34,12 @@
     </node>
   </group>
 
+  <!-- UDP bridge for external vehicle selection and goal clicks -->
+  <node pkg="carla_multi_vehicle_planner" type="udp_recv.py" name="udp_goal_bridge" output="screen">
+    <param name="udp_ip" value="0.0.0.0" />
+    <param name="udp_port" value="9001" />
+  </node>
+
   <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/predictive_collision_avoidance.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
   </include>

@@ -4,13 +4,12 @@ carla_multi_vehicle_planner
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/multi_vehicle_spawner.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/predictive_conflict_manager.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/predictive_conflict_manager.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/occupancy_grid_publisher.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/occupancy_grid_publisher.py
-/home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/path_mux.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/path_mux.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/key_selector.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/key_selector.py
+/home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/udp_recv.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/udp_recv.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/rccar_udp_sender.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/rccar_udp_sender.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/carla_cleanup.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/carla_cleanup.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/multi_vehicle_controller.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/multi_vehicle_controller.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/bev_visualizer.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/bev_visualizer.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/rviz_goal_mux.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/rviz_goal_mux.py
-/home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/lib/carla_multi_vehicle_planner/conflict_detector.py /home/jamie/capstone/devel/lib/carla_multi_vehicle_planner/conflict_detector.py
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig.cmake /home/jamie/capstone/devel/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig.cmake
 /home/jamie/capstone/devel/.private/carla_multi_vehicle_planner/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig-version.cmake /home/jamie/capstone/devel/share/carla_multi_vehicle_planner/cmake/carla_multi_vehicle_plannerConfig-version.cmake
