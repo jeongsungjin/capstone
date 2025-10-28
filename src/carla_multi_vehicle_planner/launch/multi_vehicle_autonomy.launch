@@ -7,7 +7,7 @@
       <param name="num_vehicles" value="$(arg num_vehicles)" />
       <param name="enable_autopilot" value="false" />
       <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
-      <param name="target_speed" value="6.0" />
+      <param name="target_speed" value="10.0" />
       <!-- Reset CARLA world (and actor ID counter) at startup -->
       <param name="reset_world_on_start" value="true" />
       <!-- Reset CARLA world on shutdown so IDs start from 1 next run -->
@@ -19,18 +19,18 @@
       <param name="num_vehicles" value="$(arg num_vehicles)" />
       <!-- Smaller map -> denser graph but shorter routes -->
       <param name="graph_resolution" value="0.25" />
-      <param name="path_sampling" value="0.2" />
+      <param name="path_sampling" value="0.5" />
       <param name="min_destination_distance" value="20.0" />
-      <param name="max_destination_distance" value="120.0" />
-      <param name="override_preempt_min_dist" value="3.0" />
-      <param name="destination_retry_limit" value="50" />
+      <param name="max_destination_distance" value="150.0" />
+      <param name="override_preempt_min_dist" value="2.0" />
+      <param name="destination_retry_limit" value="80" />
     </node>
 
     <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
       <param name="num_vehicles" value="$(arg num_vehicles)" />
       <!-- Shorter lookahead for smaller map, keep speed moderate -->
-      <param name="lookahead_distance" value="2.0" />
-      <param name="target_speed" value="6.0" />
+      <param name="lookahead_distance" value="4.0" />
+      <param name="target_speed" value="10.0" />
     </node>
   </group>
 

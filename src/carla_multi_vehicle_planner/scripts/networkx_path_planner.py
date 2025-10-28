@@ -44,11 +44,11 @@ class NetworkXPathPlanner:
 
         # Parameters
         self.num_vehicles = rospy.get_param("~num_vehicles", 1)
-        self.path_sampling = rospy.get_param("~path_sampling", 1.0)
+        self.path_sampling = rospy.get_param("~path_sampling", 0.5)
         self.path_update_interval = rospy.get_param("~path_update_interval", 0.5)
         self.min_destination_distance = rospy.get_param("~min_destination_distance", 20.0)
-        self.max_destination_distance = rospy.get_param("~max_destination_distance", 120.0)
-        self.destination_retry_limit = rospy.get_param("~destination_retry_limit", 20)
+        self.max_destination_distance = rospy.get_param("~max_destination_distance", 150.0)
+        self.destination_retry_limit = rospy.get_param("~destination_retry_limit", 80)
         self.destination_reached_threshold = rospy.get_param("~destination_reached_threshold", 5.0)
         self.visualization_lifetime = rospy.get_param("~visualization_lifetime", 60.0)
         self.enable_visualization = rospy.get_param("~enable_visualization", True)
@@ -60,12 +60,12 @@ class NetworkXPathPlanner:
             rospy.logwarn("override_preempt_min_dist < 0, clamping to 0.0")
             self.override_preempt_min_dist = 0.0
 
-        self.start_heading_deg = float(rospy.get_param("~start_heading_deg", 20.0))
-        self.start_search_radius = float(rospy.get_param("~start_search_radius", 1.0))
+        self.start_heading_deg = float(rospy.get_param("~start_heading_deg", 45.0))
+        self.start_search_radius = float(rospy.get_param("~start_search_radius", 10.0))
         self.start_search_radius_max = float(
-            rospy.get_param("~start_search_radius_max", 5.0)
+            rospy.get_param("~start_search_radius_max", 45.0)
         )
-        self.start_k_candidates = int(rospy.get_param("~start_k_candidates", 3))
+        self.start_k_candidates = int(rospy.get_param("~start_k_candidates", 20))
         self.start_offset_m = float(rospy.get_param("~start_offset_m", 2.0))
         if self.start_k_candidates <= 0:
             self.start_k_candidates = 1
@@ -74,7 +74,7 @@ class NetworkXPathPlanner:
         if self.start_search_radius_max < self.start_search_radius:
             self.start_search_radius_max = self.start_search_radius
 
-        self.replan_remaining_m = float(rospy.get_param("~replan_remaining_m", 5.0))
+        self.replan_remaining_m = float(rospy.get_param("~replan_remaining_m", 30.0))
         self.replan_cooldown_sec = float(rospy.get_param("~replan_cooldown_sec", 0.5))
         if self.replan_remaining_m < 1.0:
             self.replan_remaining_m = 1.0
