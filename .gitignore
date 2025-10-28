@@ -24,3 +24,4 @@ src/perception/engine/
 
 .catkin_tools/
 dataset/
+src/perception/scripts/
