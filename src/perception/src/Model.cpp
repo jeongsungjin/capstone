@@ -180,14 +180,11 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
             if(!xt::any(cond)) continue;
             
             auto scores = xt::filter(score_map, cond);
-            for(auto& s: scores.shape()){
-                std::cout << s << " ";
-            }
-            std::cout << std::endl;
 
             auto reg_view = xt::view(reg, b, xt::all(), xt::all(), xt::all());
+            auto reg_transpose_view = xt::transpose(reg_view, {1, 2, 0});
             auto reg_map = xt::reshape_view(
-                xt::transpose(reg_view, {1, 2, 0}), 
+                reg_transpose_view,
                 {
                     static_cast<int>(cond.shape(0)) * static_cast<int>(cond.shape(1)), 
                     3,
@@ -196,14 +193,23 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
             );
 
             auto reg_all_indicies = xt::arange<size_t>(reg_map.shape(0));
-            auto reg_threshold_indicies = xt::filter(reg_all_indicies, xt::reshape_view(cond, { reg_map.shape(0) }));
+            auto reg_threshold_indicies = xt::filter(
+                reg_all_indicies, 
+                xt::reshape_view(cond, { 
+                    static_cast<int>(cond.shape(0)) * static_cast<int>(cond.shape(1)) 
+                }
+            ));
             auto pred_off = xt::eval(xt::view(reg_map, xt::keep(reg_threshold_indicies), xt::all(), xt::all()));
             
-            auto indicies = xt::from_indices(xt::argwhere(cond));
-            auto pts = (xt::cast<float>(indicies) + 0.5) * stride;
-            auto tri = xt::view(pts, xt::all(), xt::newaxis(), xt::all());
+            auto arg_cond = xt::argwhere(cond);
+            auto indicies = xt::from_indices(arg_cond);
+            auto ys = xt::cast<float>(xt::view(indicies, xt::all(), 0));
+            auto xs = xt::cast<float>(xt::view(indicies, xt::all(), 1));
 
-            auto tri_np = (tri + pred_off * stride);
+            auto _centers = xt::stack(xt::xtuple((xs + 0.5) * stride, (ys + 0.5) * stride), 1);
+            auto centers = xt::view(_centers, xt::all(), xt::newaxis(), xt::all());
+            
+            auto tri_np = (centers + pred_off * stride);
             int n = tri_np.shape(0);
             for(int i = 0; i < n; i++){
                 auto p0 = xt::view(tri_np, i, 0, xt::all());
@@ -244,9 +250,9 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
         for(auto idx: batch_detections_indices_){
             std::vector<cv::Point2f> pts = {
                 cv::Point2f(batch_results[b].poly4s[idx](0, 0), batch_results[b].poly4s[idx](0, 1)),
+                cv::Point2f(batch_results[b].poly4s[idx](1, 0), batch_results[b].poly4s[idx](1, 1)),
                 cv::Point2f(batch_results[b].poly4s[idx](2, 0), batch_results[b].poly4s[idx](2, 1)),
-                cv::Point2f(batch_results[b].poly4s[idx](4, 0), batch_results[b].poly4s[idx](4, 1)),
-                cv::Point2f(batch_results[b].poly4s[idx](6, 0), batch_results[b].poly4s[idx](6, 1))
+                cv::Point2f(batch_results[b].poly4s[idx](3, 0), batch_results[b].poly4s[idx](3, 1))
             };
 
             cv::RotatedRect rect = cv::minAreaRect(pts);
@@ -263,9 +269,9 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
                 continue;
             }
 
-            detections_info_[b].scores.push_back(batch_results[b].scores[idx]);
-            detections_info_[b].poly4s.push_back(batch_results[b].poly4s[idx]);
-            detections_info_[b].tri_ptss.push_back(batch_results[b].tri_ptss[idx]);
+            detections_info_[b].scores.emplace_back(batch_results[b].scores[idx]);
+            detections_info_[b].poly4s.emplace_back(batch_results[b].poly4s[idx]);
+            detections_info_[b].tri_ptss.emplace_back(batch_results[b].tri_ptss[idx]);
         }
     }
 }
