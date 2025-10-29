@@ -91,6 +91,9 @@ class MultiVehicleSpawner:
         self.vehicles = []
         self.odom_publishers = {}
         self.spawned_transforms = {}
+        # Spectator lock to keep BEV view fixed against mouse/touch moves
+        self._spectator_target = None  # (x, y, z, yaw_deg)
+        self._spectator_lock_timer = None
 
         self.spawn_vehicles()
         rospy.on_shutdown(self.cleanup)
@@ -161,9 +164,9 @@ class MultiVehicleSpawner:
                 span_x = max_x - min_x
                 span_y = max_y - min_y
 
-                auto_height = bool(rospy.get_param("~spectator_auto_height", True))
-                min_height = float(rospy.get_param("~spectator_min_height", 50.0))
-                height = float(rospy.get_param("~spectator_height", 35.0))
+                auto_height = bool(rospy.get_param("~spectator_auto_height", False))
+                min_height = float(rospy.get_param("~spectator_min_height", 55.0))
+                height = float(rospy.get_param("~spectator_height", 55.0))
                 if auto_height:
                     # Heuristic: use max span to choose a height that likely fits the whole map
                     height = max(min_height, max(span_x, span_y) * 1.1)
@@ -196,6 +199,13 @@ class MultiVehicleSpawner:
                 bev_loc = carla.Location(x=target_x, y=target_y, z=height)
                 bev_rot = carla.Rotation(pitch=-90.0, yaw=yaw_deg, roll=0.0)
                 spectator.set_transform(carla.Transform(bev_loc, bev_rot))
+                # Lock spectator by periodically re-applying the BEV transform
+                self._spectator_target = (target_x, target_y, height, yaw_deg)
+                if self._spectator_lock_timer is None:
+                    # 5 Hz refresh is usually enough to cancel user camera moves
+                    self._spectator_lock_timer = rospy.Timer(
+                        rospy.Duration(0.2), self._spectator_lock_cb
+                    )
                 rospy.loginfo(
                     "multi_vehicle_spawner: spectator BEV at(%.1f, %.1f, %.1f) yaw=%.1f span=(%.1f, %.1f)",
                     target_x,
@@ -248,6 +258,12 @@ class MultiVehicleSpawner:
             if vehicle is not None and vehicle.is_alive:
                 vehicle.destroy()
         self.vehicles.clear()
+        if self._spectator_lock_timer is not None:
+            try:
+                self._spectator_lock_timer.shutdown()
+            except Exception:
+                pass
+            self._spectator_lock_timer = None
         # Optionally reset the CARLA world when this node is shutting down,
         # so that actor IDs start from 1 on the next run without impacting startup.
         if self.reset_world_on_shutdown:
@@ -281,6 +297,19 @@ class MultiVehicleSpawner:
             math.radians(transform.rotation.yaw),
         )
         self.initial_pose_pub.publish(pose_msg)
+
+    def _spectator_lock_cb(self, _event):
+        target = self._spectator_target
+        if target is None:
+            return
+        try:
+            x, y, z, yaw_deg = target
+            spectator = self.world.get_spectator()
+            bev_loc = carla.Location(x=x, y=y, z=z)
+            bev_rot = carla.Rotation(pitch=-90.0, yaw=yaw_deg, roll=0.0)
+            spectator.set_transform(carla.Transform(bev_loc, bev_rot))
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
