@@ -3,12 +3,14 @@
 
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
+#include <sensor_msgs/CameraInfo.h>
 
 #include <opencv2/opencv.hpp>
 
 #include "Model.h"
 
 #include <queue>
+#include <vector>
 #include <memory>
 
 #include <mutex>
@@ -21,21 +23,23 @@ class PerceptionNode{
 public:
     PerceptionNode(
         const std::string& pkg_path,
-        const std::string& image_topic_name,
+        const std::string& image_topic_name_prefix,
         const int batch_size);
     ~PerceptionNode();
 
 private:
     void imageCallback(const sensor_msgs::ImageConstPtr& msg);
+
     void processing();
 
     void publishBEVInfo();
-    void publishVizResult();
+    void publishVizResult(const cv::Mat& img);
 
 private:
     ros::NodeHandle nh_;
     ros::Subscriber image_sub_;
-    
+    ros::Publisher bev_info_pub_, viz_result_pub_;
+
     bool running_;
     std::queue<MatPtr> buf_img_;
     std::mutex m_buf_;

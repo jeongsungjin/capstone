@@ -9,10 +9,12 @@
 
 PerceptionNode::PerceptionNode(
     const std::string& pkg_path, 
-    const std::string& image_topic_name, 
+    const std::string& image_topic_name,
     const int batch_size
-): nh_(), perception_model_(pkg_path, batch_size)
+): nh_("~"), perception_model_(pkg_path, batch_size)
 {
+    viz_result_pub_ = nh_.advertise<sensor_msgs::Image>("viz_result", 1);
+
     image_sub_ = nh_.subscribe(image_topic_name, 10, &PerceptionNode::imageCallback, this);
 
     running_ = true;
@@ -39,7 +41,16 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
     perception_model_.inference();         
     perception_model_.postprocess();
 
+    publishVizResult(img);
+}
+
+void PerceptionNode::publishBEVInfo(){
+    
+}
+
+void PerceptionNode::publishVizResult(const cv::Mat& img){
     const auto& detections = perception_model_.getDetections();
+
     if(!detections.empty() && !detections[0].poly4s.empty()){
         for(int i = 0; i < detections[0].poly4s.size(); i++){
             cv::polylines(img, 
@@ -57,9 +68,12 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
             );
         }
     }
-        
-    cv::imshow("Perception Result", img);
-    cv::waitKey(1);
+
+    cv_bridge::CvImage out_msg;
+    out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+    out_msg.image = img;
+    out_msg.header.stamp = ros::Time::now();
+    viz_result_pub_.publish(out_msg.toImageMsg());
 }
 
 void PerceptionNode::processing(){
