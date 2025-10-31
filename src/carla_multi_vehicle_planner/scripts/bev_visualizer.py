@@ -196,9 +196,9 @@ class BEVVisualizer:
             "ego_vehicle_1": (0, 255, 0),
             "ego_vehicle_2": (255, 0, 0),
             "ego_vehicle_3": (0, 0, 255),
-            "ego_vehicle_4": (255, 255, 0),
+            "ego_vehicle_4": (0, 255, 255),
             "ego_vehicle_5": (255, 0, 255),
-            "ego_vehicle_6": (0, 255, 255),
+            "ego_vehicle_6": (255, 255, 0),
         }
         return palette.get(role, (200, 200, 200))
 

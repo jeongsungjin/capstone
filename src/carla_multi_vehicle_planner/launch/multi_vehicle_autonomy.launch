@@ -21,7 +21,7 @@
       <param name="graph_resolution" value="0.25" />
       <param name="path_sampling" value="0.5" />
       <param name="min_destination_distance" value="20.0" />
-      <param name="max_destination_distance" value="150.0" />
+      <param name="max_destination_distance" value="120.0" />
       <param name="override_preempt_min_dist" value="2.0" />
       <param name="destination_retry_limit" value="80" />
     </node>

@@ -101,15 +101,37 @@ class MultiVehicleSpawner:
 
     def spawn_vehicles(self):
         blueprint_library = self.world.get_blueprint_library()
-        base_bp = blueprint_library.find(self.vehicle_model)
-        if base_bp is None:
-            rospy.logwarn(f"Vehicle model {self.vehicle_model} not found; using first available")
-            base_bp = blueprint_library.filter("vehicle.*")[0]
+
+        # Per-vehicle model mapping
+        model_map = [
+            "vehicle.vehicle.greenxycar",   # vehicle 1
+            "vehicle.vehicle.bluexycar",    # vehicle 2
+            "vehicle.vehicle.coloredxycar", # vehicle 3
+            "vehicle.vehicle.yellowxycar", # vehicle 4
+        ]
 
         for index in range(self.num_vehicles):
             role_name = f"ego_vehicle_{index + 1}"
-            blueprint = blueprint_library.find(base_bp.id)
-            if blueprint.has_attribute("role_name"):
+            # Pick model by index; fallback to configured default, then first available
+            desired_model = model_map[index] if index < len(model_map) else "vehicle.vehicle.coloredxycar"
+            blueprint = blueprint_library.find(desired_model)
+            if blueprint is None:
+                rospy.logwarn(
+                    "%s: vehicle model %s not found; falling back to %s",
+                    role_name,
+                    desired_model,
+                    "vehicle.vehicle.coloredxycar",
+                )
+                blueprint = blueprint_library.find("vehicle.vehicle.coloredxycar")
+            if blueprint is None:
+                bp_list = blueprint_library.filter("vehicle.*")
+                if not bp_list:
+                    rospy.logerr("%s: no vehicle blueprints available", role_name)
+                    continue
+                blueprint = bp_list[0]
+            # Use a fresh blueprint instance per spawn (by id) and set role
+            blueprint = blueprint_library.find(blueprint.id)
+            if blueprint is not None and blueprint.has_attribute("role_name"):
                 blueprint.set_attribute("role_name", role_name)
 
             vehicle = None
@@ -165,16 +187,17 @@ class MultiVehicleSpawner:
                 span_y = max_y - min_y
 
                 auto_height = bool(rospy.get_param("~spectator_auto_height", False))
-                min_height = float(rospy.get_param("~spectator_min_height", 75.0))
-                height = float(rospy.get_param("~spectator_height", 75.0))
+                min_height = float(rospy.get_param("~spectator_min_height", 65.0))
+                height = float(rospy.get_param("~spectator_height", 65.0))
                 if auto_height:
                     # Heuristic: use max span to choose a height that likely fits the whole map
                     height = max(min_height, max(span_x, span_y) * 1.1)
 
                 yaw_deg = float(rospy.get_param("~spectator_yaw_deg", -90.0))
+                pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -50.0))
                 # Optional offsets: map-axis offsets (meters)
                 offset_x = float(rospy.get_param("~spectator_offset_x", -16.0))
-                offset_y = float(rospy.get_param("~spectator_offset_y", -10.0))
+                offset_y = float(rospy.get_param("~spectator_offset_y", 35.0))
                 # Optional view-relative offsets (meters): right/up on screen after yaw applied
                 view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
                 view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
@@ -197,10 +220,10 @@ class MultiVehicleSpawner:
                     target_y += view_right_m * ry + view_up_m * uy
                 spectator = self.world.get_spectator()
                 bev_loc = carla.Location(x=target_x, y=target_y, z=height)
-                bev_rot = carla.Rotation(pitch=-90.0, yaw=yaw_deg, roll=0.0)
+                bev_rot = carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
                 spectator.set_transform(carla.Transform(bev_loc, bev_rot))
                 # Lock spectator by periodically re-applying the BEV transform
-                self._spectator_target = (target_x, target_y, height, yaw_deg)
+                self._spectator_target = (target_x, target_y, height, yaw_deg, pitch_deg)
                 if self._spectator_lock_timer is None:
                     # 5 Hz refresh is usually enough to cancel user camera moves
                     self._spectator_lock_timer = rospy.Timer(
@@ -303,10 +326,10 @@ class MultiVehicleSpawner:
         if target is None:
             return
         try:
-            x, y, z, yaw_deg = target
+            x, y, z, yaw_deg, pitch_deg = target
             spectator = self.world.get_spectator()
             bev_loc = carla.Location(x=x, y=y, z=z)
-            bev_rot = carla.Rotation(pitch=-90.0, yaw=yaw_deg, roll=0.0)
+            bev_rot = carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
             spectator.set_transform(carla.Transform(bev_loc, bev_rot))
         except Exception:
             pass
