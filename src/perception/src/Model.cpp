@@ -219,14 +219,25 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
                 auto p3 = 2 * p0 - p1;
                 auto p4 = 2 * p0 - p2;
 
-                batch_results[b].scores.push_back(static_cast<float>(scores(i)));
-                batch_results[b].poly4s.push_back(xt::eval(xt::stack(xt::xtuple(p1, p2, p3, p4), 0)));
-                batch_results[b].tri_ptss.push_back(xt::eval(xt::view(tri_np, i, xt::all(), xt::all())));
+                auto poly = xt::eval(xt::stack(xt::xtuple(p1, p2, p3, p4), 0)); // shape (4,2)
+                auto tri_eval = xt::eval(xt::view(tri_np, i, xt::all(), xt::all())); // shape (3,2)
 
-                float x0 = xt::amin(xt::view(batch_results[b].poly4s.back(), xt::all(), 0))();
-                float y0 = xt::amin(xt::view(batch_results[b].poly4s.back(), xt::all(), 1))();
-                float x1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 0))();
-                float y1 = xt::amax(xt::view(batch_results[b].poly4s.back(), xt::all(), 1))();
+                float sx = static_cast<float>(input_width_) / static_cast<float>(W);
+                float sy = static_cast<float>(input_height_) / static_cast<float>(H);
+                xt::xarray<float> scale = {sx, sy};
+                auto poly_scaled = xt::eval(poly * scale);
+                auto tri_scaled = xt::eval(tri_eval * scale);
+
+                batch_results[b].scores.push_back(static_cast<float>(scores(i)));
+                batch_results[b].poly4s.push_back(poly_scaled);
+                batch_results[b].tri_ptss.push_back(tri_scaled);
+
+                auto mins = xt::amin(poly_scaled, {0});
+                auto maxs = xt::amax(poly_scaled, {0});
+                float x0 = static_cast<float>(mins(0));
+                float y0 = static_cast<float>(mins(1));
+                float x1 = static_cast<float>(maxs(0));
+                float y1 = static_cast<float>(maxs(1));
 
                 bboxes_for_nms[b].push_back(cv::Rect2d(x0, y0, x1 - x0, y1 - y0));
                 scores_for_nms[b].push_back(static_cast<float>(scores(i)));
