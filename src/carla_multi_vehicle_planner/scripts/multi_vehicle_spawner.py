@@ -165,8 +165,8 @@ class MultiVehicleSpawner:
                 span_y = max_y - min_y
 
                 auto_height = bool(rospy.get_param("~spectator_auto_height", False))
-                min_height = float(rospy.get_param("~spectator_min_height", 65.0))
-                height = float(rospy.get_param("~spectator_height", 65.0))
+                min_height = float(rospy.get_param("~spectator_min_height", 75.0))
+                height = float(rospy.get_param("~spectator_height", 75.0))
                 if auto_height:
                     # Heuristic: use max span to choose a height that likely fits the whole map
                     height = max(min_height, max(span_x, span_y) * 1.1)
