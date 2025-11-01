@@ -61,6 +61,8 @@ def main():
                         continue
                     role = _role_name(current_vehicle_id)
                     pub = get_override_pub(role)
+                    # Re-publish selection to ensure downstream nodes latch current role
+                    selected_pub.publish(String(data=role))
                     ps = PoseStamped()
                     ps.header.stamp = rospy.Time.now()
                     ps.header.frame_id = "map"
@@ -70,6 +72,26 @@ def main():
                     ps.pose.orientation.w = 1.0
                     pub.publish(ps)
                     rospy.loginfo("udp_goal_bridge: goal → %s at (%.2f, %.2f)", role, x, y)
+
+                    # Optionally repeat goal after a short delay to avoid first-click miss
+                    repeat_count = int(rospy.get_param("~goal_repeat_count", 1))
+                    repeat_delay = float(rospy.get_param("~goal_repeat_delay", 0.1))
+                    repeat_count = max(0, repeat_count)
+
+                    if repeat_count > 0 and repeat_delay > 0.0:
+                        def _republish(_event, rx=x, ry=y, rz=z, rrole=role):
+                            repub = get_override_pub(rrole)
+                            ps2 = PoseStamped()
+                            ps2.header.stamp = rospy.Time.now()
+                            ps2.header.frame_id = "map"
+                            ps2.pose.position.x = rx
+                            ps2.pose.position.y = ry
+                            ps2.pose.position.z = rz
+                            ps2.pose.orientation.w = 1.0
+                            repub.publish(ps2)
+                        # schedule repeats
+                        for i in range(repeat_count):
+                            rospy.Timer(rospy.Duration(repeat_delay * (i + 1)), _republish, oneshot=True)
                 continue
 
             # 3) 기타 메시지
