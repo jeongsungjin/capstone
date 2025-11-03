@@ -64,7 +64,7 @@ class MultiVehicleSpawner:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 3)
-        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.tesla.model3")
+        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.coloredxycar")
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
         self.target_speed = rospy.get_param("~target_speed", 15.0)

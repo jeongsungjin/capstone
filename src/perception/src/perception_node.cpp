@@ -5,38 +5,99 @@
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui.hpp>
 
+#include <boost/bind.hpp>
+#include <boost/bind/placeholders.hpp>
+
 #include <chrono>
 
-PerceptionNode::PerceptionNode(): nh_(), perception_model_(1280, 720){
-    ros::param::param<std::string>(
-        "~image_topic", 
-        image_topic_name_, 
-        "/camera/image_raw"
-    );
-    
-    std::cout << image_topic_name_ << std::endl;
-
-    image_sub_ = nh_.subscribe(image_topic_name_, 10, &PerceptionNode::imageCallback, this);
-
-    running_ = true;
-    perception_thread = std::thread(&PerceptionNode::processing, this);
-}
-
-void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& msg){
-    // ROS_INFO("I got message");
-
-    cv_bridge::CvImagePtr cv_ptr = cv_bridge::toCvCopy(msg, sensor_msgs::image_encodings::BGR8);
-    cv::Mat img = cv_ptr->image;
-    if(!img.empty()){
-        std::unique_lock<std::mutex> lock(m_buf_);
-        buf_img_.push(std::make_shared<cv::Mat>(img));
+PerceptionNode::PerceptionNode(
+    const std::string& pkg_path, 
+    const std::string& image_topic_name,
+    const int batch_size
+): nh_("~"), perception_model_(pkg_path, batch_size), running_(true)
+{
+    // 현재는 2개 이미지 동기화만 지원합니다.
+    if (batch_size != 2) {
+        ROS_WARN("PerceptionNode currently supports batch_size=2 for synchronized topics. Using first 2.");
     }
 
-    cv_buf_.notify_one();
+    // Initialize subscribers directly (non-copyable)
+    const int queue_size = 5;
+    image_sub1_.subscribe(nh_, image_topic_name + std::string("1/image_raw"), queue_size);
+    image_sub2_.subscribe(nh_, image_topic_name + std::string("2/image_raw"), queue_size);
+
+    // Synchronizer must be constructed with policy and subscribers
+    sync_ = std::make_unique<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(queue_size), image_sub1_, image_sub2_);
+    using namespace boost::placeholders;
+    sync_->registerCallback(boost::bind(&PerceptionNode::imageCallback, this, _1, _2));
+
+    // Visualization publishers (2 outputs)
+    viz_result_pubs_.emplace_back(nh_.advertise<sensor_msgs::Image>("viz_result_1", 1));
+    viz_result_pubs_.emplace_back(nh_.advertise<sensor_msgs::Image>("viz_result_2", 1));
+}
+
+void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2){
+    cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
+    cv::Mat img1_mat = cv_ptr1->image;
+
+    cv_bridge::CvImagePtr cv_ptr2 = cv_bridge::toCvCopy(img2, sensor_msgs::image_encodings::BGR8);
+    cv::Mat img2_mat = cv_ptr2->image;
+
+    std::vector<cv::Mat> img_batch;
+    img_batch.emplace_back(img1_mat);
+    img_batch.emplace_back(img2_mat);
+
+    int ret = perception_model_.preprocess(img_batch);
+    if (ret != 0) {
+        running_ = false;
+        std::cerr << "Preprocessing failed!" << std::endl;
+        return;
+    }
+
+    perception_model_.inference();
+    perception_model_.postprocess();
+
+    publishVizResult(img_batch);
+}
+
+void PerceptionNode::publishBEVInfo(){
+    // 호모 그래피를 어떻게 구할까?
+    xt::xarray<float> homography = {
+        {1.0, 0.0, 0.0},
+        {0.0, 1.0, 0.0},
+        {0.0, 0.0, 1.0}
+    };
+}
+
+void PerceptionNode::publishVizResult(const std::vector<cv::Mat>& imgs){
+    const auto& detections = perception_model_.getDetections();
+
+    for(int b = 0; b < detections.size(); b++){
+        for(int i = 0; i < detections[b].poly4s.size(); i++){
+            cv::polylines(imgs[b], 
+                std::vector<std::vector<cv::Point>>{
+                    {
+                        cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
+                        cv::Point(detections[b].poly4s[i](1, 0), detections[b].poly4s[i](1, 1)),
+                        cv::Point(detections[b].poly4s[i](2, 0), detections[b].poly4s[i](2, 1)),
+                        cv::Point(detections[b].poly4s[i](3, 0), detections[b].poly4s[i](3, 1))
+                    }
+                }, 
+                true, 
+                cv::Scalar(0, 255, 0), 
+                2
+            );
+        }
+        
+        cv_bridge::CvImage out_msg;
+        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+        out_msg.image = imgs[b];
+        out_msg.header.stamp = ros::Time::now();
+        viz_result_pubs_[b].publish(out_msg.toImageMsg());
+    }
 }
 
 void PerceptionNode::processing(){
-    // ROS_INFO("Processing thread started.");
     while (running_){
         MatPtr img_ptr = nullptr;
         {
@@ -50,41 +111,45 @@ void PerceptionNode::processing(){
         }
 
         if(img_ptr != nullptr) {
-            std::chrono::high_resolution_clock::time_point t1 = std::chrono::high_resolution_clock::now();
-            auto model_input = perception_model_.preprocess(*img_ptr);
-            std::chrono::high_resolution_clock::time_point t2 = std::chrono::high_resolution_clock::now();
-            std::cout << "Preprocess time: " 
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count() 
-                      << " ms" << std::endl;
-                      
-            std::chrono::high_resolution_clock::time_point t3 = std::chrono::high_resolution_clock::now();
-            auto model_output = perception_model_.inference(model_input);
-            std::chrono::high_resolution_clock::time_point t4 = std::chrono::high_resolution_clock::now();
-            std::cout << "inference time: " 
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(t4 - t3).count() 
-                      << " ms" << std::endl;
-                      
-            std::chrono::high_resolution_clock::time_point t5 = std::chrono::high_resolution_clock::now();
-            auto detections = perception_model_.postprocess(model_output);
-            std::chrono::high_resolution_clock::time_point t6 = std::chrono::high_resolution_clock::now();
-            std::cout << "poseprocess time: " 
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(t6 - t5).count() 
-                      << " ms" << std::endl;
-            
-            // auto bev_info = perception_model_.toBEV(detections);
-            perception_model_.visualizeDetections(*img_ptr, detections);
-            cv::imshow("Perception Detections", *img_ptr);
+            int ret = perception_model_.preprocess(*img_ptr);
+            if (ret != 0) {
+                running_ = false;
+                std::cerr << "Preprocessing failed!" << std::endl;
+                break;
+            }
+
+            perception_model_.inference();         
+            perception_model_.postprocess();
+
+            const auto& detections = perception_model_.getDetections();
+            if(!detections.empty() && !detections[0].poly4s.empty()){   
+                for(int i = 0; i < detections[0].poly4s.size(); i++){
+                    cv::polylines(*img_ptr, 
+                        std::vector<std::vector<cv::Point>>{
+                            {
+                                cv::Point(detections[0].poly4s[i](0, 0), detections[0].poly4s[i](0, 1)),
+                                cv::Point(detections[0].poly4s[i](2, 0), detections[0].poly4s[i](2, 1)),
+                                cv::Point(detections[0].poly4s[i](4, 0), detections[0].poly4s[i](4, 1)),
+                                cv::Point(detections[0].poly4s[i](6, 0), detections[0].poly4s[i](6, 1))
+                            }
+                        }, 
+                        true, 
+                        cv::Scalar(0, 255, 0), 
+                        2
+                    );
+                }
+            }
+                
+            cv::imshow("Perception Result", *img_ptr);
             cv::waitKey(1);
         }
     }
-    // ROS_INFO("Processing thread started.");
-
 }
 
 PerceptionNode::~PerceptionNode(){
     running_ = false;
     cv_buf_.notify_all();
-    if (perception_thread.joinable()){
-        perception_thread.join();
+    if (perception_thread_.joinable()){
+        perception_thread_.join();
     }
 }

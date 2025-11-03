@@ -1,5 +1,0 @@
-ip_camera
-/home/ctrl/capstone/devel/.private/ip_camera/share/ip_camera/cmake/ip_cameraConfig-version.cmake /home/ctrl/capstone/devel/share/ip_camera/cmake/ip_cameraConfig-version.cmake
-/home/ctrl/capstone/devel/.private/ip_camera/share/ip_camera/cmake/ip_cameraConfig.cmake /home/ctrl/capstone/devel/share/ip_camera/cmake/ip_cameraConfig.cmake
-/home/ctrl/capstone/devel/.private/ip_camera/lib/ip_camera/ip_camera_streamer.py /home/ctrl/capstone/devel/lib/ip_camera/ip_camera_streamer.py
-/home/ctrl/capstone/devel/.private/ip_camera/lib/pkgconfig/ip_camera.pc /home/ctrl/capstone/devel/lib/pkgconfig/ip_camera.pc
