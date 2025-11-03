@@ -1,0 +1,14 @@
+<launch>
+  <!-- Adjustable args -->
+  <arg name="publish_rate" default="60.0" />
+  <arg name="config" default="$(find ip_camera)/config/cameras.yaml" />
+
+  <!-- IP Camera C++ node with params auto-loaded -->
+  <node pkg="ip_camera" type="ip_camera_streamer_node" name="ip_camera_streamer_cpp" output="screen">
+    <!-- Inline param override -->
+    <param name="publish_rate" value="$(arg publish_rate)" />
+
+    <!-- Load full camera list and any other params from YAML -->
+    <rosparam file="$(arg config)" command="load" />
+  </node>
+</launch>
