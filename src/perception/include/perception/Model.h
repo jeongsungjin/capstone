@@ -16,6 +16,7 @@
 
 using namespace nvinfer1;
 
+#include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/opencv.hpp>
 #include <opencv2/dnn.hpp>
 
@@ -63,7 +64,7 @@ public:
     Model(const std::string& pkg_path, const int batch_size);
     ~Model();
 
-    int preprocess(const cv::Mat& image);
+    int preprocess(const std::vector<cv::Mat>& images);
     void inference();
     void postprocess();
 
@@ -83,6 +84,7 @@ private:
     std::shared_ptr<ICudaEngine> engine_;
     std::unique_ptr<IExecutionContext, samplesCommon::InferDeleter> context_;
     cudaStream_t stream_;
+    cv::cuda::Stream cv_stream_;
 
     // model 관련 정보
     std::unique_ptr<samplesCommon::BufferManager> buffers_;

@@ -5,6 +5,7 @@
 #include <ros/ros.h>
 
 #include "perception/utils.hpp"
+#include "perception/preprocess.h"
 
 #include <numeric>
 
@@ -12,6 +13,8 @@
 #include <xtensor/xmath.hpp>
 #include <xtensor/xview.hpp>
 #include <xtensor/xadapt.hpp>
+
+#include <opencv2/cudawarping.hpp>
 
 int W = 1536;
 int H = 864;
@@ -44,60 +47,70 @@ Model::Model(const std::string& pkg_path, const int batch_size):
     
     buffers_ = std::make_unique<samplesCommon::BufferManager>(engine_, /*batchSize=*/0, context_.get());
     CHECK(cudaStreamCreate(&stream_));
+
+    cv_stream_ = cv::cuda::StreamAccessor::wrapStream(stream_);
 }
 
 Model::~Model(){
     cudaStreamDestroy(stream_);
 }
 
-int Model::preprocess(const cv::Mat& img){
-    Timer timer("Model::preprocess");
+int Model::preprocess(const std::vector<cv::Mat>& images){
+    Timer timer("preprocess");
 
-    input_width_ = img.cols;
-    input_height_ = img.rows;
+    if (images.empty()) return -1;
 
-    std::vector<cv::Mat> imgs = {
-        img
-    };
-
-    cv::Mat model_input = cv::dnn::blobFromImages(
-        imgs,               // src img
-        1. / 255.,          // scale factor
-        cv::Size(W, H),     // resize size
-        cv::Scalar(),       // mean
-        true,               // swapRB
-        false,              // crop
-        CV_32F              // output data type
-    );
-
-    size_t bytes = model_input.total() * model_input.elemSize();
-    size_t expected = buffers_->size(INPUT);
-    if (expected != samplesCommon::BufferManager::kINVALID_SIZE_VALUE && expected != bytes) {
-        std::cerr << "Warning: input bytes (" << bytes << ") != buffer size (" << expected << ")\n";
-        return -1;
+    int effective_batch = std::min(static_cast<int>(images.size()), batch_size_);
+    if (effective_batch != batch_size_) {
+        ROS_WARN_STREAM("preprocess: images.size() (" << images.size() << ") != model batch_size_ (" << batch_size_ << ") — using " << effective_batch);
     }
 
-    void* hostPtr = buffers_->getHostBuffer(INPUT);
-    std::memcpy(hostPtr, model_input.data, bytes);
-
+    // LSTM hidden, cell state 전달
     __copyLSTMOutputsToInputs();
-
+    buffers_->copyInputToDeviceAsync(stream_);
     first_inference_ = false;
+
+    // 입력 원본 크기는 첫 장 기준 기록 (시각화 스케일링 용)
+    input_width_ = images[0].cols;
+    input_height_ = images[0].rows;
+
+    // 하나의 큰 GpuMat을 만들고, 각 이미지를 리사이즈 후 ROI에 복사
+    cv::cuda::GpuMat d_stacked(H * effective_batch, W, CV_8UC3);
+
+    for (int b = 0; b < effective_batch; ++b) {
+        cv::cuda::GpuMat d_img, d_resized;
+        d_img.upload(images[b]);
+        cv::cuda::resize(d_img, d_resized, cv::Size(W, H), 0, 0, cv::INTER_LINEAR, cv_stream_);
+
+        cv::cuda::GpuMat roi = d_stacked.rowRange(b * H, (b + 1) * H).colRange(0, W);
+        d_resized.copyTo(roi, cv_stream_);
+    }
+
+    float* d_out_base = reinterpret_cast<float*>(buffers_->getDeviceBuffer(INPUT));
+
+    launchPreprocessKernelBatched(
+        d_stacked,
+        d_out_base,
+        W,
+        H,
+        effective_batch,
+        1.0f / 255.0f,
+        stream_
+    );
 
     return 0;
 }
 
 void Model::inference(){
-    Timer timer("Model::inference");
+    Timer timer("inference");
 
-    buffers_->copyInputToDeviceAsync(stream_);
     context_->enqueueV2(buffers_->getDeviceBindings().data(), stream_, nullptr);
     buffers_->copyOutputToHostAsync(stream_);
     CHECK(cudaStreamSynchronize(stream_));
 }
 
 void Model::postprocess(){
-    Timer timer("Model::postprocess");
+    Timer timer("postprocess");
 
     __decodePredictions();
 }

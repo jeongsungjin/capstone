@@ -1,6 +1,8 @@
 #include "timer.h"
 #include <iomanip>
 
+#include "time_logger.h"
+
 Timer::Timer(const std::string& name)
     : name_(name), start_(std::chrono::high_resolution_clock::now()) {}
 
@@ -10,4 +12,6 @@ Timer::~Timer() {
     std::cout << "[TIMER] " << std::left << std::setw(20) << name_ 
               << "took " << std::right << std::setw(5) << duration
               << " ms\n";
+
+    TimeLogger::instance().log(name_, duration);
 }
