@@ -24,6 +24,7 @@ def main():
     rospy.loginfo("udp_goal_bridge: listening on %s:%d", UDP_IP, UDP_PORT)
 
     selected_pub = rospy.Publisher("/selected_vehicle", String, queue_size=1, latch=True)
+    click_pub = rospy.Publisher("/click_button", String, queue_size=1, latch=False)
     override_publishers: Dict[str, rospy.Publisher] = {}
 
     def get_override_pub(role: str) -> rospy.Publisher:
@@ -41,6 +42,12 @@ def main():
             data, _ = sock.recvfrom(1024)
             msg = data.decode("utf-8", errors="ignore").strip()
             if not msg:
+                continue
+
+            # 0) click 이벤트
+            if msg.lower() == "click":
+                click_pub.publish(String(data="click"))
+                rospy.loginfo("udp_goal_bridge: click → /click_button")
                 continue
 
             # 1) 차량 선택 (숫자만)

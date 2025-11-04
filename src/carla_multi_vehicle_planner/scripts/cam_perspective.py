@@ -41,9 +41,11 @@ class CamPerspective:
         self.view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
         self.view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
         self.lock_rate_hz = float(rospy.get_param("~lock_rate_hz", 5.0))
+        # Ignore initial latched /selected_vehicle for a short window to keep BEV at startup
+        self.selected_ignore_window_s = float(rospy.get_param("~selected_ignore_window_s", 1.0))
 
         # Follow-view parameters
-        self.follow_duration_s = float(rospy.get_param("~follow_duration_s", 4.0))
+        self.follow_duration_s = float(rospy.get_param("~follow_duration_s", 3.0))
         self.follow_rate_hz = float(rospy.get_param("~follow_rate_hz", 20.0))
         self.follow_back_m = float(rospy.get_param("~follow_back_m", 10.0))
         self.follow_up_m = float(rospy.get_param("~follow_up_m", 8.0))
@@ -100,12 +102,13 @@ class CamPerspective:
         self._lock_timer = None
         self._follow_timer = None
         self._goal_timer = None
-        self._follow_end_time = 0.0
+        self._follow_end_time = None  # follow persists until /click_button
         self._follow_role = None
         self._follow_cam = None  # {'x','y','z','yaw','pitch'}
         self._goal_cam = None    # {'x','y','z','yaw','pitch'} for goal animation
         self._goal_target = None # {'x','y','z','yaw','pitch'} target for goal animation
         self._goal_anim_timer = None
+        self._selected_ignore_until = rospy.Time.now().to_sec() + max(0.0, self.selected_ignore_window_s)
 
         # Compute and apply default BEV
         self._compute_and_apply_default_view()
@@ -117,6 +120,7 @@ class CamPerspective:
 
         # Subscriptions
         rospy.Subscriber("/selected_vehicle", String, self._selected_cb)
+        rospy.Subscriber("/click_button", String, self._click_cb)
         for i in range(1, self.num_vehicles + 1):
             role = f"ego_vehicle_{i}"
             topic = f"/override_goal/{role}"
@@ -180,12 +184,17 @@ class CamPerspective:
         role = (msg.data or "").strip()
         if not role:
             return
+        # Skip early latched message to keep BEV at startup
+        if rospy.Time.now().to_sec() < self._selected_ignore_until:
+            rospy.loginfo("cam_perspective: ignoring early /selected_vehicle '%s' to keep BEV", role)
+            return
         rospy.loginfo("cam_perspective: selected %s", role)
         self._start_follow(role)
 
     def _start_follow(self, role: str):
         self.mode = "follow"
-        self._follow_end_time = time.time() + max(0.0, self.follow_duration_s)
+        # No timeout – will end on /click_button
+        self._follow_end_time = None
         self._follow_role = role
         # Initialize smoothing state from current spectator transform
         try:
@@ -228,7 +237,7 @@ class CamPerspective:
         )
 
     def _follow_cb(self, _event):
-        if time.time() >= self._follow_end_time:
+        if self._follow_end_time is not None and time.time() >= self._follow_end_time:
             try:
                 if self._follow_timer is not None:
                     self._follow_timer.shutdown()
@@ -302,6 +311,36 @@ class CamPerspective:
         )
         rospy.loginfo_throttle(0.5, "cam_perspective: following %s at (%.1f, %.1f, %.1f) yaw=%.1f pitch=%.1f → tgt (%.1f, %.1f, %.1f) yaw=%.1f pitch=%.1f",
                                role, nx, ny, nz, nyaw, npitch, cam_x, cam_y, cam_z, yaw, pitch)
+
+    def _click_cb(self, _msg: String):
+        # End follow/goal and revert to default BEV immediately
+        self.mode = "default"
+        # stop follow timer
+        if self._follow_timer is not None:
+            try:
+                self._follow_timer.shutdown()
+            except Exception:
+                pass
+            self._follow_timer = None
+        self._follow_cam = None
+        # stop goal timers/animation
+        if self._goal_timer is not None:
+            try:
+                self._goal_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_timer = None
+        if self._goal_anim_timer is not None:
+            try:
+                self._goal_anim_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_anim_timer = None
+        self._goal_cam = None
+        self._goal_target = None
+        # apply default view
+        if self._default_transform is not None:
+            self._apply_transform(self._default_transform)
 
     def _goal_cb(self, msg: PoseStamped, role: str):
         # Cancel follow if running
