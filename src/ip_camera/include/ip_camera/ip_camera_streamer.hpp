@@ -6,14 +6,9 @@
 #include <cv_bridge/cv_bridge.h>
 
 #include <opencv2/opencv.hpp>
-
-#include <xmlrpcpp/XmlRpcValue.h>
-
 #include <string>
 #include <vector>
 #include <thread>
-#include <mutex>
-#include <deque>
 #include <atomic>
 
 struct CameraConfig {
@@ -32,42 +27,31 @@ struct CameraConfig {
 class IPCameraStreamer {
 public:
     IPCameraStreamer();
+    IPCameraStreamer(ros::NodeHandle nh, ros::NodeHandle pnh);
     ~IPCameraStreamer();
 
     void run();
+    void stop();
 
 private:
-    // Threads
-    void cameraThread(const CameraConfig cfg, int index);
-    void publisherLoop();
-
-    // Helpers
-    std::vector<std::string> createStreamUrls(const CameraConfig& cfg) const;
+    void cameraThread();
     FILE* spawnFFmpeg(const std::string& url, int width, int height, const std::string& transport);
-
     void cleanup();
 
 private:
     ros::NodeHandle nh_;
     ros::NodeHandle pnh_{"~"};
 
-    std::vector<CameraConfig> camera_configs_;
-    std::vector<ros::Publisher> publishers_;
-
-    // Latest frames per camera_id
-    struct LatestFrame {
-        cv::Mat frame;
-        bool has{false};
-    };
-
-    std::mutex latest_mutex_;
-    std::vector<LatestFrame> latest_; // indexed by camera_id-1
-
-    std::atomic<bool> running_{true};
-    std::vector<std::thread> cam_threads_;
-    std::thread pub_thread_;
+    CameraConfig camera_config_;
+    std::string stream_url_;
+    ros::Publisher img_publisher_;
 
     double publish_rate_{60.0};
+
+    std::thread worker_;
+    std::atomic<bool> running_{false};
+
+    void init();
 };
 
-#endif // IP_CAMERA_STREAMER_HPP
+#endif

@@ -7,12 +7,14 @@ find_package(catkin REQUIRED COMPONENTS
   std_msgs
   sensor_msgs
   cv_bridge
+  nodelet
+  pluginlib
 )
 
 find_package(OpenCV REQUIRED)
 
 catkin_package(
-  CATKIN_DEPENDS roscpp rospy std_msgs sensor_msgs cv_bridge
+  CATKIN_DEPENDS roscpp rospy std_msgs sensor_msgs cv_bridge nodelet pluginlib
 )
 
 include_directories(
@@ -37,3 +39,21 @@ target_link_libraries(ip_camera_streamer_node
 )
 
 add_dependencies(ip_camera_streamer_node ${catkin_EXPORTED_TARGETS})
+
+# Nodelet library
+add_library(ip_camera_streamer_nodelet SHARED
+  src/ip_camera_streamer_nodelet.cpp
+  src/ip_camera_streamer.cpp
+)
+
+target_link_libraries(ip_camera_streamer_nodelet
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
+add_dependencies(ip_camera_streamer_nodelet ${catkin_EXPORTED_TARGETS})
+
+# Install nodelet plugin description
+install(FILES nodelet_plugins.xml
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)

@@ -1,0 +1,9 @@
+<library path="lib/libperception_nodelet">
+  <class name="perception/PerceptionNodelet"
+         type="perception_ns::PerceptionNodelet"
+         base_class_type="nodelet::Nodelet">
+    <description>
+      Perception nodelet wrapping the existing PerceptionNode.
+    </description>
+  </class>
+</library>
