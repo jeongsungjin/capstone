@@ -37,12 +37,12 @@ class CarlaCameraStream:
         self.port = rospy.get_param('~port', 2000)
         self.image_width = rospy.get_param('~image_width', 1280)
         self.image_height = rospy.get_param('~image_height', 720)
-        self.fov = rospy.get_param('~fov', 90.0)
+        self.fov = rospy.get_param('~fov', 88.8)
         
         # 카메라 위치 정의 (높이 7m)
         # 두 카메라 사이의 중심점을 계산하여 서로가 중심을 향하도록 yaw 설정
-        cam1_pos = {'x': -5.79, 'y': -22.81, 'z': 7.0}
-        cam2_pos = {'x': 5.79, 'y': -22.81, 'z': 7.0}
+        cam1_pos = {'x': -8.0, 'y': -23.00, 'z': 9.6}
+        cam2_pos = {'x': 8.0, 'y': -23.00, 'z': 7.0}
         
         # 중심점 계산
         center_x = (cam1_pos['x'] + cam2_pos['x']) / 2.0
@@ -51,8 +51,10 @@ class CarlaCameraStream:
         print(f"중심점: ({center_x:.2f}, {center_y:.2f})")
         
         # 각 카메라에서 중심점을 향하는 yaw 각도 계산 (degrees)
-        cam1_yaw = math.degrees(math.atan2(center_y - cam1_pos['y'], center_x - cam1_pos['x']))
-        cam2_yaw = math.degrees(math.atan2(center_y - cam2_pos['y'], center_x - cam2_pos['x']))
+        # cam1_yaw = math.degrees(math.atan2(center_y - cam1_pos['y'], center_x - cam1_pos['x']))
+        # cam2_yaw = math.degrees(math.atan2(center_y - cam2_pos['y'], center_x - cam2_pos['x']))
+        cam1_yaw = 45.0
+        cam2_yaw = -45.0
         
         self.camera_positions = [
             {'x': cam1_pos['x'], 'y': cam1_pos['y'], 'z': cam1_pos['z'], 'yaw': cam1_yaw, 'name': 'camera_1'},
@@ -120,7 +122,7 @@ class CarlaCameraStream:
                 # 카메라 위치 및 회전 설정 (pitch=-45도로 아래를 향하고, yaw로 방향 설정)
                 camera_transform = carla.Transform(
                     carla.Location(x=x, y=y, z=z),
-                    carla.Rotation(pitch=-20.0, yaw=yaw, roll=0.0)
+                    carla.Rotation(pitch=-45.0, yaw=yaw, roll=0.0)
                 )
                 
                 # 카메라 스폰
