@@ -14,7 +14,7 @@ PerceptionNode::PerceptionNode(
     const std::string& pkg_path, 
     const std::string& image_topic_name,
     const int batch_size
-): nh_("~"), perception_model_(pkg_path, batch_size), running_(true)
+): nh_("~"), perception_model_(pkg_path, batch_size)
 {
     // 현재는 2개 이미지 동기화만 지원합니다.
     if (batch_size != 2) {
@@ -38,18 +38,17 @@ PerceptionNode::PerceptionNode(
 
 void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2){
     cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
-    cv::Mat img1_mat = cv_ptr1->image;
+    std::shared_ptr<cv::Mat> img1_mat_ptr = std::make_shared<cv::Mat>(cv_ptr1->image);
 
     cv_bridge::CvImagePtr cv_ptr2 = cv_bridge::toCvCopy(img2, sensor_msgs::image_encodings::BGR8);
-    cv::Mat img2_mat = cv_ptr2->image;
+    std::shared_ptr<cv::Mat> img2_mat_ptr = std::make_shared<cv::Mat>(cv_ptr2->image);
 
-    std::vector<cv::Mat> img_batch;
-    img_batch.emplace_back(img1_mat);
-    img_batch.emplace_back(img2_mat);
+    std::vector<std::shared_ptr<cv::Mat>> img_batch;
+    img_batch.emplace_back(img1_mat_ptr);
+    img_batch.emplace_back(img2_mat_ptr);
 
     int ret = perception_model_.preprocess(img_batch);
     if (ret != 0) {
-        running_ = false;
         std::cerr << "Preprocessing failed!" << std::endl;
         return;
     }
@@ -60,21 +59,19 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const
     publishVizResult(img_batch);
 }
 
-void PerceptionNode::publishBEVInfo(){
-    // 호모 그래피를 어떻게 구할까?
-    xt::xarray<float> homography = {
-        {1.0, 0.0, 0.0},
-        {0.0, 1.0, 0.0},
-        {0.0, 0.0, 1.0}
-    };
-}
+// Removed unused publishBEVInfo
 
-void PerceptionNode::publishVizResult(const std::vector<cv::Mat>& imgs){
+void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs){
     const auto& detections = perception_model_.getDetections();
 
     for(int b = 0; b < detections.size(); b++){
+        cv_bridge::CvImage out_msg;
+        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+        imgs[b]->copyTo(out_msg.image);
+        out_msg.header.stamp = ros::Time::now();
+        
         for(int i = 0; i < detections[b].poly4s.size(); i++){
-            cv::polylines(imgs[b], 
+            cv::polylines(out_msg.image, 
                 std::vector<std::vector<cv::Point>>{
                     {
                         cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
@@ -89,67 +86,10 @@ void PerceptionNode::publishVizResult(const std::vector<cv::Mat>& imgs){
             );
         }
         
-        cv_bridge::CvImage out_msg;
-        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
-        out_msg.image = imgs[b];
-        out_msg.header.stamp = ros::Time::now();
         viz_result_pubs_[b].publish(out_msg.toImageMsg());
     }
 }
 
-void PerceptionNode::processing(){
-    while (running_){
-        MatPtr img_ptr = nullptr;
-        {
-            std::unique_lock<std::mutex> lock(m_buf_);
-            cv_buf_.wait(lock, [this] { return !buf_img_.empty() || !running_; });
-     
-            if (!running_) break;
-        
-            img_ptr = buf_img_.front();
-            buf_img_.pop();
-        }
+// Removed unused processing() path and thread-related code
 
-        if(img_ptr != nullptr) {
-            int ret = perception_model_.preprocess(*img_ptr);
-            if (ret != 0) {
-                running_ = false;
-                std::cerr << "Preprocessing failed!" << std::endl;
-                break;
-            }
-
-            perception_model_.inference();         
-            perception_model_.postprocess();
-
-            const auto& detections = perception_model_.getDetections();
-            if(!detections.empty() && !detections[0].poly4s.empty()){   
-                for(int i = 0; i < detections[0].poly4s.size(); i++){
-                    cv::polylines(*img_ptr, 
-                        std::vector<std::vector<cv::Point>>{
-                            {
-                                cv::Point(detections[0].poly4s[i](0, 0), detections[0].poly4s[i](0, 1)),
-                                cv::Point(detections[0].poly4s[i](2, 0), detections[0].poly4s[i](2, 1)),
-                                cv::Point(detections[0].poly4s[i](4, 0), detections[0].poly4s[i](4, 1)),
-                                cv::Point(detections[0].poly4s[i](6, 0), detections[0].poly4s[i](6, 1))
-                            }
-                        }, 
-                        true, 
-                        cv::Scalar(0, 255, 0), 
-                        2
-                    );
-                }
-            }
-                
-            cv::imshow("Perception Result", *img_ptr);
-            cv::waitKey(1);
-        }
-    }
-}
-
-PerceptionNode::~PerceptionNode(){
-    running_ = false;
-    cv_buf_.notify_all();
-    if (perception_thread_.joinable()){
-        perception_thread_.join();
-    }
-}
+PerceptionNode::~PerceptionNode(){}

@@ -1,0 +1,9 @@
+<library path="lib/libip_camera_streamer_nodelet">
+  <class name="ip_camera/StreamerNodelet"
+         type="ip_camera::IPCameraStreamerNodelet"
+         base_class_type="nodelet::Nodelet">
+    <description>
+      IP camera streamer nodelet using ffmpeg rawvideo pipe and cv_bridge.
+    </description>
+  </class>
+</library>

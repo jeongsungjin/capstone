@@ -1,7 +1,7 @@
 <launch>
   <!-- Adjustable args -->
   <arg name="publish_rate" default="60.0" />
-  <arg name="config" default="$(find ip_camera)/config/cameras.yaml" />
+  <arg name="config" default="$(find ip_camera)/config/ipcam_1.yaml" />
 
   <!-- IP Camera C++ node with params auto-loaded -->
   <node pkg="ip_camera" type="ip_camera_streamer_node" name="ip_camera_streamer_cpp" output="screen">

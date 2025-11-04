@@ -1,0 +1,11 @@
+ip: "192.168.0.20"
+port: 554
+username: "admin"
+password: "zjsxmfhf"
+topic_name: "/ip_cam/cam_1/image_raw"
+camera_id: 1
+frame_id: "camera_1_link"
+transport: "tcp"
+width: 1280
+height: 720
+publish_rate: 60.0
