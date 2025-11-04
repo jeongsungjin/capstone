@@ -1,5 +1,0 @@
-perception
-/home/ctrl/capstone/devel/.private/perception/share/perception/cmake/perceptionConfig-version.cmake /home/ctrl/capstone/devel/share/perception/cmake/perceptionConfig-version.cmake
-/home/ctrl/capstone/devel/.private/perception/share/perception/cmake/perceptionConfig.cmake /home/ctrl/capstone/devel/share/perception/cmake/perceptionConfig.cmake
-/home/ctrl/capstone/devel/.private/perception/lib/pkgconfig/perception.pc /home/ctrl/capstone/devel/lib/pkgconfig/perception.pc
-/home/ctrl/capstone/devel/.private/perception/lib/perception/perception /home/ctrl/capstone/devel/lib/perception/perception
