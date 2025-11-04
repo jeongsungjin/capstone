@@ -43,7 +43,7 @@ class CamPerspective:
         self.lock_rate_hz = float(rospy.get_param("~lock_rate_hz", 5.0))
 
         # Follow-view parameters
-        self.follow_duration_s = float(rospy.get_param("~follow_duration_s", 2.0))
+        self.follow_duration_s = float(rospy.get_param("~follow_duration_s", 4.0))
         self.follow_rate_hz = float(rospy.get_param("~follow_rate_hz", 20.0))
         self.follow_back_m = float(rospy.get_param("~follow_back_m", 10.0))
         self.follow_up_m = float(rospy.get_param("~follow_up_m", 8.0))
@@ -54,7 +54,7 @@ class CamPerspective:
 
         # Goal-view parameters
         self.goal_duration_s = float(rospy.get_param("~goal_duration_s", 2.0))
-        self.goal_height = float(rospy.get_param("~goal_height", 20.0))
+        self.goal_height = float(rospy.get_param("~goal_height", 5.0))
         self.goal_yaw_deg = float(rospy.get_param("~goal_yaw_deg", -90.0))
         self.goal_pitch_deg = float(rospy.get_param("~goal_pitch_deg", 0.0))
         self.goal_rate_hz = float(rospy.get_param("~goal_rate_hz", 30.0))
@@ -63,20 +63,29 @@ class CamPerspective:
         # Preset matching: map specific destination points to their own yaw
         self.goal_match_tolerance = float(rospy.get_param("~goal_match_tolerance", 3.0))
         self._goal_presets = [
-            {"name": "goal1", "x": -58.010, "y": -42.790, "yaw": float(rospy.get_param("~goal1_yaw_deg", -90.0))},
-            {"name": "goal2", "x":  58.000, "y": -41.500, "yaw": float(rospy.get_param("~goal2_yaw_deg", -90.0))},
+            {"name": "goal1", "x": -58.010, "y": -42.790, "yaw": float(rospy.get_param("~goal1_yaw_deg", 180.0))},
+            {"name": "goal2", "x":  58.000, "y": -41.500, "yaw": float(rospy.get_param("~goal2_yaw_deg", 0.0))},
             {"name": "goal3", "x": -45.810, "y":  -5.870, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
             {"name": "goal4", "x":  46.400, "y":  -5.890, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
             {"name": "goal5", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
         ]
         # Optional per-destination camera overrides (position + orientation)
+        # Defaults for per-destination camera overrides (so launch params are optional)
+        _override_defaults = {
+            1: {"use_cam": True, "cam_x": -33.210, "cam_y": -43.790, "cam_z": 20.0, "cam_yaw_deg": 180.0, "cam_pitch_deg": -30.0},
+            2: {"use_cam": True, "cam_x":  36.780, "cam_y": -43.670, "cam_z": 20.0, "cam_yaw_deg":   0.0, "cam_pitch_deg": -30.0},
+            3: {"use_cam": True, "cam_x": -44.700, "cam_y":   8.240, "cam_z": 20.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -40.0},
+            4: {"use_cam": True, "cam_x":  45.750, "cam_y":   7.520, "cam_z": 20.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
+            5: {"use_cam": True, "cam_x":   8.060, "cam_y": -15.820, "cam_z": 10.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -30.0},
+        }
         for idx, p in enumerate(self._goal_presets, start=1):
-            p["use_cam"] = bool(rospy.get_param(f"~goal{idx}_use_cam", False))
-            p["cam_x"] = float(rospy.get_param(f"~goal{idx}_cam_x", p["x"]))
-            p["cam_y"] = float(rospy.get_param(f"~goal{idx}_cam_y", p["y"]))
-            p["cam_z"] = float(rospy.get_param(f"~goal{idx}_cam_z", self.goal_height))
-            p["cam_yaw_deg"] = float(rospy.get_param(f"~goal{idx}_cam_yaw_deg", p["yaw"]))
-            p["cam_pitch_deg"] = float(rospy.get_param(f"~goal{idx}_cam_pitch_deg", self.goal_pitch_deg))
+            d = _override_defaults.get(idx, None)
+            p["use_cam"] = bool(rospy.get_param(f"~goal{idx}_use_cam", d["use_cam"] if d else False))
+            p["cam_x"] = float(rospy.get_param(f"~goal{idx}_cam_x", d["cam_x"] if d else p["x"]))
+            p["cam_y"] = float(rospy.get_param(f"~goal{idx}_cam_y", d["cam_y"] if d else p["y"]))
+            p["cam_z"] = float(rospy.get_param(f"~goal{idx}_cam_z", d["cam_z"] if d else self.goal_height))
+            p["cam_yaw_deg"] = float(rospy.get_param(f"~goal{idx}_cam_yaw_deg", d["cam_yaw_deg"] if d else p["yaw"]))
+            p["cam_pitch_deg"] = float(rospy.get_param(f"~goal{idx}_cam_pitch_deg", d["cam_pitch_deg"] if d else self.goal_pitch_deg))
 
         # Connect to CARLA
         self.client = carla.Client("localhost", 2000)
