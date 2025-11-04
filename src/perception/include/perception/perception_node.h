@@ -28,7 +28,7 @@ public:
 
 private:
     void imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2);
-    void publishVizResult(const std::vector<cv::Mat>& imgs);
+    void publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs);
 
 private:
     ros::NodeHandle nh_;

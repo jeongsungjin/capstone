@@ -64,7 +64,7 @@ public:
     Model(const std::string& pkg_path, const int batch_size);
     ~Model();
 
-    int preprocess(const std::vector<cv::Mat>& images);
+    int preprocess(const std::vector<std::shared_ptr<cv::Mat>>& images);
     void inference();
     void postprocess();
 

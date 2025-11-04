@@ -38,14 +38,14 @@ PerceptionNode::PerceptionNode(
 
 void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2){
     cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
-    cv::Mat img1_mat = cv_ptr1->image;
+    std::shared_ptr<cv::Mat> img1_mat_ptr = std::make_shared<cv::Mat>(cv_ptr1->image);
 
     cv_bridge::CvImagePtr cv_ptr2 = cv_bridge::toCvCopy(img2, sensor_msgs::image_encodings::BGR8);
-    cv::Mat img2_mat = cv_ptr2->image;
+    std::shared_ptr<cv::Mat> img2_mat_ptr = std::make_shared<cv::Mat>(cv_ptr2->image);
 
-    std::vector<cv::Mat> img_batch;
-    img_batch.emplace_back(img1_mat);
-    img_batch.emplace_back(img2_mat);
+    std::vector<std::shared_ptr<cv::Mat>> img_batch;
+    img_batch.emplace_back(img1_mat_ptr);
+    img_batch.emplace_back(img2_mat_ptr);
 
     int ret = perception_model_.preprocess(img_batch);
     if (ret != 0) {
@@ -61,12 +61,17 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const
 
 // Removed unused publishBEVInfo
 
-void PerceptionNode::publishVizResult(const std::vector<cv::Mat>& imgs){
+void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs){
     const auto& detections = perception_model_.getDetections();
 
     for(int b = 0; b < detections.size(); b++){
+        cv_bridge::CvImage out_msg;
+        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
+        imgs[b]->copyTo(out_msg.image);
+        out_msg.header.stamp = ros::Time::now();
+        
         for(int i = 0; i < detections[b].poly4s.size(); i++){
-            cv::polylines(imgs[b], 
+            cv::polylines(out_msg.image, 
                 std::vector<std::vector<cv::Point>>{
                     {
                         cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
@@ -81,10 +86,6 @@ void PerceptionNode::publishVizResult(const std::vector<cv::Mat>& imgs){
             );
         }
         
-        cv_bridge::CvImage out_msg;
-        out_msg.encoding = sensor_msgs::image_encodings::BGR8;
-        out_msg.image = imgs[b];
-        out_msg.header.stamp = ros::Time::now();
         viz_result_pubs_[b].publish(out_msg.toImageMsg());
     }
 }

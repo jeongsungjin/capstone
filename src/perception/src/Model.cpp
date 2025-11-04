@@ -55,7 +55,7 @@ Model::~Model(){
     cudaStreamDestroy(stream_);
 }
 
-int Model::preprocess(const std::vector<cv::Mat>& images){
+int Model::preprocess(const std::vector<std::shared_ptr<cv::Mat>>& images){
     Timer timer("preprocess");
 
     if (images.empty()) return -1;
@@ -71,15 +71,15 @@ int Model::preprocess(const std::vector<cv::Mat>& images){
     first_inference_ = false;
 
     // 입력 원본 크기는 첫 장 기준 기록 (시각화 스케일링 용)
-    input_width_ = images[0].cols;
-    input_height_ = images[0].rows;
+    input_width_ = images[0]->cols;
+    input_height_ = images[0]->rows;
 
     // 하나의 큰 GpuMat을 만들고, 각 이미지를 리사이즈 후 ROI에 복사
     cv::cuda::GpuMat d_stacked(H * effective_batch, W, CV_8UC3);
 
     for (int b = 0; b < effective_batch; ++b) {
         cv::cuda::GpuMat d_img, d_resized;
-        d_img.upload(images[b]);
+        d_img.upload(*images[b]);
         cv::cuda::resize(d_img, d_resized, cv::Size(W, H), 0, 0, cv::INTER_LINEAR, cv_stream_);
 
         cv::cuda::GpuMat roi = d_stacked.rowRange(b * H, (b + 1) * H).colRange(0, W);
