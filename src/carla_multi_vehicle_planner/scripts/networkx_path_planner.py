@@ -128,6 +128,11 @@ class NetworkXPathPlanner:
         if self.replan_cooldown_sec < 0.0:
             self.replan_cooldown_sec = 0.0
 
+        # Priority aging to mitigate deadlocks/starvation in scheduling
+        self.priority_aging_enable: bool = bool(rospy.get_param("~priority_aging_enable", True))
+        self.priority_no_progress_eps: float = float(rospy.get_param("~priority_no_progress_eps", 0.5))
+        self.priority_age_cap: int = int(rospy.get_param("~priority_age_cap", 20))
+
         # Connect to CARLA
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -178,6 +183,8 @@ class NetworkXPathPlanner:
             self._role_name(i): rospy.Time(0) for i in range(self.num_vehicles)
         }
         self.remaining_cache: Dict[str, float] = {}
+        self.prev_remaining_cache: Dict[str, float] = {}
+        self.priority_age: Dict[str, int] = {self._role_name(i): 0 for i in range(self.num_vehicles)}
         self._planning_lock = threading.RLock()
 
         # Publishers
@@ -245,6 +252,18 @@ class NetworkXPathPlanner:
                 if remaining is None:
                     continue
                 self.remaining_cache[role] = remaining
+                # Priority aging update: increase age if little/no progress, otherwise decay
+                if self.priority_aging_enable:
+                    prev = self.prev_remaining_cache.get(role)
+                    if prev is None:
+                        self.prev_remaining_cache[role] = remaining
+                    else:
+                        progress = prev - remaining
+                        if progress >= self.priority_no_progress_eps:
+                            self.priority_age[role] = max(0, int(self.priority_age.get(role, 0)) - 1)
+                        else:
+                            self.priority_age[role] = min(self.priority_age_cap, int(self.priority_age.get(role, 0)) + 1)
+                        self.prev_remaining_cache[role] = remaining
                 rospy.loginfo_throttle(2.0, f"{role}: remaining distance {remaining:.1f} m")
                 last_time = self.last_replan_time.get(role, rospy.Time(0))
                 if self.replan_pending.get(role, False):
@@ -1003,8 +1022,16 @@ class NetworkXPathPlanner:
                 best_index = min(best_index + 1, len(path_pts) - 1)
             return best_index
 
-        # Deterministic order for prioritization
-        for index in range(self.num_vehicles):
+        # Order indices by priority age (higher age first) to mitigate starvation
+        if self.priority_aging_enable:
+            indices = list(range(self.num_vehicles))
+            def _age_for(i: int) -> int:
+                return int(self.priority_age.get(self._role_name(i), 0))
+            indices.sort(key=lambda i: (-_age_for(i), i))
+        else:
+            indices = list(range(self.num_vehicles))
+
+        for index in indices:
             role = self._role_name(index)
             route_waypoints = self.vehicle_routes.get(role)
             if not route_waypoints or len(route_waypoints) < 2:

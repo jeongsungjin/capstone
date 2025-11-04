@@ -99,7 +99,11 @@ class MultiVehicleSpawner:
         self.odom_publishers = {}
         self.spawned_transforms = {}
 
+        self._autopilot_pending = []
+        self.autopilot_post_delay = float(rospy.get_param("~autopilot_enable_post_delay_sec", 0.8))
         self.spawn_vehicles()
+        if self.enable_autopilot and self._autopilot_pending:
+            rospy.Timer(rospy.Duration(self.autopilot_post_delay), self._enable_autopilot_for_pending, oneshot=True)
         rospy.on_shutdown(self.cleanup)
         rospy.Timer(rospy.Duration(0.1), self.publish_odometry)
 
@@ -140,14 +144,9 @@ class MultiVehicleSpawner:
                 rospy.logerr(f"Failed to spawn vehicle {role_name} after {self.spawn_retry_limit} attempts")
                 continue
 
-            if self.enable_autopilot and self.traffic_manager is not None:
-                try:
-                    vehicle.set_autopilot(True, self.traffic_manager.get_port())
-                    self.traffic_manager.vehicle_percentage_speed_difference(
-                        vehicle, max(0, 100 - self.target_speed * 2)
-                    )
-                except Exception as exc:
-                    rospy.logwarn("Traffic Manager config failed for %s: %s", role_name, exc)
+            if self.enable_autopilot:
+                # Defer enabling autopilot until after spawn loop finishes to avoid TM map-build races
+                self._autopilot_pending.append(vehicle)
 
             self.vehicles.append(vehicle)
             topic = f"/carla/{role_name}/odometry"
@@ -160,6 +159,30 @@ class MultiVehicleSpawner:
             rospy.loginfo("%s: spawned at map spawn index %s", role_name, spawn_idx_str)
             self.publish_initial_pose(chosen_transform)
             time.sleep(self.spawn_delay)
+
+    def _enable_autopilot_for_pending(self, _event):
+        if not self._autopilot_pending:
+            return
+        tm_port = None
+        if self.traffic_manager is not None:
+            try:
+                tm_port = self.traffic_manager.get_port()
+            except Exception as exc:
+                rospy.logwarn("Traffic Manager port read failed: %s", exc)
+        for veh in list(self._autopilot_pending):
+            try:
+                if tm_port is not None:
+                    veh.set_autopilot(True, tm_port)
+                    try:
+                        # Keep a conservative speed difference; CARLA expects percentage of limit
+                        self.traffic_manager.vehicle_percentage_speed_difference(veh, 30)
+                    except Exception as exc:
+                        rospy.logwarn("TM speed config failed: %s", exc)
+                else:
+                    veh.set_autopilot(True)
+            except Exception as exc:
+                rospy.logwarn("set_autopilot failed: %s", exc)
+        self._autopilot_pending.clear()
 
     def publish_odometry(self, _event):
         stamp = rospy.Time.now()

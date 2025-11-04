@@ -33,15 +33,34 @@ class MultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 3)
-        self.lookahead_distance = rospy.get_param("~lookahead_distance", 4.0)
-        self.wheelbase = rospy.get_param("~wheelbase", 2.7)
-        self.max_steer = rospy.get_param("~max_steer", 0.7)
-        self.target_speed = rospy.get_param("~target_speed", 6.0)
+        self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
+        self.wheelbase = rospy.get_param("~wheelbase", 2.8)
+        self.max_steer = rospy.get_param("~max_steer", 1.0)
+        self.target_speed = rospy.get_param("~target_speed", 3.0)
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
+
+        # Safety stop parameters (area-limited)
+        self.enable_safety_stop = bool(rospy.get_param("~enable_safety_stop", True))
+        self.safety_x_min = float(rospy.get_param("~safety_x_min", -13.0))
+        self.safety_x_max = float(rospy.get_param("~safety_x_max", 13.0))
+        self.safety_y_min = float(rospy.get_param("~safety_y_min", -40.0))
+        self.safety_y_max = float(rospy.get_param("~safety_y_max", 5.0))
+        self.safety_distance = float(rospy.get_param("~safety_distance", 18.0))
+        # Consider only vehicles within my front cone and approaching
+        self.safety_front_cone_deg = float(rospy.get_param("~safety_front_cone_deg", 100.0))
+        self.safety_require_closing = bool(rospy.get_param("~safety_require_closing", True))
+        # Deadlock escape tuning
+        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 3.0))
+        self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 1.0))
+        self.safety_deadlock_escape_duration_sec = float(rospy.get_param("~safety_deadlock_escape_duration_sec", 2.0))
+        # Opposite-lane ignore within intersection area
+        self.enable_opposite_lane_ignore = bool(rospy.get_param("~enable_opposite_lane_ignore", True))
+        self.opposite_lane_heading_thresh_deg = float(rospy.get_param("~opposite_lane_heading_thresh_deg", 100.0))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
         self.world = self.client.get_world()
+        self.carla_map = self.world.get_map()
 
         self.vehicles = {}
         self.states = {}
@@ -59,6 +78,9 @@ class MultiVehicleController:
                 "path_length": 0.0,
                 "progress_s": 0.0,
                 "remaining_distance": None,
+                # safety/deadlock fields
+                "safety_stop_since": None,
+                "deadlock_escape_until": None,
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
@@ -83,38 +105,113 @@ class MultiVehicleController:
             if role in self.states:
                 self.vehicles[role] = actor
 
+    def _role_index_from_name(self, role):
+        try:
+            return max(1, int(role.split("_")[-1]))
+        except Exception:
+            return 9999
+
+    def _in_safety_area(self, position):
+        if position is None:
+            return False
+        x = position.x
+        y = position.y
+        return (self.safety_x_min <= x <= self.safety_x_max) and (self.safety_y_min <= y <= self.safety_y_max)
+
+    def _normalize_angle(self, ang):
+        while ang > math.pi:
+            ang -= 2.0 * math.pi
+        while ang < -math.pi:
+            ang += 2.0 * math.pi
+        return ang
+
+    def _is_opposite_lane(self, my_position, other_position):
+        try:
+            if self.carla_map is None or my_position is None or other_position is None:
+                return False
+            my_loc = carla.Location(x=my_position.x, y=my_position.y, z=0.0)
+            ot_loc = carla.Location(x=other_position.x, y=other_position.y, z=0.0)
+            my_wp = self.carla_map.get_waypoint(my_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+            ot_wp = self.carla_map.get_waypoint(ot_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+            if my_wp is None or ot_wp is None:
+                return False
+            # Primary: same road and lane_id sign differs (typical opposite direction)
+            try:
+                if my_wp.road_id == ot_wp.road_id and (my_wp.lane_id * ot_wp.lane_id) < 0:
+                    return True
+            except Exception:
+                pass
+            # Fallback: opposite heading
+            my_yaw = math.radians(my_wp.transform.rotation.yaw)
+            ot_yaw = math.radians(ot_wp.transform.rotation.yaw)
+            diff = abs(self._normalize_angle(my_yaw - ot_yaw))
+            if diff >= math.radians(max(0.0, min(175.0, self.opposite_lane_heading_thresh_deg))):
+                return True
+        except Exception:
+            return False
+        return False
+
+    def _has_nearby_higher_priority(self, my_role, my_position, my_yaw):
+        my_index = self._role_index_from_name(my_role)
+        if my_position is None or my_index is None or my_yaw is None:
+            return False
+        forward_x = math.cos(my_yaw)
+        forward_y = math.sin(my_yaw)
+        cos_limit = math.cos(math.radians(max(0.0, min(175.0, self.safety_front_cone_deg)) / 2.0))
+        my_actor = self.vehicles.get(my_role)
+        my_vx = 0.0
+        my_vy = 0.0
+        if my_actor is not None:
+            v = my_actor.get_velocity()
+            my_vx, my_vy = v.x, v.y
+        for other_role, other_state in self.states.items():
+            if other_role == my_role:
+                continue
+            other_pos = other_state.get("position")
+            if other_pos is None:
+                continue
+            other_index = self._role_index_from_name(other_role)
+            # higher priority => lower index number
+            if other_index < my_index:
+                dx = (other_pos.x - my_position.x)
+                dy = (other_pos.y - my_position.y)
+                dist = math.hypot(dx, dy)
+                if dist > self.safety_distance:
+                    continue
+                # Within intersection area, optionally ignore opposite-lane vehicles
+                if self.enable_opposite_lane_ignore and self._in_safety_area(my_position):
+                    try:
+                        if self._is_opposite_lane(my_position, other_pos):
+                            continue
+                    except Exception:
+                        pass
+                # Check within front cone
+                if dist > 1e-3:
+                    dir_dot = (dx * forward_x + dy * forward_y) / dist
+                    if dir_dot < cos_limit:
+                        continue
+                # Optionally require that the other vehicle is closing in
+                if self.safety_require_closing:
+                    other_actor = self.vehicles.get(other_role)
+                    ovx = ovy = 0.0
+                    if other_actor is not None:
+                        ov = other_actor.get_velocity()
+                        ovx, ovy = ov.x, ov.y
+                    closing_rate = (dx * (ovx - my_vx) + dy * (ovy - my_vy)) / max(dist, 1e-3)
+                    if closing_rate >= 0.0:  # not approaching
+                        continue
+                return True
+        return False
+
     def _path_cb(self, msg, role):
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
         self.states[role]["path"] = points
-
-        # Precompute arc-length profile for the new path
+        self.states[role]["current_index"] = 0
         s_profile, total_len = self._compute_path_profile(points)
         self.states[role]["s_profile"] = s_profile
         self.states[role]["path_length"] = total_len
-
-        # Project current vehicle front point onto the new path to preserve progress
-        preserved_index = 0
-        preserved_progress_s = 0.0
-        try:
-            vehicle = self.vehicles.get(role)
-            front = self._front_point(role, self.states[role], vehicle)
-            if front is not None:
-                projection = self._project_progress(points, s_profile, front[0], front[1])
-                if projection is not None:
-                    s_now, idx = projection
-                    preserved_index = max(0, min(idx, len(points) - 1))
-                    preserved_progress_s = max(0.0, s_now)
-        except Exception:
-            preserved_index = 0
-            preserved_progress_s = 0.0
-
-        self.states[role]["current_index"] = preserved_index
-        self.states[role]["progress_s"] = preserved_progress_s
-        if total_len > 0.0:
-            self.states[role]["remaining_distance"] = max(0.0, total_len - preserved_progress_s)
-        else:
-            self.states[role]["remaining_distance"] = None
-
+        self.states[role]["progress_s"] = 0.0
+        self.states[role]["remaining_distance"] = total_len if total_len > 0.0 else None
         rospy.loginfo(f"{role}: received path with {len(points)} points")
 
     def _odom_cb(self, msg, role):
@@ -218,6 +315,35 @@ class MultiVehicleController:
             steer, speed = self._compute_control(state)
             if steer is None:
                 continue
+            # Area-limited safety stop for lower-priority vehicles near other vehicles
+            if self.enable_safety_stop:
+                position = state.get("position")
+                orientation = state.get("orientation")
+                my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
+                now_sec = float(rospy.Time.now().to_sec())
+                in_area = self._in_safety_area(position)
+                has_higher_front = self._has_nearby_higher_priority(role, position, my_yaw) if in_area else False
+                escape_until = state.get("deadlock_escape_until")
+                if escape_until is not None and now_sec < escape_until:
+                    # In escape window: allow creeping
+                    speed = min(speed, self.safety_deadlock_escape_speed)
+                elif in_area and has_higher_front:
+                    # Apply safety stop with deadlock timer
+                    since = state.get("safety_stop_since")
+                    if since is None:
+                        state["safety_stop_since"] = now_sec
+                        speed = 0.0
+                    else:
+                        if (now_sec - since) >= self.safety_deadlock_timeout_sec:
+                            # Start escape window and creep
+                            state["deadlock_escape_until"] = now_sec + self.safety_deadlock_escape_duration_sec
+                            speed = min(speed, self.safety_deadlock_escape_speed)
+                        else:
+                            speed = 0.0
+                else:
+                    # Reset timers if not actively safety stopping
+                    state["safety_stop_since"] = None
+                    # Do not reset escape_until so window can complete
             self._apply_carla_control(role, vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 
