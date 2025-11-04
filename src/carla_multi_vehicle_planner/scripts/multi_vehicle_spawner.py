@@ -65,13 +65,23 @@ class MultiVehicleSpawner:
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 3)
         self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.xycar")
-        self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
+        self.enable_autopilot = rospy.get_param("~enable_autopilot", True)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
-        self.target_speed = rospy.get_param("~target_speed", 3.0)
+        self.target_speed = rospy.get_param("~target_speed", 8.0)
         self.randomize_spawn = rospy.get_param("~randomize_spawn", True)
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
         self.reset_world_on_shutdown = bool(rospy.get_param("~reset_world_on_shutdown", False))
+        # Autopilot/TM options
+        self.autopilot_random_route = bool(rospy.get_param("~autopilot_random_route", True))
+        self.autopilot_route_len = int(rospy.get_param("~autopilot_route_len", 300))
+        self.autopilot_step_m = float(rospy.get_param("~autopilot_step_m", 2.0))
+        self.tm_global_min_headway = float(rospy.get_param("~tm_global_min_headway", 2.5))
+        self.tm_hybrid_physics = bool(rospy.get_param("~tm_hybrid_physics", True))
+        self.tm_auto_lane_change = bool(rospy.get_param("~tm_auto_lane_change", True))
+        self.tm_keep_right = bool(rospy.get_param("~tm_keep_right", False))
+        self.tm_ignore_lights_pct = int(rospy.get_param("~tm_ignore_lights_pct", 0))
+        self.tm_ignore_signs_pct = int(rospy.get_param("~tm_ignore_signs_pct", 0))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -96,8 +106,26 @@ class MultiVehicleSpawner:
         rospy.on_shutdown(self.cleanup)
         rospy.Timer(rospy.Duration(0.1), self.publish_odometry)
 
+    def _configure_tm_globals(self):
+        tm = self.traffic_manager
+        # Best-effort: guard for API availability across versions
+        try:
+            tm.set_synchronous_mode(False)
+        except Exception:
+            pass
+        try:
+            tm.set_hybrid_physics_mode(self.tm_hybrid_physics)
+        except Exception:
+            pass
+        try:
+            tm.set_global_distance_to_leading_vehicle(self.tm_global_min_headway)
+        except Exception:
+            pass
+
     def spawn_vehicles(self):
         blueprint_library = self.world.get_blueprint_library()
+        if self.enable_autopilot:
+            self._configure_tm_globals()
 
         # Per-vehicle model mapping
         model_map = [
@@ -157,7 +185,36 @@ class MultiVehicleSpawner:
 
             vehicle.set_autopilot(self.enable_autopilot, self.traffic_manager.get_port())
             if self.enable_autopilot:
-                self.traffic_manager.vehicle_percentage_speed_difference(vehicle, max(0, 100 - self.target_speed * 2))
+                # Speed: negative means faster, positive slower (percentage)
+                try:
+                    self.traffic_manager.vehicle_percentage_speed_difference(
+                        vehicle, max(0, 100 - self.target_speed * 2)
+                    )
+                except Exception:
+                    pass
+                # Per-vehicle TM preferences (best-effort, ignore if not supported)
+                try:
+                    self.traffic_manager.auto_lane_change(vehicle, self.tm_auto_lane_change)
+                except Exception:
+                    pass
+                try:
+                    self.traffic_manager.keep_right_rule_percentage(vehicle, 100 if self.tm_keep_right else 0)
+                except Exception:
+                    pass
+                try:
+                    self.traffic_manager.ignore_lights_percentage(vehicle, self.tm_ignore_lights_pct)
+                except Exception:
+                    pass
+                try:
+                    self.traffic_manager.ignore_signs_percentage(vehicle, self.tm_ignore_signs_pct)
+                except Exception:
+                    pass
+                # Optionally assign a forward random route so vehicles actually start cruising
+                if self.autopilot_random_route:
+                    try:
+                        self._assign_tm_forward_path(vehicle, chosen_transform.location if chosen_transform else transform.location)
+                    except Exception as exc:
+                        rospy.logwarn("%s: TM path assignment failed: %s", role_name, exc)
 
             self.vehicles.append(vehicle)
             topic = f"/carla/{role_name}/odometry"
@@ -172,6 +229,37 @@ class MultiVehicleSpawner:
             time.sleep(self.spawn_delay)
 
         # Spectator control moved to cam_perspective.py
+
+    def _assign_tm_forward_path(self, vehicle, start_location):
+        # Build a forward path along lane centerlines starting from nearest waypoint
+        start_wp = self.carla_map.get_waypoint(
+            start_location,
+            project_to_road=True,
+            lane_type=getattr(carla.LaneType, 'Driving', 1),
+        )
+        if start_wp is None:
+            return
+        route_wps = [start_wp]
+        rng = self._spawn_rng
+        current_wp = start_wp
+        for _ in range(max(1, self.autopilot_route_len)):
+            next_wps = current_wp.next(self.autopilot_step_m)
+            if not next_wps:
+                break
+            # Choose one if junction/split; prefer keeping lane
+            current_wp = rng.choice(next_wps)
+            route_wps.append(current_wp)
+        # Convert to locations for TM
+        path_locs = [wp.transform.location for wp in route_wps]
+        # Best-effort: set_path may be unavailable in some versions
+        if hasattr(self.traffic_manager, 'set_path'):
+            self.traffic_manager.set_path(vehicle, path_locs)
+        elif hasattr(self.traffic_manager, 'set_route'):
+            # Some versions expect waypoints instead of locations
+            try:
+                self.traffic_manager.set_route(vehicle, route_wps)
+            except Exception:
+                pass
 
     def publish_odometry(self, _event):
         stamp = rospy.Time.now()
