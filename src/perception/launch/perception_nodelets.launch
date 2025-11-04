@@ -1,0 +1,33 @@
+<launch>
+  <!-- Manager and common args -->
+  <arg name="manager_name" default="capstone_manager" />
+  <arg name="ipcam_1_config" default="$(find ip_camera)/config/ipcam_1.yaml" />
+  <arg name="ipcam_2_config" default="$(find ip_camera)/config/ipcam_3.yaml" />
+  <arg name="publish_rate" default="60.0" />
+
+  <!-- Perception params -->
+  <arg name="image_topic_prefix" default="/ip_cam/cam_" />
+  <arg name="batch_size" default="2" />
+
+  <!-- Start a nodelet manager (single process for zero-copy) -->
+  <node pkg="nodelet" type="nodelet" name="$(arg manager_name)" args="manager" output="screen" />
+
+  <!-- Load IP camera streamer nodelet (publishes /camera/camera_{1,2}/image_raw) -->
+  <node pkg="nodelet" type="nodelet" name="ipcam_1_streamer" args="load ip_camera/StreamerNodelet $(arg manager_name)" output="screen">
+    <param name="publish_rate" value="$(arg publish_rate)" />
+    <rosparam file="$(arg ipcam_1_config)" command="load" />
+  </node>
+
+  <!-- Load IP camera streamer nodelet (publishes /camera/camera_{1,2}/image_raw) -->
+  <node pkg="nodelet" type="nodelet" name="ipcam_2_streamer" args="load ip_camera/StreamerNodelet $(arg manager_name)" output="screen">
+    <param name="publish_rate" value="$(arg publish_rate)" />
+    <rosparam file="$(arg ipcam_2_config)" command="load" />
+  </node>
+
+  <!-- Load perception nodelet (subscribes to <prefix>{1,2}/image_raw, runs inference, publishes viz) -->
+  <node pkg="nodelet" type="nodelet" name="perception" args="load perception/PerceptionNodelet $(arg manager_name)" output="screen">
+    <param name="image_topic_prefix" value="$(arg image_topic_prefix)" />
+    <param name="batch_size" value="$(arg batch_size)" />
+  </node>
+
+</launch>

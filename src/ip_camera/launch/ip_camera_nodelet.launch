@@ -1,0 +1,14 @@
+<launch>
+  <arg name="publish_rate" default="60.0" />
+  <arg name="config" default="$(find ip_camera)/config/cameras.yaml" />
+
+  <!-- Start nodelet manager -->
+  <node pkg="nodelet" type="nodelet" name="ip_camera_manager" args="manager" output="screen" />
+
+  <!-- Load streamer nodelet -->
+  <node pkg="nodelet" type="nodelet" name="ip_camera_streamer" args="load ip_camera/StreamerNodelet ip_camera_manager" output="screen">
+    <param name="publish_rate" value="$(arg publish_rate)" />
+    <rosparam file="$(arg config)" command="load" />
+  </node>
+
+</launch>
