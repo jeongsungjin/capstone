@@ -57,6 +57,13 @@ class MultiVehicleController:
         self.enable_opposite_lane_ignore = bool(rospy.get_param("~enable_opposite_lane_ignore", True))
         self.opposite_lane_heading_thresh_deg = float(rospy.get_param("~opposite_lane_heading_thresh_deg", 100.0))
 
+        # Intersection dynamic priority (entry-order based)
+        self.intersection_dynamic_priority = bool(rospy.get_param("~intersection_dynamic_priority", True))
+        self.intersection_x_min = float(rospy.get_param("~intersection_x_min", self.safety_x_min))
+        self.intersection_x_max = float(rospy.get_param("~intersection_x_max", self.safety_x_max))
+        self.intersection_y_min = float(rospy.get_param("~intersection_y_min", self.safety_y_min))
+        self.intersection_y_max = float(rospy.get_param("~intersection_y_max", self.safety_y_max))
+
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
         self.world = self.client.get_world()
@@ -66,6 +73,9 @@ class MultiVehicleController:
         self.states = {}
         self.control_publishers = {}
         self.pose_publishers = {}
+        # Track per-role intersection entry order
+        self.intersection_order = {}
+        self._intersection_counter = 0
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -118,6 +128,13 @@ class MultiVehicleController:
         y = position.y
         return (self.safety_x_min <= x <= self.safety_x_max) and (self.safety_y_min <= y <= self.safety_y_max)
 
+    def _in_intersection_area(self, position):
+        if position is None:
+            return False
+        x = position.x
+        y = position.y
+        return (self.intersection_x_min <= x <= self.intersection_x_max) and (self.intersection_y_min <= y <= self.intersection_y_max)
+
     def _normalize_angle(self, ang):
         while ang > math.pi:
             ang -= 2.0 * math.pi
@@ -164,43 +181,57 @@ class MultiVehicleController:
         if my_actor is not None:
             v = my_actor.get_velocity()
             my_vx, my_vy = v.x, v.y
+        in_intersection = self._in_intersection_area(my_position)
+        my_order = self.intersection_order.get(my_role)
         for other_role, other_state in self.states.items():
             if other_role == my_role:
                 continue
             other_pos = other_state.get("position")
             if other_pos is None:
                 continue
-            other_index = self._role_index_from_name(other_role)
-            # higher priority => lower index number
-            if other_index < my_index:
-                dx = (other_pos.x - my_position.x)
-                dy = (other_pos.y - my_position.y)
-                dist = math.hypot(dx, dy)
-                if dist > self.safety_distance:
+            # Decide priority basis
+            higher = False
+            if self.intersection_dynamic_priority and in_intersection and self._in_intersection_area(other_pos):
+                other_order = self.intersection_order.get(other_role)
+                if other_order is not None and my_order is not None:
+                    higher = other_order < my_order
+                elif other_order is not None and my_order is None:
+                    higher = True
+                else:
+                    other_index = self._role_index_from_name(other_role)
+                    higher = other_index < my_index
+            else:
+                other_index = self._role_index_from_name(other_role)
+                higher = other_index < my_index
+
+            if not higher:
+                continue
+
+            dx = (other_pos.x - my_position.x)
+            dy = (other_pos.y - my_position.y)
+            dist = math.hypot(dx, dy)
+            if dist > self.safety_distance:
+                continue
+            if self.enable_opposite_lane_ignore and self._in_safety_area(my_position):
+                try:
+                    if self._is_opposite_lane(my_position, other_pos):
+                        continue
+                except Exception:
+                    pass
+            if dist > 1e-3:
+                dir_dot = (dx * forward_x + dy * forward_y) / dist
+                if dir_dot < cos_limit:
                     continue
-                # Within intersection area, optionally ignore opposite-lane vehicles
-                if self.enable_opposite_lane_ignore and self._in_safety_area(my_position):
-                    try:
-                        if self._is_opposite_lane(my_position, other_pos):
-                            continue
-                    except Exception:
-                        pass
-                # Check within front cone
-                if dist > 1e-3:
-                    dir_dot = (dx * forward_x + dy * forward_y) / dist
-                    if dir_dot < cos_limit:
-                        continue
-                # Optionally require that the other vehicle is closing in
-                if self.safety_require_closing:
-                    other_actor = self.vehicles.get(other_role)
-                    ovx = ovy = 0.0
-                    if other_actor is not None:
-                        ov = other_actor.get_velocity()
-                        ovx, ovy = ov.x, ov.y
-                    closing_rate = (dx * (ovx - my_vx) + dy * (ovy - my_vy)) / max(dist, 1e-3)
-                    if closing_rate >= 0.0:  # not approaching
-                        continue
-                return True
+            if self.safety_require_closing:
+                other_actor = self.vehicles.get(other_role)
+                ovx = ovy = 0.0
+                if other_actor is not None:
+                    ov = other_actor.get_velocity()
+                    ovx, ovy = ov.x, ov.y
+                closing_rate = (dx * (ovx - my_vx) + dy * (ovy - my_vy)) / max(dist, 1e-3)
+                if closing_rate >= 0.0:
+                    continue
+            return True
         return False
 
     def _path_cb(self, msg, role):
@@ -322,6 +353,15 @@ class MultiVehicleController:
                 my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
                 now_sec = float(rospy.Time.now().to_sec())
                 in_area = self._in_safety_area(position)
+                # dynamic priority entry tracking inside intersection area
+                if self.intersection_dynamic_priority:
+                    if self._in_intersection_area(position):
+                        if role not in self.intersection_order:
+                            self._intersection_counter += 1
+                            self.intersection_order[role] = self._intersection_counter
+                    else:
+                        if role in self.intersection_order:
+                            self.intersection_order.pop(role, None)
                 has_higher_front = self._has_nearby_higher_priority(role, position, my_yaw) if in_area else False
                 escape_until = state.get("deadlock_escape_until")
                 if escape_until is not None and now_sec < escape_until:

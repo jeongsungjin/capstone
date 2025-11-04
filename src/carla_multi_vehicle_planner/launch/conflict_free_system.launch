@@ -1,0 +1,78 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="enable_rviz" default="true" />
+  <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
+
+  <!-- 1) Spawner (no autopilot) -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="enable_autopilot" value="false" />
+    <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
+    <param name="target_speed" value="10.0" />
+    <param name="spawn_delay" value="0.8" />
+  </node>
+
+  <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
+    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="global_route_resolution" value="1.0" />
+    <param name="path_sampling" value="0.3" />
+    <param name="min_destination_distance" value="30.0" />
+    <param name="max_destination_distance" value="140.0" />
+    <param name="destination_retry_limit" value="80" />
+    <param name="start_k_candidates" value="40" />
+    <param name="start_search_radius" value="5.0" />
+    <param name="start_search_radius_max" value="15.0" />
+    <param name="start_heading_deg" value="30.0" />
+    <param name="start_join_max_gap_m" value="6.0" />
+    <param name="conflict_horizon_m" value="60.0" />
+    <param name="conflict_key_resolution" value="1.0" />
+    <!-- Replanning only when close to destination -->
+    <param name="replan_remaining_m" value="50.0" />
+    <param name="replan_interval" value="1.0" />
+  </node>
+
+  <!-- 2.5) Occupancy grid for road geometry (RViz Map display on /map) -->
+  <node pkg="carla_multi_vehicle_planner" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
+    <param name="resolution" value="0.25" />
+    <param name="update_rate" value="1.0" />
+  </node>
+
+  <!-- 3) Relay global_path_* -> planned_path_* for controller compatibility -->
+  <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+  </node>
+
+  <!-- 3.5) BEV / Marker visualizer: vehicle cubes + colored path markers on map frame -->
+  <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
+    <param name="max_vehicle_count" value="$(arg num_vehicles)" />
+    <param name="update_rate" value="2.0" />
+  </node>
+
+  <!-- 4) Controller -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="lookahead_distance" value="4.0" />
+    <param name="target_speed" value="2.78" />
+    <!-- Safety stop defaults; tune as needed -->
+    <param name="enable_safety_stop" value="true" />
+    <param name="safety_x_min" value="-13.0" />
+    <param name="safety_x_max" value="13.0" />
+    <param name="safety_y_min" value="-40.0" />
+    <param name="safety_y_max" value="5.0" />
+    <param name="safety_distance" value="15.0" />
+    <param name="safety_front_cone_deg" value="90.0" />
+    <param name="safety_require_closing" value="true" />
+    <param name="enable_opposite_lane_ignore" value="true" />
+  </node>
+
+  <!-- Optional RViz -->
+  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)"
+        output="screen"
+        required="false" />
+
+</launch>
+
+

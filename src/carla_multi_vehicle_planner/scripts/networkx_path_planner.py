@@ -83,12 +83,18 @@ class NetworkXPathPlanner:
         )
         self.start_k_candidates = int(rospy.get_param("~start_k_candidates", 10))
         self.start_offset_m = float(rospy.get_param("~start_offset_m", 2.0))
+        # Guard: avoid creating a long off-lane segment by prepending current pose
+        self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 15.0))
         if self.start_k_candidates <= 0:
             self.start_k_candidates = 1
         if self.start_search_radius <= 0.0:
             self.start_search_radius = 5.0
         if self.start_search_radius_max < self.start_search_radius:
             self.start_search_radius_max = self.start_search_radius
+        # Initial heading compatibility gating
+        self.heading_compat_deg = float(rospy.get_param("~heading_compat_deg", 45.0))
+        self.heading_compat_dist_m = float(rospy.get_param("~heading_compat_dist_m", 8.0))
+
         # Time-aware scheduling (optional)
         self.enable_time_aware_planning: bool = bool(
             rospy.get_param("~enable_time_aware_planning", True)
@@ -410,6 +416,22 @@ class NetworkXPathPlanner:
         # Build CARLA route for scheduling
         dest_loc = self.spawn_points[dest_index].location
         route = self.route_planner.trace_route(start_waypoint.transform.location, dest_loc)
+        # Heading compatibility gating: avoid adopting path unfollowable from current yaw
+        if not self._route_heading_compatible(route, yaw_rad):
+            # retry a few times before giving up
+            for _ in range(6):
+                d2, rp2 = self._sample_destination_route(start_waypoint)
+                if d2 is None or not rp2:
+                    continue
+                dl2 = self.spawn_points[d2].location
+                r2 = self.route_planner.trace_route(start_waypoint.transform.location, dl2)
+                if r2 and self._route_heading_compatible(r2, yaw_rad):
+                    dest_index, route_points, route = d2, rp2, r2
+                    break
+            else:
+                self._handle_plan_failure(role, f"{role}: heading-incompatible route candidates; keeping current")
+                self.replan_pending[role] = False
+                return
         goal_signature = ("spawn", (float(dest_index),))
         self._commit_path(
             role,
@@ -496,6 +518,9 @@ class NetworkXPathPlanner:
         start_loc = start_waypoint.transform.location
         goal_loc = goal_waypoint.transform.location
         route = self.route_planner.trace_route(start_loc, goal_loc)
+        if not self._route_heading_compatible(route, yaw_rad):
+            self._handle_plan_failure(role, f"{role}: override route heading-incompatible; abort override")
+            return
         if not route or len(route) < 2:
             self._handle_plan_failure(role, f"{role}: failed to trace override route")
             return
@@ -1237,7 +1262,11 @@ class NetworkXPathPlanner:
     ) -> List[Tuple[float, float]]:
         if not path_points:
             return []
-        if self._distance(current_xy, path_points[0]) < 0.1:
+        d0 = self._distance(current_xy, path_points[0])
+        # If the gap is too large, do not prepend current pose to avoid long out-of-lane segment
+        if d0 > max(0.0, self.start_join_max_gap_m):
+            return path_points
+        if d0 < 0.1:
             path_points[0] = current_xy
             return path_points
         return [current_xy] + path_points
@@ -1303,6 +1332,30 @@ class NetworkXPathPlanner:
                 points.append(current)
             last_point = current
         return points
+
+    def _route_heading_compatible(self, route: List[Tuple], yaw_rad: float) -> bool:
+        if not route or len(route) < 2:
+            return False
+        max_deg = max(0.0, min(180.0, float(self.heading_compat_deg)))
+        thresh = math.radians(max_deg)
+        acc = 0.0
+        prev_wp = None
+        for wp, _ in route:
+            if prev_wp is not None:
+                a = prev_wp.transform.location
+                b = wp.transform.location
+                dx = b.x - a.x
+                dy = b.y - a.y
+                seg_len = math.hypot(dx, dy)
+                if seg_len > 1e-3:
+                    heading = math.atan2(dy, dx)
+                    if abs(self._normalize_angle(heading - yaw_rad)) > thresh:
+                        return False
+                    acc += seg_len
+                    if acc >= max(0.5, float(self.heading_compat_dist_m)):
+                        break
+            prev_wp = wp
+        return True
 
     @staticmethod
     def _route_length(route: List[Tuple]) -> float:
