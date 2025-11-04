@@ -48,4 +48,61 @@
     <param name="max_vehicle_count" value="6" />
     <param name="update_rate" value="2.0" />
   </node>
+
+  <!-- Spectator camera manager (follows selection and goals, then reverts to BEV) -->
+  <node pkg="carla_multi_vehicle_planner" type="cam_perspective.py" name="cam_perspective" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="spectator_auto_height" value="false" />
+    <param name="spectator_height" value="65.0" />
+    <param name="spectator_yaw_deg" value="-90.0" />
+    <param name="spectator_pitch_deg" value="-50.0" />
+    <param name="spectator_offset_x" value="-16.0" />
+    <param name="spectator_offset_y" value="35.0" />
+    <param name="lock_rate_hz" value="5.0" />
+    <param name="follow_duration_s" value="2.0" />
+    <param name="follow_back_m" value="10.0" />
+    <param name="follow_up_m" value="8.0" />
+    <param name="follow_right_m" value="-4.0" />
+    <param name="goal_duration_s" value="2.0" />
+    <param name="goal_height" value="5.0" />
+    <param name="goal_yaw_deg" value="-90.0" />
+    <param name="goal_pitch_deg" value="-0.0" />
+    <param name="goal_match_tolerance" value="3.0" />
+    <param name="goal1_yaw_deg" value="180.0" />
+    <param name="goal2_yaw_deg" value="0.0" />
+    <param name="goal3_yaw_deg" value="-90.0" />
+    <param name="goal4_yaw_deg" value="-90.0" />
+    <param name="goal5_yaw_deg" value="-90.0" />
+    <!-- Optional per-destination camera overrides (enable and set coordinates/angles) -->
+    <param name="goal1_use_cam" value="True" />
+    <param name="goal1_cam_x" value="-33.210" />
+    <param name="goal1_cam_y" value="-43.790" />
+    <param name="goal1_cam_z" value="20.0" />
+    <param name="goal1_cam_yaw_deg" value="180.0" />
+    <param name="goal1_cam_pitch_deg" value="-30.0" />
+    <param name="goal2_use_cam" value="True" />
+    <param name="goal2_cam_x" value="36.780" />
+    <param name="goal2_cam_y" value="-43.670" />
+    <param name="goal2_cam_z" value="20.0" />
+    <param name="goal2_cam_yaw_deg" value="0.0" />
+    <param name="goal2_cam_pitch_deg" value="-30.0" />
+    <param name="goal3_use_cam" value="True" />
+    <param name="goal3_cam_x" value="-44.70" />
+    <param name="goal3_cam_y" value="8.24" />
+    <param name="goal3_cam_z" value="20.0" />
+    <param name="goal3_cam_yaw_deg" value="-90.0" />
+    <param name="goal3_cam_pitch_deg" value="-40.0" />
+    <param name="goal4_use_cam" value="True" />
+    <param name="goal4_cam_x" value="45.750" />
+    <param name="goal4_cam_y" value="7.520" />
+    <param name="goal4_cam_z" value="20.0" />
+    <param name="goal4_cam_yaw_deg" value="-90.0" />
+    <param name="goal4_cam_pitch_deg" value="-50.0" />
+    <param name="goal5_use_cam" value="True" />
+    <param name="goal5_cam_x" value="8.06" />
+    <param name="goal5_cam_y" value="-15.820" />
+    <param name="goal5_cam_z" value="10.0" />
+    <param name="goal5_cam_yaw_deg" value="-90.0" />
+    <param name="goal5_cam_pitch_deg" value="-30.0" />
+  </node>
 </launch>

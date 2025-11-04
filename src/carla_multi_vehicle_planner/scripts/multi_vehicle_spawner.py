@@ -91,9 +91,6 @@ class MultiVehicleSpawner:
         self.vehicles = []
         self.odom_publishers = {}
         self.spawned_transforms = {}
-        # Spectator lock to keep BEV view fixed against mouse/touch moves
-        self._spectator_target = None  # (x, y, z, yaw_deg)
-        self._spectator_lock_timer = None
 
         self.spawn_vehicles()
         rospy.on_shutdown(self.cleanup)
@@ -174,72 +171,7 @@ class MultiVehicleSpawner:
             self.publish_initial_pose(chosen_transform)
             time.sleep(self.spawn_delay)
 
-        # Set spectator to a top-down BEV view over the map center, with optional yaw/auto-height
-        try:
-            if self.spawn_points:
-                xs = [sp.location.x for sp in self.spawn_points]
-                ys = [sp.location.y for sp in self.spawn_points]
-                cx = sum(xs) / float(len(xs))
-                cy = sum(ys) / float(len(ys))
-                min_x, max_x = min(xs), max(xs)
-                min_y, max_y = min(ys), max(ys)
-                span_x = max_x - min_x
-                span_y = max_y - min_y
-
-                auto_height = bool(rospy.get_param("~spectator_auto_height", False))
-                min_height = float(rospy.get_param("~spectator_min_height", 65.0))
-                height = float(rospy.get_param("~spectator_height", 65.0))
-                if auto_height:
-                    # Heuristic: use max span to choose a height that likely fits the whole map
-                    height = max(min_height, max(span_x, span_y) * 1.1)
-
-                yaw_deg = float(rospy.get_param("~spectator_yaw_deg", -90.0))
-                pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -50.0))
-                # Optional offsets: map-axis offsets (meters)
-                offset_x = float(rospy.get_param("~spectator_offset_x", -16.0))
-                offset_y = float(rospy.get_param("~spectator_offset_y", 35.0))
-                # Optional view-relative offsets (meters): right/up on screen after yaw applied
-                view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
-                view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
-
-                # Map-axis center first
-                target_x = cx + offset_x
-                target_y = cy + offset_y
-
-                # Apply view-relative offset by rotating right/up vectors by yaw
-                if view_right_m != 0.0 or view_up_m != 0.0:
-                    import math
-                    yaw_rad = math.radians(yaw_deg)
-                    # Image right vector (world) for given yaw
-                    rx = math.cos(yaw_rad)
-                    ry = math.sin(yaw_rad)
-                    # Image up vector (world)
-                    ux = -math.sin(yaw_rad)
-                    uy = math.cos(yaw_rad)
-                    target_x += view_right_m * rx + view_up_m * ux
-                    target_y += view_right_m * ry + view_up_m * uy
-                spectator = self.world.get_spectator()
-                bev_loc = carla.Location(x=target_x, y=target_y, z=height)
-                bev_rot = carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
-                spectator.set_transform(carla.Transform(bev_loc, bev_rot))
-                # Lock spectator by periodically re-applying the BEV transform
-                self._spectator_target = (target_x, target_y, height, yaw_deg, pitch_deg)
-                if self._spectator_lock_timer is None:
-                    # 5 Hz refresh is usually enough to cancel user camera moves
-                    self._spectator_lock_timer = rospy.Timer(
-                        rospy.Duration(0.2), self._spectator_lock_cb
-                    )
-                rospy.loginfo(
-                    "multi_vehicle_spawner: spectator BEV at(%.1f, %.1f, %.1f) yaw=%.1f span=(%.1f, %.1f)",
-                    target_x,
-                    target_y,
-                    height,
-                    yaw_deg,
-                    span_x,
-                    span_y,
-                )
-        except Exception as exc:
-            rospy.logwarn("multi_vehicle_spawner: failed to set spectator BEV view: %s", exc)
+        # Spectator control moved to cam_perspective.py
 
     def publish_odometry(self, _event):
         stamp = rospy.Time.now()
@@ -281,12 +213,7 @@ class MultiVehicleSpawner:
             if vehicle is not None and vehicle.is_alive:
                 vehicle.destroy()
         self.vehicles.clear()
-        if self._spectator_lock_timer is not None:
-            try:
-                self._spectator_lock_timer.shutdown()
-            except Exception:
-                pass
-            self._spectator_lock_timer = None
+        # Spectator control moved to cam_perspective.py
         # Optionally reset the CARLA world when this node is shutting down,
         # so that actor IDs start from 1 on the next run without impacting startup.
         if self.reset_world_on_shutdown:
@@ -321,18 +248,7 @@ class MultiVehicleSpawner:
         )
         self.initial_pose_pub.publish(pose_msg)
 
-    def _spectator_lock_cb(self, _event):
-        target = self._spectator_target
-        if target is None:
-            return
-        try:
-            x, y, z, yaw_deg, pitch_deg = target
-            spectator = self.world.get_spectator()
-            bev_loc = carla.Location(x=x, y=y, z=z)
-            bev_rot = carla.Rotation(pitch=pitch_deg, yaw=yaw_deg, roll=0.0)
-            spectator.set_transform(carla.Transform(bev_loc, bev_rot))
-        except Exception:
-            pass
+    # Spectator lock callback removed (handled by cam_perspective.py)
 
 
 if __name__ == "__main__":

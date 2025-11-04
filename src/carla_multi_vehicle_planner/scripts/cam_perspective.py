@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+
+import math
+import sys
+import time
+
+import rospy
+from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
+
+try:
+    # Ensure CARLA API on path via helper
+    from setup_carla_path import CARLA_BUILD_PATH  # noqa: F401 (side effect: sys.path insert)
+except Exception:
+    pass
+
+try:
+    import carla
+except ImportError as exc:
+    rospy.logfatal(f"CARLA import failed in cam_perspective: {exc}")
+    carla = None
+
+
+class CamPerspective:
+    def __init__(self):
+        rospy.init_node("cam_perspective", anonymous=False)
+        if carla is None:
+            raise RuntimeError("CARLA Python API unavailable")
+
+        # Parameters
+        self.num_vehicles = int(rospy.get_param("~num_vehicles", 4))
+
+        # Default BEV view parameters (matching prior behavior)
+        self.auto_height = bool(rospy.get_param("~spectator_auto_height", False))
+        self.min_height = float(rospy.get_param("~spectator_min_height", 65.0))
+        self.base_height = float(rospy.get_param("~spectator_height", 65.0))
+        self.bev_yaw_deg = float(rospy.get_param("~spectator_yaw_deg", -90.0))
+        self.bev_pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -50.0))
+        self.offset_x = float(rospy.get_param("~spectator_offset_x", -16.0))
+        self.offset_y = float(rospy.get_param("~spectator_offset_y", 35.0))
+        self.view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
+        self.view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
+        self.lock_rate_hz = float(rospy.get_param("~lock_rate_hz", 5.0))
+
+        # Follow-view parameters
+        self.follow_duration_s = float(rospy.get_param("~follow_duration_s", 2.0))
+        self.follow_rate_hz = float(rospy.get_param("~follow_rate_hz", 20.0))
+        self.follow_back_m = float(rospy.get_param("~follow_back_m", 10.0))
+        self.follow_up_m = float(rospy.get_param("~follow_up_m", 8.0))
+        self.follow_right_m = float(rospy.get_param("~follow_right_m", -4.0))
+
+        # Goal-view parameters
+        self.goal_duration_s = float(rospy.get_param("~goal_duration_s", 2.0))
+        self.goal_height = float(rospy.get_param("~goal_height", 20.0))
+        self.goal_yaw_deg = float(rospy.get_param("~goal_yaw_deg", -90.0))
+        self.goal_pitch_deg = float(rospy.get_param("~goal_pitch_deg", 0.0))
+        # Preset matching: map specific destination points to their own yaw
+        self.goal_match_tolerance = float(rospy.get_param("~goal_match_tolerance", 3.0))
+        self._goal_presets = [
+            {"name": "goal1", "x": -58.010, "y": -42.790, "yaw": float(rospy.get_param("~goal1_yaw_deg", -90.0))},
+            {"name": "goal2", "x":  58.000, "y": -41.500, "yaw": float(rospy.get_param("~goal2_yaw_deg", -90.0))},
+            {"name": "goal3", "x": -45.810, "y":  -5.870, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
+            {"name": "goal4", "x":  46.400, "y":  -5.890, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
+            {"name": "goal5", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
+        ]
+        # Optional per-destination camera overrides (position + orientation)
+        for idx, p in enumerate(self._goal_presets, start=1):
+            p["use_cam"] = bool(rospy.get_param(f"~goal{idx}_use_cam", False))
+            p["cam_x"] = float(rospy.get_param(f"~goal{idx}_cam_x", p["x"]))
+            p["cam_y"] = float(rospy.get_param(f"~goal{idx}_cam_y", p["y"]))
+            p["cam_z"] = float(rospy.get_param(f"~goal{idx}_cam_z", self.goal_height))
+            p["cam_yaw_deg"] = float(rospy.get_param(f"~goal{idx}_cam_yaw_deg", p["yaw"]))
+            p["cam_pitch_deg"] = float(rospy.get_param(f"~goal{idx}_cam_pitch_deg", self.goal_pitch_deg))
+
+        # Connect to CARLA
+        self.client = carla.Client("localhost", 2000)
+        self.client.set_timeout(10.0)
+        self.world = self.client.get_world()
+        self.carla_map = self.world.get_map()
+        self.spectator = self.world.get_spectator()
+
+        # State
+        self.mode = "default"  # default|follow|goal
+        self._default_transform = None
+        self._lock_timer = None
+        self._follow_timer = None
+        self._goal_timer = None
+        self._follow_end_time = 0.0
+        self._follow_role = None
+
+        # Compute and apply default BEV
+        self._compute_and_apply_default_view()
+
+        # Keep default view locked when idle
+        self._lock_timer = rospy.Timer(
+            rospy.Duration(1.0 / max(0.1, self.lock_rate_hz)), self._lock_cb
+        )
+
+        # Subscriptions
+        rospy.Subscriber("/selected_vehicle", String, self._selected_cb)
+        for i in range(1, self.num_vehicles + 1):
+            role = f"ego_vehicle_{i}"
+            topic = f"/override_goal/{role}"
+            rospy.Subscriber(topic, PoseStamped, self._goal_cb, callback_args=role)
+
+        rospy.on_shutdown(self._on_shutdown)
+
+    def _compute_and_apply_default_view(self):
+        spawn_points = self.carla_map.get_spawn_points()
+        if not spawn_points:
+            raise RuntimeError("No spawn points available to compute BEV view")
+
+        xs = [sp.location.x for sp in spawn_points]
+        ys = [sp.location.y for sp in spawn_points]
+        cx = sum(xs) / float(len(xs))
+        cy = sum(ys) / float(len(ys))
+        span_x = max(xs) - min(xs)
+        span_y = max(ys) - min(ys)
+        height = self.base_height
+        if self.auto_height:
+            height = max(self.min_height, max(span_x, span_y) * 1.1)
+
+        target_x = cx + self.offset_x
+        target_y = cy + self.offset_y
+        if self.view_right_m != 0.0 or self.view_up_m != 0.0:
+            yaw_rad = math.radians(self.bev_yaw_deg)
+            rx = math.cos(yaw_rad)
+            ry = math.sin(yaw_rad)
+            ux = -math.sin(yaw_rad)
+            uy = math.cos(yaw_rad)
+            target_x += self.view_right_m * rx + self.view_up_m * ux
+            target_y += self.view_right_m * ry + self.view_up_m * uy
+
+        self._default_transform = carla.Transform(
+            carla.Location(x=target_x, y=target_y, z=height),
+            carla.Rotation(pitch=self.bev_pitch_deg, yaw=self.bev_yaw_deg, roll=0.0),
+        )
+        self._apply_transform(self._default_transform)
+        rospy.loginfo(
+            "cam_perspective: default BEV at (%.1f, %.1f, %.1f) yaw=%.1f span=(%.1f, %.1f)",
+            target_x,
+            target_y,
+            height,
+            self.bev_yaw_deg,
+            span_x,
+            span_y,
+        )
+
+    def _apply_transform(self, transform):
+        try:
+            self.spectator.set_transform(transform)
+        except Exception:
+            pass
+
+    def _lock_cb(self, _event):
+        if self.mode != "default" or self._default_transform is None:
+            return
+        self._apply_transform(self._default_transform)
+
+    def _selected_cb(self, msg: String):
+        role = (msg.data or "").strip()
+        if not role:
+            return
+        rospy.loginfo("cam_perspective: selected %s", role)
+        self._start_follow(role)
+
+    def _start_follow(self, role: str):
+        self.mode = "follow"
+        self._follow_end_time = time.time() + max(0.0, self.follow_duration_s)
+        self._follow_role = role
+        if self._goal_timer is not None:
+            try:
+                self._goal_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_timer = None
+
+        # (Re)start follow timer with current role
+        if self._follow_timer is not None:
+            try:
+                self._follow_timer.shutdown()
+            except Exception:
+                pass
+        self._follow_timer = rospy.Timer(
+            rospy.Duration(1.0 / max(1.0, self.follow_rate_hz)),
+            self._follow_cb,
+            oneshot=False,
+            reset=True,
+        )
+
+    def _follow_cb(self, _event):
+        if time.time() >= self._follow_end_time:
+            try:
+                if self._follow_timer is not None:
+                    self._follow_timer.shutdown()
+            except Exception:
+                pass
+            self._follow_timer = None
+            self.mode = "default"
+            return
+
+        role = self._follow_role
+        if not role:
+            return
+
+        # Find target vehicle by role
+        actors = self.world.get_actors().filter("vehicle.*")
+        target = None
+        for actor in actors:
+            if actor.attributes.get("role_name", "") == role:
+                target = actor
+                break
+        if target is None:
+            return
+
+        t = target.get_transform()
+        yaw_rad = math.radians(t.rotation.yaw)
+
+        # Local-space offsets: back, right, up
+        bx = -math.cos(yaw_rad) * self.follow_back_m
+        by = -math.sin(yaw_rad) * self.follow_back_m
+        rx = -math.sin(yaw_rad) * self.follow_right_m
+        ry = math.cos(yaw_rad) * self.follow_right_m
+        cam_x = t.location.x + bx + rx
+        cam_y = t.location.y + by + ry
+        cam_z = t.location.z + self.follow_up_m
+
+        # Look-at vehicle
+        dx = t.location.x - cam_x
+        dy = t.location.y - cam_y
+        dz = t.location.z - cam_z
+        yaw = math.degrees(math.atan2(dy, dx))
+        dist_xy = max(1e-3, math.hypot(dx, dy))
+        # In CARLA(Unreal) down-look is negative pitch; ensure camera looks down when above target
+        pitch = math.degrees(math.atan2(dz, dist_xy))
+
+        self._apply_transform(
+            carla.Transform(
+                carla.Location(x=cam_x, y=cam_y, z=cam_z),
+                carla.Rotation(pitch=pitch, yaw=yaw, roll=0.0),
+            )
+        )
+        rospy.loginfo_throttle(0.5, "cam_perspective: following %s at (%.1f, %.1f, %.1f) yaw=%.1f pitch=%.1f",
+                               role, cam_x, cam_y, cam_z, yaw, pitch)
+
+    def _goal_cb(self, msg: PoseStamped, role: str):
+        # Cancel follow if running
+        if self._follow_timer is not None:
+            try:
+                self._follow_timer.shutdown()
+            except Exception:
+                pass
+            self._follow_timer = None
+
+        self.mode = "goal"
+        x = float(msg.pose.position.x)
+        y = float(msg.pose.position.y)
+        z = float(self.goal_height)
+        # Compute nearest preset and decide camera pose
+        yaw_to_use = self.goal_yaw_deg
+        best = None
+        best_d = None
+        try:
+            for p in self._goal_presets:
+                dxp = float(p["x"]) - x
+                dyp = float(p["y"]) - y
+                d = math.hypot(dxp, dyp)
+                if best is None or d < best_d:
+                    best = p
+                    best_d = d
+            if best is not None and best_d is not None and best_d <= self.goal_match_tolerance:
+                yaw_to_use = float(best["yaw"])
+        except Exception:
+            pass
+
+        use_override = bool(best is not None and best_d is not None and best_d <= self.goal_match_tolerance and best.get("use_cam", False))
+        if use_override:
+            tx = float(best.get("cam_x", x))
+            ty = float(best.get("cam_y", y))
+            tz = float(best.get("cam_z", z))
+            yaw_used = float(best.get("cam_yaw_deg", yaw_to_use))
+            pitch_used = float(best.get("cam_pitch_deg", self.goal_pitch_deg))
+            preset_name = best.get("name", "unknown")
+        else:
+            tx = x
+            ty = y
+            tz = z
+            yaw_used = yaw_to_use
+            pitch_used = self.goal_pitch_deg
+            preset_name = best.get("name", "default") if best is not None else "default"
+
+        self._apply_transform(
+            carla.Transform(
+                carla.Location(x=tx, y=ty, z=tz),
+                carla.Rotation(pitch=pitch_used, yaw=yaw_used, roll=0.0),
+            )
+        )
+        rospy.loginfo(
+            "cam_perspective: goal view at (%.1f, %.1f, %.1f) yaw=%.1f pitch=%.1f (preset=%s, d=%.2f, tol=%.2f, override=%s)",
+            tx, ty, tz, yaw_used, pitch_used,
+            preset_name,
+            (best_d if best_d is not None else -1.0), self.goal_match_tolerance,
+            str(use_override),
+        )
+
+        # Revert to default after duration
+        def _revert(_evt):
+            self.mode = "default"
+
+        if self._goal_timer is not None:
+            try:
+                self._goal_timer.shutdown()
+            except Exception:
+                pass
+        self._goal_timer = rospy.Timer(
+            rospy.Duration(max(0.0, self.goal_duration_s)), _revert, oneshot=True
+        )
+
+    def _on_shutdown(self):
+        try:
+            if self._lock_timer is not None:
+                self._lock_timer.shutdown()
+        except Exception:
+            pass
+        try:
+            if self._follow_timer is not None:
+                self._follow_timer.shutdown()
+        except Exception:
+            pass
+        try:
+            if self._goal_timer is not None:
+                self._goal_timer.shutdown()
+        except Exception:
+            pass
+
+
+def main():
+    try:
+        CamPerspective()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass
+
+
+if __name__ == "__main__":
+    main()
+
+
+
