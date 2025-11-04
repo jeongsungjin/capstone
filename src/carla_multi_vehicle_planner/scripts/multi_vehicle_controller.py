@@ -63,6 +63,12 @@ class MultiVehicleController:
         self.intersection_x_max = float(rospy.get_param("~intersection_x_max", self.safety_x_max))
         self.intersection_y_min = float(rospy.get_param("~intersection_y_min", self.safety_y_min))
         self.intersection_y_max = float(rospy.get_param("~intersection_y_max", self.safety_y_max))
+        # Optional second intersection area
+        self.intersection2_enabled = bool(rospy.get_param("~intersection2_enabled", False))
+        self.intersection2_x_min = float(rospy.get_param("~intersection2_x_min", self.intersection_x_min))
+        self.intersection2_x_max = float(rospy.get_param("~intersection2_x_max", self.intersection_x_max))
+        self.intersection2_y_min = float(rospy.get_param("~intersection2_y_min", self.intersection_y_min))
+        self.intersection2_y_max = float(rospy.get_param("~intersection2_y_max", self.intersection_y_max))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
@@ -74,8 +80,8 @@ class MultiVehicleController:
         self.control_publishers = {}
         self.pose_publishers = {}
         # Track per-role intersection entry order
-        self.intersection_order = {}
-        self._intersection_counter = 0
+        self.intersection_orders = {0: {}, 1: {}}
+        self._intersection_counters = {0: 0, 1: 0}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -128,12 +134,22 @@ class MultiVehicleController:
         y = position.y
         return (self.safety_x_min <= x <= self.safety_x_max) and (self.safety_y_min <= y <= self.safety_y_max)
 
-    def _in_intersection_area(self, position):
+    def _which_intersection_area(self, position):
         if position is None:
-            return False
+            return None
         x = position.x
         y = position.y
-        return (self.intersection_x_min <= x <= self.intersection_x_max) and (self.intersection_y_min <= y <= self.intersection_y_max)
+        # Area 0
+        if (self.intersection_x_min <= x <= self.intersection_x_max) and (self.intersection_y_min <= y <= self.intersection_y_max):
+            return 0
+        # Area 1 (optional)
+        if self.intersection2_enabled:
+            if (self.intersection2_x_min <= x <= self.intersection2_x_max) and (self.intersection2_y_min <= y <= self.intersection2_y_max):
+                return 1
+        return None
+
+    def _in_intersection_area(self, position):
+        return self._which_intersection_area(position) is not None
 
     def _normalize_angle(self, ang):
         while ang > math.pi:
@@ -181,8 +197,11 @@ class MultiVehicleController:
         if my_actor is not None:
             v = my_actor.get_velocity()
             my_vx, my_vy = v.x, v.y
-        in_intersection = self._in_intersection_area(my_position)
-        my_order = self.intersection_order.get(my_role)
+        my_area = self._which_intersection_area(my_position)
+        in_intersection = my_area is not None
+        my_order = None
+        if in_intersection:
+            my_order = self.intersection_orders.get(my_area, {}).get(my_role)
         for other_role, other_state in self.states.items():
             if other_role == my_role:
                 continue
@@ -191,8 +210,9 @@ class MultiVehicleController:
                 continue
             # Decide priority basis
             higher = False
-            if self.intersection_dynamic_priority and in_intersection and self._in_intersection_area(other_pos):
-                other_order = self.intersection_order.get(other_role)
+            other_area = self._which_intersection_area(other_pos)
+            if self.intersection_dynamic_priority and in_intersection and (other_area == my_area):
+                other_order = self.intersection_orders.get(my_area, {}).get(other_role)
                 if other_order is not None and my_order is not None:
                     higher = other_order < my_order
                 elif other_order is not None and my_order is None:
@@ -353,15 +373,18 @@ class MultiVehicleController:
                 my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
                 now_sec = float(rospy.Time.now().to_sec())
                 in_area = self._in_safety_area(position)
-                # dynamic priority entry tracking inside intersection area
+                # dynamic priority entry tracking inside intersection areas
                 if self.intersection_dynamic_priority:
-                    if self._in_intersection_area(position):
-                        if role not in self.intersection_order:
-                            self._intersection_counter += 1
-                            self.intersection_order[role] = self._intersection_counter
+                    area_idx = self._which_intersection_area(position)
+                    if area_idx is not None:
+                        if role not in self.intersection_orders.get(area_idx, {}):
+                            self._intersection_counters[area_idx] += 1
+                            self.intersection_orders[area_idx][role] = self._intersection_counters[area_idx]
                     else:
-                        if role in self.intersection_order:
-                            self.intersection_order.pop(role, None)
+                        # Clear from all areas when outside
+                        for a_idx in list(self.intersection_orders.keys()):
+                            if role in self.intersection_orders[a_idx]:
+                                self.intersection_orders[a_idx].pop(role, None)
                 has_higher_front = self._has_nearby_higher_priority(role, position, my_yaw) if in_area else False
                 escape_until = state.get("deadlock_escape_until")
                 if escape_until is not None and now_sec < escape_until:
