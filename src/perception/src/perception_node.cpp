@@ -60,41 +60,41 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const
 }
 
 void PerceptionNode::publishBEVInfo(){
-    if (H.dimension() != 2 || H.shape()[0] != 3 || H.shape()[1] != 3) {
-        throw std::runtime_error("H must be shape (3,3)");
-    }
+    // if (H.dimension() != 2 || H.shape()[0] != 3 || H.shape()[1] != 3) {
+    //     throw std::runtime_error("H must be shape (3,3)");
+    // }
 
-    // Determine input shape
-    const auto shp = points.shape();
-    if (points.dimension() == 2 && shp[1] == 2) {
-        size_t M = shp[0];
-        xt::xarray<float> ones = xt::ones<float>({M,1});
-        xt::xarray<float> flat = points; // assumed float
-        xt::xarray<float> homog = xt::concatenate(xt::xtuple(flat, ones), 1);
-        auto Ht = xt::transpose(H);
-        xt::xarray<float> proj = xt::linalg::dot(homog, Ht);
-        xt::xarray<float> xy = xt::view(proj, xt::all(), xt::range(0,2));
-        xt::xarray<float> w = xt::view(proj, xt::all(), 2);
-        xt::xarray<float> wcol = xt::reshape_view(w, {w.shape()[0], 1});
-        xt::xarray<float> out = xy / wcol;
-        return out;
-    } else if (points.dimension() == 3 && shp[1] >= 1 && shp[2] == 2) {
-        size_t N = shp[0];
-        size_t K = shp[1];
-        xt::xarray<float> flat = xt::reshape_view(points, {N*K, 2});
-        xt::xarray<float> ones = xt::ones<float>({N*K,1});
-        xt::xarray<float> homog = xt::concatenate(xt::xtuple(flat, ones), 1);
-        auto Ht = xt::transpose(H);
-        xt::xarray<float> proj = xt::linalg::dot(homog, Ht);
-        xt::xarray<float> xy = xt::view(proj, xt::all(), xt::range(0,2));
-        xt::xarray<float> w = xt::view(proj, xt::all(), 2);
-        xt::xarray<float> wcol = xt::reshape_view(w, {w.shape()[0], 1});
-        xt::xarray<float> out_flat = xy / wcol; // (N*K, 2)
-        xt::xarray<float> out = xt::reshape_view(out_flat, {N, K, 2});
-        return out;
-    } else {
-        throw std::runtime_error("points must have shape (M,2) or (N,K,2)");
-    }
+    // // Determine input shape
+    // const auto shp = points.shape();
+    // if (points.dimension() == 2 && shp[1] == 2) {
+    //     size_t M = shp[0];
+    //     xt::xarray<float> ones = xt::ones<float>({M,1});
+    //     xt::xarray<float> flat = points; // assumed float
+    //     xt::xarray<float> homog = xt::concatenate(xt::xtuple(flat, ones), 1);
+    //     auto Ht = xt::transpose(H);
+    //     xt::xarray<float> proj = xt::linalg::dot(homog, Ht);
+    //     xt::xarray<float> xy = xt::view(proj, xt::all(), xt::range(0,2));
+    //     xt::xarray<float> w = xt::view(proj, xt::all(), 2);
+    //     xt::xarray<float> wcol = xt::reshape_view(w, {w.shape()[0], 1});
+    //     xt::xarray<float> out = xy / wcol;
+    //     return out;
+    // } else if (points.dimension() == 3 && shp[1] >= 1 && shp[2] == 2) {
+    //     size_t N = shp[0];
+    //     size_t K = shp[1];
+    //     xt::xarray<float> flat = xt::reshape_view(points, {N*K, 2});
+    //     xt::xarray<float> ones = xt::ones<float>({N*K,1});
+    //     xt::xarray<float> homog = xt::concatenate(xt::xtuple(flat, ones), 1);
+    //     auto Ht = xt::transpose(H);
+    //     xt::xarray<float> proj = xt::linalg::dot(homog, Ht);
+    //     xt::xarray<float> xy = xt::view(proj, xt::all(), xt::range(0,2));
+    //     xt::xarray<float> w = xt::view(proj, xt::all(), 2);
+    //     xt::xarray<float> wcol = xt::reshape_view(w, {w.shape()[0], 1});
+    //     xt::xarray<float> out_flat = xy / wcol; // (N*K, 2)
+    //     xt::xarray<float> out = xt::reshape_view(out_flat, {N, K, 2});
+    //     return out;
+    // } else {
+    //     throw std::runtime_error("points must have shape (M,2) or (N,K,2)");
+    // }
 }
 
 void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs){
