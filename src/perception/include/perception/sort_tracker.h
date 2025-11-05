@@ -1,7 +1,10 @@
 #ifndef __SORT_TRACKER_H__
 #define __SORT_TRACKER_H__
 
-#include <Eigen/Dense>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xview.hpp>
+#include <xtensor/xio.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 #include <vector>
 #include <array>
 #include <memory>

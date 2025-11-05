@@ -1,29 +1,49 @@
-#include "sort_tracker.hpp"
-#include <Eigen/Dense>
+#include <perception/sort_tracker.h>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xview.hpp>
+#include <xtensor/xio.hpp>
+#include <xtensor-blas/xlinalg.hpp>
 #include <limits>
 #include <algorithm>
 
 struct SimpleKF {
-    Eigen::VectorXd x;
-    Eigen::MatrixXd P;
-    Eigen::MatrixXd F;
-    Eigen::MatrixXd Q;
-    Eigen::MatrixXd H;
-    Eigen::MatrixXd R;
+    xt::xarray<double> x; // shape: (n)
+    xt::xarray<double> P; // (n,n)
+    xt::xarray<double> F; // (n,n)
+    xt::xarray<double> Q; // (n,n)
+    xt::xarray<double> H; // (m,n)
+    xt::xarray<double> R; // (m,m)
 
     SimpleKF() {}
     void predict() {
-        x = F * x;
-        P = F * P * F.transpose() + Q;
+        x = xt::linalg::dot(F, x);
+        P = xt::linalg::dot(F, xt::linalg::dot(P, xt::transpose(F))) + Q;
     }
-    void update(const Eigen::VectorXd& z) {
-        Eigen::VectorXd y = z - H * x;
-        Eigen::MatrixXd S = H * P * H.transpose() + R;
-        Eigen::MatrixXd Si = S.inverse();
-        Eigen::MatrixXd K = P * H.transpose() * Si;
-        x = x + K * y;
-        Eigen::MatrixXd I = Eigen::MatrixXd::Identity(x.size(), x.size());
-        P = (I - K * H) * P;
+    void update(const xt::xarray<double>& z) {
+        auto y = z - xt::linalg::dot(H, x);                         // (m)
+        auto S = xt::linalg::dot(H, xt::linalg::dot(P, xt::transpose(H))) + R; // (m,m)
+        // Invert S (typically 1x1 or 2x2 here) without requiring LAPACK
+        xt::xarray<double> Si;
+        std::size_t m = S.shape()[0];
+        if (m == 1) {
+            double s00 = S(0,0);
+            double inv = (std::abs(s00) > 1e-12) ? 1.0 / s00 : 0.0;
+            Si = xt::xarray<double>{{inv}};
+        } else if (m == 2) {
+            double a = S(0,0), b = S(0,1), c = S(1,0), d = S(1,1);
+            double det = a*d - b*c;
+            if (std::abs(det) < 1e-12) det = (det >= 0 ? 1e-12 : -1e-12);
+            Si = xt::xarray<double>{{ d/det, -b/det },
+                                    { -c/det, a/det }};
+        } else {
+            // Fallback to generic inverse if available
+            Si = xt::linalg::inv(S);
+        }
+        auto K = xt::linalg::dot(P, xt::linalg::dot(xt::transpose(H), Si));     // (n,m)
+        x = x + xt::linalg::dot(K, y);                               // (n)
+        std::size_t n = P.shape()[0];
+        auto I = xt::eye<double>(n);
+        P = xt::linalg::dot(I - xt::linalg::dot(K, H), P);
     }
 };
 
@@ -49,29 +69,26 @@ struct SortTracker::Track {
         : id(id_), hits(1), age(1), time_since_update(0), state(1), cls(d.cls)
     {
         // init pos kf (4-state: x,y,vx,vy)
-        kf_pos.x = Eigen::VectorXd(4);
-        kf_pos.x << d.x, d.y, 0.0, 0.0;
-        kf_pos.P = Eigen::MatrixXd::Identity(4,4) * 1000.0;
-        kf_pos.F = Eigen::MatrixXd(4,4);
-        kf_pos.F << 1,0,1,0,
-                    0,1,0,1,
-                    0,0,1,0,
-                    0,0,0,1;
-        kf_pos.H = Eigen::MatrixXd(2,4);
-        kf_pos.H << 1,0,0,0,
-                  0,1,0,0;
-        kf_pos.Q = Eigen::MatrixXd::Identity(4,4) * 0.1;
-        kf_pos.R = Eigen::MatrixXd::Identity(2,2) * 10.0;
+    kf_pos.x = xt::xarray<double>{d.x, d.y, 0.0, 0.0};
+    kf_pos.P = 1000.0 * xt::eye<double>(4);
+    kf_pos.F = xt::xarray<double>{{1,0,1,0},
+                      {0,1,0,1},
+                      {0,0,1,0},
+                      {0,0,0,1}};
+    kf_pos.H = xt::xarray<double>{{1,0,0,0},
+                      {0,1,0,0}};
+    kf_pos.Q = 0.1 * xt::eye<double>(4);
+    kf_pos.R = 10.0 * xt::eye<double>(2);
 
         // yaw/size KFs (2 state: value, rate)
         auto init_2d = [](double v, double Qscale, double Rscale) {
             SimpleKF kf;
-            kf.x = Eigen::VectorXd(2); kf.x << v, 0.0;
-            kf.P = Eigen::MatrixXd::Identity(2,2) * 10.0;
-            kf.F = Eigen::MatrixXd(2,2); kf.F << 1,1, 0,1;
-            kf.H = Eigen::MatrixXd(1,2); kf.H << 1,0;
-            kf.Q = Eigen::MatrixXd::Identity(2,2) * Qscale;
-            kf.R = Eigen::MatrixXd::Identity(1,1) * Rscale;
+            kf.x = xt::xarray<double>{v, 0.0};
+            kf.P = 10.0 * xt::eye<double>(2);
+            kf.F = xt::xarray<double>{{1.0, 1.0}, {0.0, 1.0}};
+            kf.H = xt::xarray<double>{{1.0, 0.0}}; // shape (1,2)
+            kf.Q = Qscale * xt::eye<double>(2);
+            kf.R = Rscale * xt::eye<double>(1);
             return kf;
         };
         kf_yaw = init_2d(d.yaw, 0.01, 1.0);
@@ -97,18 +114,18 @@ struct SortTracker::Track {
 
     void update(const Detection& d) {
         // pos
-        Eigen::Vector2d zpos; zpos << d.x, d.y;
-        kf_pos.update(zpos);
+    xt::xarray<double> zpos = {d.x, d.y};
+    kf_pos.update(zpos);
         // length/width
-        Eigen::VectorXd zl(1); zl << d.L;
-        Eigen::VectorXd zw(1); zw << d.W;
-        kf_length.update(zl);
-        kf_width.update(zw);
+    xt::xarray<double> zl = {d.L};
+    xt::xarray<double> zw = {d.W};
+    kf_length.update(zl);
+    kf_width.update(zw);
         // yaw: adjust to nearest equivalent (period 180)
         double ref = kf_yaw.x(0);
         double adj = nearest_equivalent_deg(d.yaw, ref, 180.0);
-        Eigen::VectorXd zy(1); zy << adj;
-        kf_yaw.update(zy);
+    xt::xarray<double> zy = {adj};
+    kf_yaw.update(zy);
 
         car_length = kf_length.x(0);
         car_width = kf_width.x(0);
