@@ -50,26 +50,33 @@
     <param name="update_rate" value="2.0" />
   </node>
 
+  <!-- 3.6) Manual goal tools: RViz goal mux + key selector -->
+  <node pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+    <param name="default_vehicle" value="ego_vehicle_1" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
+
   <!-- 4) Controller -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
-    <param name="target_speed" value="2.78" />
+    <param name="target_speed" value="5.78" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
-    <param name="safety_x_min" value="-8.0" />
-    <param name="safety_x_max" value="8.0" />
+    <param name="safety_x_min" value="-10.0" />
+    <param name="safety_x_max" value="10.0" />
     <param name="safety_y_min" value="-32.0" />
     <param name="safety_y_max" value="23.0" />
-    <param name="safety_distance" value="18.0" />
-    <param name="safety_front_cone_deg" value="120.0" />
+    <param name="safety_distance" value="30.0" />
+    <param name="safety_front_cone_deg" value="140.0" />
     <param name="safety_require_closing" value="true" />
     <param name="enable_opposite_lane_ignore" value="true" />
     <!-- Intersection dynamic priority: Area 0 and Area 1 -->
     <param name="intersection_dynamic_priority" value="true" />
     <!-- Area 0 -->
-    <param name="intersection_x_min" value="-8.0" />
-    <param name="intersection_x_max" value="8.0" />
+    <param name="intersection_x_min" value="-10.0" />
+    <param name="intersection_x_max" value="10.0" />
     <param name="intersection_y_min" value="-32.0" />
     <param name="intersection_y_max" value="23.0" />
     <!-- Area 1 -->

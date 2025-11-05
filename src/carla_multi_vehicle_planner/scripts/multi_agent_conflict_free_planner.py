@@ -10,6 +10,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
+from typing import Any
 
 # Ensure CARLA Python API is available on sys.path before import
 try:
@@ -125,6 +126,18 @@ class MultiAgentConflictFreePlanner:
         self.vehicle_path_len: Dict[str, float] = {}
         self._planning_lock = threading.RLock()
 
+        # Override goal support (manual goal from RViz via rviz_goal_mux)
+        # Map role -> (x, y, stamp)
+        self.override_goal: Dict[str, Optional[Tuple[float, float, rospy.Time]]] = {
+            self._role_name(i): None for i in range(self.num_vehicles)
+        }
+        self.override_subscribers = []
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            topic = f"/override_goal/{role}"
+            sub = rospy.Subscriber(topic, PoseStamped, self._make_override_cb(role), queue_size=1)
+            self.override_subscribers.append(sub)
+
         # Publishers per role
         self.path_publishers: Dict[str, rospy.Publisher] = {}
         for index in range(self.num_vehicles):
@@ -169,6 +182,22 @@ class MultiAgentConflictFreePlanner:
 
         for index, vehicle in enumerate(self.vehicles[: self.num_vehicles]):
             role = self._role_name(index)
+            # If override goal is active for this role, prioritize it
+            ov = self.override_goal.get(role)
+            if ov is not None:
+                # If override goal already reached, clear and continue normal planning
+                if self._check_override_goal(vehicle, role, ov):
+                    continue
+                self._plan_override(vehicle, index, ov)
+                # Accumulate conflict keys for subsequent vehicles using the just planned route if present
+                points = self.vehicle_paths.get(role)
+                if points and len(points) >= 2:
+                    # Synthesize pseudo-route by snapping points to cells for conflict keys
+                    for x, y in points:
+                        key = (int(round(x / max(0.25, self.conflict_key_resolution))),
+                               int(round(y / max(0.25, self.conflict_key_resolution))))
+                        taken_keys[key] = (x, y)
+                continue
             front_loc, front_xy, yaw_rad = self._vehicle_front(vehicle)
 
             # Skip replanning if far from destination on existing path
@@ -255,6 +284,93 @@ class MultiAgentConflictFreePlanner:
             z=transform.location.z,
         )
         return front_loc, (front_loc.x, front_loc.y), yaw_rad
+
+    def _make_override_cb(self, role: str):
+        def _cb(msg: PoseStamped):
+            stamp = msg.header.stamp if msg.header.stamp != rospy.Time() else rospy.Time.now()
+            goal_info = (float(msg.pose.position.x), float(msg.pose.position.y), stamp)
+            with self._planning_lock:
+                self.override_goal[role] = goal_info
+                # Drop stored path so visualizers/controllers get the new one on next publish
+                self.vehicle_paths.pop(role, None)
+                self.vehicle_path_s.pop(role, None)
+                self.vehicle_path_len.pop(role, None)
+            rospy.loginfo("%s: override set to (%.2f, %.2f)", role, goal_info[0], goal_info[1])
+        return _cb
+
+    def _snap_to_waypoint(self, xy: Tuple[float, float]):
+        loc = carla.Location(x=xy[0], y=xy[1], z=0.5)
+        return self.carla_map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+
+    def _plan_override(self, vehicle, index: int, goal_info: Tuple[float, float, rospy.Time]) -> None:
+        role = self._role_name(index)
+        goal_xy = (goal_info[0], goal_info[1])
+
+        front_loc, front_xy, yaw_rad = self._vehicle_front(vehicle)
+        start_wp, start_meta = self._select_start_waypoint(front_loc, yaw_rad)
+        if start_wp is None:
+            rospy.logwarn("%s: override planning failed; no valid start waypoint", role)
+            return
+
+        goal_wp = self._snap_to_waypoint(goal_xy)
+        if goal_wp is None:
+            rospy.logwarn("%s: override goal off-lane; ignoring", role)
+            return
+
+        route = self.route_planner.trace_route(start_wp.transform.location, goal_wp.transform.location)
+        if not route or len(route) < 2:
+            rospy.logwarn("%s: override route trace failed", role)
+            return
+        if not self._route_heading_compatible(route, yaw_rad):
+            rospy.logwarn("%s: override route heading-incompatible; ignoring", role)
+            return
+
+        points = self._route_to_points(route)
+        if len(points) < 2:
+            rospy.logwarn("%s: override route produced insufficient samples", role)
+            return
+        points = self._ensure_path_starts_at_vehicle(points, front_xy)
+
+        self.vehicle_paths[role] = points
+        self._store_path_geometry(role, points)
+        self._publish_path(points, role)
+
+    def _route_heading_compatible(self, route: List[Tuple], yaw_rad: float) -> bool:
+        if not route or len(route) < 2:
+            return False
+        max_deg = 45.0
+        thresh = math.radians(max_deg)
+        acc = 0.0
+        prev_wp = None
+        for wp, _ in route:
+            if prev_wp is not None:
+                a = prev_wp.transform.location
+                b = wp.transform.location
+                dx = b.x - a.x
+                dy = b.y - a.y
+                seg_len = math.hypot(dx, dy)
+                if seg_len > 1e-3:
+                    heading = math.atan2(dy, dx)
+                    if abs(_normalize_angle(heading - yaw_rad)) > thresh:
+                        return False
+                    acc += seg_len
+                    if acc >= 8.0:
+                        break
+            prev_wp = wp
+        return True
+
+    def _check_override_goal(self, vehicle, role: str, goal_info: Tuple[float, float, rospy.Time]) -> bool:
+        goal_xy = (goal_info[0], goal_info[1])
+        curr = vehicle.get_location()
+        dist = math.hypot(curr.x - goal_xy[0], curr.y - goal_xy[1])
+        # Reuse destination_reached semantics similar to other planners
+        threshold = 5.0
+        if dist <= threshold:
+            rospy.loginfo("%s: override goal reached; clearing override", role)
+            self.override_goal[role] = None
+            # Keep existing path; next cycle will replan as needed
+            return True
+        return False
 
     def _select_start_waypoint(self, position: carla.Location, yaw_rad: float):
         if not self._waypoint_cache:
