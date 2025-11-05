@@ -70,6 +70,10 @@ class MultiVehicleController:
         self.intersection2_y_min = float(rospy.get_param("~intersection2_y_min", self.intersection_y_min))
         self.intersection2_y_max = float(rospy.get_param("~intersection2_y_max", self.intersection_y_max))
 
+        # Intersection stability (hysteresis + grace-time) to avoid flickering entry-order
+        self.intersection_hysteresis_margin = float(rospy.get_param("~intersection_hysteresis_margin", 2.0))
+        self.intersection_exit_grace_sec = float(rospy.get_param("~intersection_exit_grace_sec", 1.5))
+
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
         self.world = self.client.get_world()
@@ -82,6 +86,8 @@ class MultiVehicleController:
         # Track per-role intersection entry order
         self.intersection_orders = {0: {}, 1: {}}
         self._intersection_counters = {0: 0, 1: 0}
+        # Track last time a role was observed inside each area (with hysteresis margin)
+        self._intersection_last_inside = {0: {}, 1: {}}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -147,6 +153,23 @@ class MultiVehicleController:
             if (self.intersection2_x_min <= x <= self.intersection2_x_max) and (self.intersection2_y_min <= y <= self.intersection2_y_max):
                 return 1
         return None
+
+    def _in_area_with_margin(self, position, area_idx, margin):
+        if position is None:
+            return False
+        x = position.x
+        y = position.y
+        if area_idx == 0:
+            return (
+                (self.intersection_x_min - margin) <= x <= (self.intersection_x_max + margin)
+                and (self.intersection_y_min - margin) <= y <= (self.intersection_y_max + margin)
+            )
+        if area_idx == 1 and self.intersection2_enabled:
+            return (
+                (self.intersection2_x_min - margin) <= x <= (self.intersection2_x_max + margin)
+                and (self.intersection2_y_min - margin) <= y <= (self.intersection2_y_max + margin)
+            )
+        return False
 
     def _in_intersection_area(self, position):
         return self._which_intersection_area(position) is not None
@@ -374,17 +397,31 @@ class MultiVehicleController:
                 now_sec = float(rospy.Time.now().to_sec())
                 in_area = self._in_safety_area(position)
                 # dynamic priority entry tracking inside intersection areas
-                if self.intersection_dynamic_priority:
-                    area_idx = self._which_intersection_area(position)
-                    if area_idx is not None:
-                        if role not in self.intersection_orders.get(area_idx, {}):
-                            self._intersection_counters[area_idx] += 1
-                            self.intersection_orders[area_idx][role] = self._intersection_counters[area_idx]
-                    else:
-                        # Clear from all areas when outside
-                        for a_idx in list(self.intersection_orders.keys()):
-                            if role in self.intersection_orders[a_idx]:
+            if self.intersection_dynamic_priority:
+                now = rospy.Time.now().to_sec()
+                base_area = self._which_intersection_area(position)
+                # Assign order on first entry to base (tight) area only
+                if base_area is not None:
+                    if role not in self.intersection_orders.get(base_area, {}):
+                        self._intersection_counters[base_area] += 1
+                        self.intersection_orders[base_area][role] = self._intersection_counters[base_area]
+                # Update last-inside timestamps using hysteresis margin for both areas
+                for a_idx in (0, 1):
+                    if a_idx == 1 and not self.intersection2_enabled:
+                        continue
+                    if self._in_area_with_margin(position, a_idx, self.intersection_hysteresis_margin):
+                        self._intersection_last_inside[a_idx][role] = now
+                # Graceful clearing when outside expanded box for longer than grace time
+                for a_idx in (0, 1):
+                    if a_idx == 1 and not self.intersection2_enabled:
+                        continue
+                    if role in self.intersection_orders.get(a_idx, {}):
+                        inside = self._in_area_with_margin(position, a_idx, self.intersection_hysteresis_margin)
+                        if not inside:
+                            last_ts = self._intersection_last_inside[a_idx].get(role)
+                            if last_ts is None or (now - last_ts) >= self.intersection_exit_grace_sec:
                                 self.intersection_orders[a_idx].pop(role, None)
+                                self._intersection_last_inside[a_idx].pop(role, None)
                 has_higher_front = self._has_nearby_higher_priority(role, position, my_yaw) if in_area else False
                 escape_until = state.get("deadlock_escape_until")
                 if escape_until is not None and now_sec < escape_until:

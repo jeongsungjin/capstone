@@ -64,27 +64,27 @@
     <param name="target_speed" value="5.78" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
-    <param name="safety_x_min" value="-10.0" />
-    <param name="safety_x_max" value="10.0" />
+    <param name="safety_x_min" value="-20.0" />
+    <param name="safety_x_max" value="20.0" />
     <param name="safety_y_min" value="-32.0" />
-    <param name="safety_y_max" value="23.0" />
-    <param name="safety_distance" value="30.0" />
-    <param name="safety_front_cone_deg" value="140.0" />
+    <param name="safety_y_max" value="5.0" />
+    <param name="safety_distance" value="20.0" />
+    <param name="safety_front_cone_deg" value="170.0" />
     <param name="safety_require_closing" value="true" />
     <param name="enable_opposite_lane_ignore" value="true" />
     <!-- Intersection dynamic priority: Area 0 and Area 1 -->
     <param name="intersection_dynamic_priority" value="true" />
     <!-- Area 0 -->
-    <param name="intersection_x_min" value="-10.0" />
-    <param name="intersection_x_max" value="10.0" />
+    <param name="intersection_x_min" value="-19.0" />
+    <param name="intersection_x_max" value="18.0" />
     <param name="intersection_y_min" value="-32.0" />
-    <param name="intersection_y_max" value="23.0" />
+    <param name="intersection_y_max" value="-20.0" />
     <!-- Area 1 -->
     <param name="intersection2_enabled" value="true" />
-    <param name="intersection2_x_min" value="-9.0" />
-    <param name="intersection2_x_max" value="9.0" />
-    <param name="intersection2_y_min" value="-14.0" />
-    <param name="intersection2_y_max" value="4.0" />
+    <param name="intersection2_x_min" value="-20.0" />
+    <param name="intersection2_x_max" value="20.0" />
+    <param name="intersection2_y_min" value="-18.0" />
+    <param name="intersection2_y_max" value="8.0" />
   </node>
 
   <!-- Optional RViz -->
