@@ -33,11 +33,11 @@ class CamPerspective:
         # Default BEV view parameters (matching prior behavior)
         self.auto_height = bool(rospy.get_param("~spectator_auto_height", False))
         self.min_height = float(rospy.get_param("~spectator_min_height", 65.0))
-        self.base_height = float(rospy.get_param("~spectator_height", 65.0))
-        self.bev_yaw_deg = float(rospy.get_param("~spectator_yaw_deg", -90.0))
-        self.bev_pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -50.0))
-        self.offset_x = float(rospy.get_param("~spectator_offset_x", -16.0))
-        self.offset_y = float(rospy.get_param("~spectator_offset_y", 35.0))
+        self.base_height = float(rospy.get_param("~spectator_height", 140.0))
+        self.bev_yaw_deg = float(rospy.get_param("~spectator_yaw_deg", 90.0))
+        self.bev_pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -60.0))
+        self.offset_x = float(rospy.get_param("~spectator_offset_x", -10.0))
+        self.offset_y = float(rospy.get_param("~spectator_offset_y", -90.0))
         self.view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
         self.view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
         self.lock_rate_hz = float(rospy.get_param("~lock_rate_hz", 5.0))
@@ -95,6 +95,25 @@ class CamPerspective:
         self.world = self.client.get_world()
         self.carla_map = self.world.get_map()
         self.spectator = self.world.get_spectator()
+        
+        
+                # === Sun direction control (Directional Light equivalent) ===
+        # Allow manual adjustment via ROS params or code
+        self.sun_pitch_deg = float(rospy.get_param("~sun_pitch_deg", -130.0))    # Unreal Rotation X
+        self.sun_yaw_deg = float(rospy.get_param("~sun_yaw_deg", 120.0))     # Unreal Rotation Y
+        self.sun_roll_deg = float(rospy.get_param("~sun_roll_deg", 120.0))   # Unreal Rotation Z (not used, but logged)
+
+        weather = self.world.get_weather()
+        # Unreal uses Pitch (down is negative) → CARLA uses positive Altitude (up)
+        weather.sun_altitude_angle = -self.sun_pitch_deg
+        weather.sun_azimuth_angle = self.sun_yaw_deg
+        self.world.set_weather(weather)
+
+        rospy.loginfo(
+            "☀️  Sun direction set from Unreal rotation: pitch=%.1f, yaw=%.1f, roll=%.1f → altitude=%.1f, azimuth=%.1f",
+            self.sun_pitch_deg, self.sun_yaw_deg, self.sun_roll_deg,
+            weather.sun_altitude_angle, weather.sun_azimuth_angle
+        )
 
         # State
         self.mode = "default"  # default|follow|goal
