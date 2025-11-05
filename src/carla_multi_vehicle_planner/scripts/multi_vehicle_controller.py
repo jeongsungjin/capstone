@@ -50,9 +50,9 @@ class MultiVehicleController:
         self.safety_front_cone_deg = float(rospy.get_param("~safety_front_cone_deg", 100.0))
         self.safety_require_closing = bool(rospy.get_param("~safety_require_closing", True))
         # Deadlock escape tuning
-        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 3.0))
+        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 5.0))
         self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 1.0))
-        self.safety_deadlock_escape_duration_sec = float(rospy.get_param("~safety_deadlock_escape_duration_sec", 2.0))
+        self.safety_deadlock_escape_duration_sec = float(rospy.get_param("~safety_deadlock_escape_duration_sec", 1.0))
         # Opposite-lane ignore within intersection area
         self.enable_opposite_lane_ignore = bool(rospy.get_param("~enable_opposite_lane_ignore", True))
         self.opposite_lane_heading_thresh_deg = float(rospy.get_param("~opposite_lane_heading_thresh_deg", 100.0))
@@ -83,11 +83,22 @@ class MultiVehicleController:
         self.states = {}
         self.control_publishers = {}
         self.pose_publishers = {}
+        # Optional external override for AckermannDrive (e.g., platoon manager)
+        self.enable_external_control_override = bool(rospy.get_param("~enable_external_control_override", False))
+        self._override_cmds = {}
+        self._override_stamp = {}
+        self.override_speed_only = bool(rospy.get_param("~override_speed_only", True))
         # Track per-role intersection entry order
         self.intersection_orders = {0: {}, 1: {}}
         self._intersection_counters = {0: 0, 1: 0}
         # Track last time a role was observed inside each area (with hysteresis margin)
         self._intersection_last_inside = {0: {}, 1: {}}
+
+        # Platoon priority inheritance (optional)
+        self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
+        self.platoon_leader = str(rospy.get_param("~platoon_leader", "ego_vehicle_1"))
+        followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
+        self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -112,6 +123,9 @@ class MultiVehicleController:
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role)
             self.control_publishers[role] = rospy.Publisher(control_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+            if self.enable_external_control_override:
+                override_topic = f"/carla/{role}/vehicle_control_cmd_override"
+                rospy.Subscriber(override_topic, AckermannDrive, self._override_cb, callback_args=role, queue_size=1)
 
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._control_loop)
@@ -389,6 +403,17 @@ class MultiVehicleController:
             steer, speed = self._compute_control(state)
             if steer is None:
                 continue
+            # Apply external override if enabled and recent
+            if self.enable_external_control_override:
+                cmd = self._override_cmds.get(role)
+                stamp = self._override_stamp.get(role)
+                if cmd is not None and stamp is not None:
+                    if (rospy.Time.now() - stamp).to_sec() < 0.5:
+                        if self.override_speed_only:
+                            speed = cmd.speed
+                        else:
+                            steer = cmd.steering_angle
+                            speed = cmd.speed
             # Area-limited safety stop for lower-priority vehicles near other vehicles
             if self.enable_safety_stop:
                 position = state.get("position")
@@ -405,6 +430,13 @@ class MultiVehicleController:
                     if role not in self.intersection_orders.get(base_area, {}):
                         self._intersection_counters[base_area] += 1
                         self.intersection_orders[base_area][role] = self._intersection_counters[base_area]
+                    # Platoon: inherit leader's order for followers in same area
+                    if self.platoon_enable and role in self.platoon_followers:
+                        lead_order = self.intersection_orders.get(base_area, {}).get(self.platoon_leader)
+                        if lead_order is not None:
+                            current = self.intersection_orders.get(base_area, {}).get(role)
+                            if current is None or lead_order < current:
+                                self.intersection_orders[base_area][role] = lead_order
                 # Update last-inside timestamps using hysteresis margin for both areas
                 for a_idx in (0, 1):
                     if a_idx == 1 and not self.intersection2_enabled:
@@ -446,6 +478,10 @@ class MultiVehicleController:
                     # Do not reset escape_until so window can complete
             self._apply_carla_control(role, vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
+
+    def _override_cb(self, msg, role):
+        self._override_cmds[role] = msg
+        self._override_stamp[role] = rospy.Time.now()
 
     def _compute_control(self, state):
         path = state["path"]
