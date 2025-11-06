@@ -54,7 +54,7 @@ namespace layer_names {
 };
 
 struct DetectionInfo {
-    std::vector<int> scores;
+    std::vector<float> scores;
     std::vector<xt::xarray<float>> poly4s;
     std::vector<xt::xarray<float>> tri_ptss;
 };
