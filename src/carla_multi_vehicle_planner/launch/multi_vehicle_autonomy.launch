@@ -53,4 +53,11 @@
   <node pkg="carla_multi_vehicle_planner" type="cam_perspective.py" name="cam_perspective" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
   </node>
+
+  <!-- Draw re-planned paths in CARLA for 10s only when override click triggered -->
+  <node pkg="carla_multi_vehicle_planner" type="path_visualization.py" name="path_visualization" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="life_time" value="10.0" />
+    <param name="override_to_path_window" value="3.0" />
+  </node>
 </launch>

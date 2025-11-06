@@ -55,7 +55,7 @@ class CamPerspective:
         self.follow_ang_alpha = float(rospy.get_param("~follow_ang_alpha", 0.25))
 
         # Goal-view parameters
-        self.goal_duration_s = float(rospy.get_param("~goal_duration_s", 5.0))
+        self.goal_duration_s = float(rospy.get_param("~goal_duration_s", 4.0))
         self.goal_height = float(rospy.get_param("~goal_height", 5.0))
         self.goal_yaw_deg = float(rospy.get_param("~goal_yaw_deg", -90.0))
         self.goal_pitch_deg = float(rospy.get_param("~goal_pitch_deg", 0.0))
