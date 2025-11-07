@@ -83,8 +83,9 @@
     <!-- Controller extensions: hysteresis & external overrides & platoon priority -->
     <param name="intersection_hysteresis_margin" value="2.0" />
     <param name="intersection_exit_grace_sec" value="1.5" />
-    <param name="enable_external_control_override" value="$(arg enable_platooning)" />
-    <param name="override_speed_only" value="$(arg enable_platooning)" />
+    <!-- Enable override so emergency stop (key_selector) can take effect anytime -->
+    <param name="enable_external_control_override" value="true" />
+    <param name="override_speed_only" value="true" />
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
     <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />

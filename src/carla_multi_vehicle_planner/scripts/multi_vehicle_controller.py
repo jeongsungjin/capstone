@@ -6,6 +6,7 @@ import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Bool
 
 CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
 if CARLA_EGG not in sys.path:
@@ -90,6 +91,9 @@ class MultiVehicleController:
         self._override_cmds = {}
         self._override_stamp = {}
         self.override_speed_only = bool(rospy.get_param("~override_speed_only", True))
+        # Emergency stop (global)
+        self.emergency_hold_sec = float(rospy.get_param("~emergency_hold_sec", 1.5))
+        self._emergency_until = 0.0
         # Track per-role intersection entry order
         self.intersection_orders = {0: {}, 1: {}}
         self._intersection_counters = {0: 0, 1: 0}
@@ -128,6 +132,9 @@ class MultiVehicleController:
             if self.enable_external_control_override:
                 override_topic = f"/carla/{role}/vehicle_control_cmd_override"
                 rospy.Subscriber(override_topic, AckermannDrive, self._override_cb, callback_args=role, queue_size=1)
+
+        # Global emergency stop topic
+        rospy.Subscriber("/emergency_stop", Bool, self._emergency_cb, queue_size=1)
 
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._control_loop)
@@ -478,12 +485,23 @@ class MultiVehicleController:
                     # Reset timers if not actively safety stopping
                     state["safety_stop_since"] = None
                     # Do not reset escape_until so window can complete
+            # Global emergency stop takes precedence
+            now_f = rospy.Time.now().to_sec()
+            if now_f < float(self._emergency_until):
+                speed = 0.0
             self._apply_carla_control(role, vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 
     def _override_cb(self, msg, role):
         self._override_cmds[role] = msg
         self._override_stamp[role] = rospy.Time.now()
+
+    def _emergency_cb(self, msg):
+        active = bool(getattr(msg, "data", False))
+        if active:
+            self._emergency_until = rospy.Time.now().to_sec() + max(0.1, self.emergency_hold_sec)
+        else:
+            self._emergency_until = 0.0
 
     def _compute_control(self, state):
         path = state["path"]
