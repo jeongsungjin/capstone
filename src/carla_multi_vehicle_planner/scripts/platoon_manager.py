@@ -39,6 +39,7 @@ class PlatoonManager:
         self.kd_gap_close = float(rospy.get_param("~kd_gap_close", 0.9))
         self.gap_deadband_m = float(rospy.get_param("~gap_deadband_m", 0.5))
         self.rel_speed_deadband = float(rospy.get_param("~rel_speed_deadband", 0.2))
+        self.path_switch_max_dist_m = float(rospy.get_param("~path_switch_max_dist_m", 8.0))
         self.accel_limit_mps2 = float(rospy.get_param("~accel_limit_mps2", 1.2))
         self.path_publish_min_dt = float(rospy.get_param("~path_publish_min_dt", 0.6))
         self.path_publish_min_index_advance = int(rospy.get_param("~path_publish_min_index_advance", 6))
@@ -77,6 +78,7 @@ class PlatoonManager:
         self._last_cmd_time: Dict[str, float] = {}
         self._last_path_idx: Dict[str, int] = {}
         self._last_path_pub_time: Dict[str, float] = {}
+        self._path_initialized: Dict[str, bool] = {r: False for r in self.follower_roles}
 
     # ----------------- CARLA helpers -----------------
     def _refresh_actors(self, _evt=None) -> None:
@@ -127,6 +129,21 @@ class PlatoonManager:
     def _path_cb(self, msg: Path) -> None:
         # Cache leader path; follower paths will be trimmed per follower in _tick
         self._leader_path = msg
+        # Initial publish: immediately seed followers with leader path once available
+        for role, pub in self.path_pubs.items():
+            if role not in self._path_initialized:
+                self._path_initialized[role] = False
+            odom = self.odom.get(role)
+            if odom is None:
+                continue
+            follower_path = self._trim_path_from_projection(self._leader_path, odom)
+            if follower_path is not None and follower_path.poses:
+                pub.publish(follower_path)
+                idx = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
+                now = rospy.Time.now().to_sec()
+                self._last_path_idx[role] = idx
+                self._last_path_pub_time[role] = now
+                self._path_initialized[role] = True
 
     def _cmd_cb(self, msg: AckermannDrive, role: str) -> None:
         self._cmd_cache[role] = msg
@@ -149,11 +166,22 @@ class PlatoonManager:
                 odom = self.odom.get(role)
                 if odom is None:
                     continue
-                idx = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
+                # If not initialized yet (e.g., odom arrived after path), seed once without distance gating
+                if not self._path_initialized.get(role, False):
+                    follower_path = self._trim_path_from_projection(self._leader_path, odom)
+                    if follower_path is not None and follower_path.poses:
+                        pub.publish(follower_path)
+                        idx0 = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
+                        t0 = rospy.Time.now().to_sec()
+                        self._last_path_idx[role] = idx0
+                        self._last_path_pub_time[role] = t0
+                        self._path_initialized[role] = True
+                        continue
+                idx, dist = self._project_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
                 now = rospy.Time.now().to_sec()
                 last_idx = int(self._last_path_idx.get(role, -9999))
                 last_t = float(self._last_path_pub_time.get(role, 0.0))
-                if (idx - last_idx) >= max(1, self.path_publish_min_index_advance) or (now - last_t) >= self.path_publish_min_dt:
+                if (dist <= max(0.0, self.path_switch_max_dist_m)) and ((idx - last_idx) >= max(1, self.path_publish_min_index_advance) or (now - last_t) >= self.path_publish_min_dt):
                     follower_path = self._trim_path_from_projection(self._leader_path, odom)
                     if follower_path is not None:
                         pub.publish(follower_path)
@@ -245,6 +273,30 @@ class PlatoonManager:
                 best_dist_sq = d2
                 best_index = idx
         return best_index
+
+    @staticmethod
+    def _project_on_path(path: Path, px: float, py: float) -> Tuple[int, float]:
+        best_dist_sq = float("inf")
+        best_index = 0
+        for idx in range(len(path.poses) - 1):
+            x1 = path.poses[idx].pose.position.x
+            y1 = path.poses[idx].pose.position.y
+            x2 = path.poses[idx + 1].pose.position.x
+            y2 = path.poses[idx + 1].pose.position.y
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-6:
+                continue
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            d2 = (proj_x - px) * (proj_x - px) + (proj_y - py) * (proj_y - py)
+            if d2 < best_dist_sq:
+                best_dist_sq = d2
+                best_index = idx
+        return best_index, math.sqrt(best_dist_sq)
 
     def _trim_path_from_projection(self, leader_path: Path, odom: Odometry) -> Optional[Path]:
         if leader_path is None or not leader_path.poses:

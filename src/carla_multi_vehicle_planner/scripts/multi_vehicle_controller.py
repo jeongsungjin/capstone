@@ -38,6 +38,8 @@ class MultiVehicleController:
         self.max_steer = rospy.get_param("~max_steer", 1.0)
         self.target_speed = rospy.get_param("~target_speed", 3.0)
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
+        # Target selection policy: use arc-length along path (preserves waypoint order)
+        self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
 
         # Safety stop parameters (area-limited)
         self.enable_safety_stop = bool(rospy.get_param("~enable_safety_stop", True))
@@ -490,28 +492,45 @@ class MultiVehicleController:
         if not path or position is None or orientation is None:
             return None, None
 
-        index = state["current_index"]
         x = position.x
         y = position.y
         yaw = quaternion_to_yaw(orientation)
 
-        while index < len(path):
-            px, py = path[index]
-            if math.hypot(px - x, py - y) > self.lookahead_distance * 0.5:
-                break
-            index += 1
-        state["current_index"] = min(index, len(path) - 1)
-
         target = None
-        for offset in range(len(path)):
-            candidate_index = (state["current_index"] + offset) % len(path)
-            px, py = path[candidate_index]
-            dist = math.hypot(px - x, py - y)
-            if dist >= self.lookahead_distance:
-                target = (px, py)
-                break
-        if target is None:
-            target = path[-1]
+        if self.target_select_by_arclength and state.get("s_profile"):
+            # Choose the point whose arc-length >= s_now + lookahead_distance
+            s_profile = state["s_profile"]
+            s_now = float(state.get("progress_s", 0.0))
+            s_target = s_now + float(self.lookahead_distance)
+            # Binary search could be used; linear scan is fine for typical sizes
+            target_idx = None
+            for i, s in enumerate(s_profile):
+                if s >= s_target:
+                    target_idx = i
+                    break
+            if target_idx is None:
+                target_idx = len(path) - 1
+            tx, ty = path[target_idx]
+            target = (tx, ty)
+            state["current_index"] = target_idx
+        else:
+            # Fallback: distance-based selection forward from current_index
+            index = state["current_index"]
+            while index < len(path):
+                px, py = path[index]
+                if math.hypot(px - x, py - y) > self.lookahead_distance * 0.5:
+                    break
+                index += 1
+            state["current_index"] = min(index, len(path) - 1)
+            for offset in range(len(path)):
+                candidate_index = (state["current_index"] + offset) % len(path)
+                px, py = path[candidate_index]
+                dist = math.hypot(px - x, py - y)
+                if dist >= self.lookahead_distance:
+                    target = (px, py)
+                    break
+            if target is None:
+                target = path[-1]
 
         tx, ty = target
         dx = tx - x

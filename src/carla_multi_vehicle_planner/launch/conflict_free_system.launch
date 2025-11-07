@@ -9,13 +9,13 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
-    <param name="target_speed" value="10.0" />
-    <param name="spawn_delay" value="0.8" />
+    <param name="target_speed" value="5.78" />
+    <param name="spawn_delay" value="1.0" />
     <!-- Optional: spawn-time platoon alignment -->
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
     <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
-    <param name="platoon_gap_m" value="9.0" />
+    <param name="platoon_gap_m" value="6.0" />
   </node>
 
   <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
@@ -25,7 +25,7 @@
     <param name="global_route_resolution" value="1.0" />
     <param name="path_sampling" value="0.3" />
     <param name="min_destination_distance" value="30.0" />
-    <param name="max_destination_distance" value="140.0" />
+    <param name="max_destination_distance" value="80.0" />
     <param name="destination_retry_limit" value="80" />
     <param name="start_k_candidates" value="40" />
     <param name="start_search_radius" value="5.0" />
@@ -35,7 +35,7 @@
     <param name="conflict_horizon_m" value="60.0" />
     <param name="conflict_key_resolution" value="1.0" />
     <!-- Replanning only when close to destination -->
-    <param name="replan_remaining_m" value="50.0" />
+    <param name="replan_remaining_m" value="30.0" />
     <param name="replan_interval" value="1.0" />
   </node>
 
