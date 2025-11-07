@@ -29,7 +29,7 @@ class RCCarUdpSender:
             dest_port = int(rospy.get_param(f"{base}/dest_port", 5555))
             angle_scale = float(rospy.get_param(f"{base}/angle_scale", 500.0))
             angle_clip = int(rospy.get_param(f"{base}/angle_clip", 50))
-            angle_min_abs = int(rospy.get_param(f"{base}/angle_min_abs", 8))
+            angle_min_abs = int(rospy.get_param(f"{base}/angle_min_abs", 0))
             angle_invert = bool(rospy.get_param(f"{base}/angle_invert", False))
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
