@@ -70,7 +70,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
-    <param name="target_speed" value="3.78" />
+    <param name="target_speed" value="5.78" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
     <param name="safety_x_min" value="-20.0" />
