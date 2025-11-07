@@ -76,9 +76,9 @@
     <param name="safety_x_min" value="-20.0" />
     <param name="safety_x_max" value="20.0" />
     <param name="safety_y_min" value="-32.0" />
-    <param name="safety_y_max" value="5.0" />
-    <param name="safety_distance" value="25.0" />
-    <param name="safety_front_cone_deg" value="180.0" />
+    <param name="safety_y_max" value="8.0" />
+    <param name="safety_distance" value="20.0" />
+    <param name="safety_front_cone_deg" value="140.0" />
     <param name="safety_require_closing" value="true" />
     <param name="enable_opposite_lane_ignore" value="true" />
     <!-- Controller extensions: hysteresis & external overrides & platoon priority -->
@@ -111,7 +111,7 @@
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
     <param name="desired_gap_m" value="6.0" />
     <param name="teleport_on_start" value="true" />
-    <param name="kp_gap" value="0.4" />
+    <param name="kp_gap" value="0.6" />
     <param name="kd_gap" value="0.6" />
     <param name="max_speed" value="10.0" />
   </node>

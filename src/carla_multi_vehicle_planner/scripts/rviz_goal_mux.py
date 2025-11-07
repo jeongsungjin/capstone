@@ -4,7 +4,7 @@ import threading
 
 import rospy
 from geometry_msgs.msg import PoseStamped
-from std_msgs.msg import String
+from std_msgs.msg import String, Bool
 
 
 class RvizGoalMux:
@@ -13,12 +13,15 @@ class RvizGoalMux:
         self._lock = threading.Lock()
         self._current_role = rospy.get_param("~default_vehicle", "ego_vehicle_1")
         self._publishers = {}
+        self._spawn_person_mode = False
 
         rospy.loginfo("%s: default vehicle set to %s", self._node_name, self._current_role)
 
         self._selection_sub = rospy.Subscriber(
             "/selected_vehicle", String, self._selection_callback, queue_size=1
         )
+        # When spawn-person mode is ON, do not forward RViz goals to vehicles
+        rospy.Subscriber("/spawn_person_mode", Bool, self._spawn_mode_cb, queue_size=1)
         self._goal_sub = rospy.Subscriber(
             "/move_base_simple/goal", PoseStamped, self._goal_callback, queue_size=10
         )
@@ -32,6 +35,10 @@ class RvizGoalMux:
         rospy.loginfo("%s: switched to %s", self._node_name, role)
 
     def _goal_callback(self, msg: PoseStamped) -> None:
+        # Gate forwarding if person spawn mode is active
+        if self._spawn_person_mode:
+            rospy.loginfo_throttle(1.0, "%s: spawn_person_mode ON - ignoring RViz goal forwarding", self._node_name)
+            return
         with self._lock:
             role = self._current_role
         publisher = self._get_publisher(role)
@@ -49,6 +56,10 @@ class RvizGoalMux:
                 topic = f"/override_goal/{role}"
                 self._publishers[role] = rospy.Publisher(topic, PoseStamped, queue_size=10)
             return self._publishers[role]
+
+    def _spawn_mode_cb(self, msg: Bool) -> None:
+        self._spawn_person_mode = bool(msg.data)
+        rospy.loginfo("%s: spawn_person_mode %s", self._node_name, "ON" if self._spawn_person_mode else "OFF")
 
 
 def main() -> None:

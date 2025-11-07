@@ -20,6 +20,7 @@ catkin_install_python(PROGRAMS
   scripts/occupancy_grid_publisher.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
+  scripts/rviz_person_spawner.py
   scripts/udp_ackermann_sender.py
   scripts/path_relay.py
   scripts/platoon_manager.py

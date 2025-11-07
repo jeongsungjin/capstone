@@ -16,7 +16,9 @@ class KeySelectorNode:
         self._node_name = rospy.get_name() or "key_selector"
         self._pub = rospy.Publisher("/selected_vehicle", String, queue_size=1, latch=True)
         self._e_stop_pub = rospy.Publisher("/emergency_stop", Bool, queue_size=1, latch=True)
+        self._spawn_person_pub = rospy.Publisher("/spawn_person_mode", Bool, queue_size=1, latch=True)
         self._emergency_active = False
+        self._spawn_person_active = False
         self._e_stop_timer = None
         self._e_stop_hz = float(rospy.get_param("~emergency_burst_hz", 20.0))
         # Emergency stop publishers (speed-only override)
@@ -62,6 +64,9 @@ class KeySelectorNode:
                     if key == " ":  # SPACE: toggle emergency stop
                         self._toggle_emergency()
                         continue
+                    if key.lower() == "o":  # toggle RViz person spawn mode
+                        self._toggle_spawn_person()
+                        continue
                     self._handle_key(key)
                 rate.sleep()
         except KeyboardInterrupt:
@@ -104,6 +109,14 @@ class KeySelectorNode:
                 pass
             self._stop_stop_burst()
             rospy.logwarn("%s: EMERGENCY STOP OFF", self._node_name)
+
+    def _toggle_spawn_person(self) -> None:
+        self._spawn_person_active = not self._spawn_person_active
+        try:
+            self._spawn_person_pub.publish(Bool(data=self._spawn_person_active))
+        except Exception:
+            pass
+        rospy.loginfo("%s: spawn person mode %s", self._node_name, "ON" if self._spawn_person_active else "OFF")
 
     def _start_stop_burst(self) -> None:
         if self._e_stop_timer is not None:

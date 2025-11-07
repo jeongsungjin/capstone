@@ -95,6 +95,13 @@ class MultiVehicleController:
         # Emergency stop (global)
         self.emergency_hold_sec = float(rospy.get_param("~emergency_hold_sec", 1.5))
         self._emergency_until = 0.0
+        # Person stop (spawned via rviz_person_spawner)
+        self.enable_person_stop = bool(rospy.get_param("~enable_person_stop", True))
+        self.person_stop_distance_m = float(rospy.get_param("~person_stop_distance_m", 8.0))
+        self.person_front_cone_deg = float(rospy.get_param("~person_front_cone_deg", 100.0))
+        self.person_topic = str(rospy.get_param("~person_topic", "/spawned_person"))
+        self._person_xy = None  # type: ignore
+        self._person_stamp = None  # type: ignore
         # Track per-role intersection entry order
         self.intersection_orders = {0: {}, 1: {}}
         self._intersection_counters = {0: 0, 1: 0}
@@ -136,6 +143,9 @@ class MultiVehicleController:
 
         # Global emergency stop topic
         rospy.Subscriber("/emergency_stop", Bool, self._emergency_cb, queue_size=1)
+        # Person position topic
+        if self.enable_person_stop:
+            rospy.Subscriber(self.person_topic, PoseStamped, self._person_cb, queue_size=1)
 
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / 50.0), self._control_loop)
@@ -483,6 +493,23 @@ class MultiVehicleController:
                     # Reset timers if not actively safety stopping
                     state["safety_stop_since"] = None
                     # Do not reset escape_until so window can complete
+            # Person stop: if approaching spawned person and within distance, force stop
+            if self.enable_person_stop and state.get("position") is not None and state.get("orientation") is not None and self._person_xy is not None:
+                px = float(state["position"].x)
+                py = float(state["position"].y)
+                tx, ty = self._person_xy
+                dx = tx - px
+                dy = ty - py
+                dist = math.hypot(dx, dy)
+                if dist <= max(0.0, self.person_stop_distance_m):
+                    yaw = quaternion_to_yaw(state["orientation"]) if state.get("orientation") is not None else None
+                    if yaw is not None and dist > 1e-3:
+                        fx = math.cos(yaw)
+                        fy = math.sin(yaw)
+                        cos_half = math.cos(math.radians(max(0.0, min(175.0, self.person_front_cone_deg)) / 2.0))
+                        dir_dot = (dx * fx + dy * fy) / dist
+                        if dir_dot >= cos_half:
+                            speed = 0.0
             # Global emergency stop takes precedence
             now_f = rospy.Time.now().to_sec()
             if now_f < float(self._emergency_until):
@@ -500,6 +527,14 @@ class MultiVehicleController:
             self._emergency_until = rospy.Time.now().to_sec() + max(0.1, self.emergency_hold_sec)
         else:
             self._emergency_until = 0.0
+
+    def _person_cb(self, msg: PoseStamped):
+        try:
+            self._person_xy = (float(msg.pose.position.x), float(msg.pose.position.y))
+            self._person_stamp = rospy.Time.now()
+        except Exception:
+            self._person_xy = None
+            self._person_stamp = None
 
     def _compute_control(self, state):
         path = state["path"]
