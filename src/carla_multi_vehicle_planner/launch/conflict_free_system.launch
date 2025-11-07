@@ -30,7 +30,7 @@
     <param name="start_k_candidates" value="40" />
     <param name="start_search_radius" value="5.0" />
     <param name="start_search_radius_max" value="15.0" />
-    <param name="start_heading_deg" value="30.0" />
+    <param name="start_heading_deg" value="45.0" />
     <param name="start_join_max_gap_m" value="6.0" />
     <param name="conflict_horizon_m" value="60.0" />
     <param name="conflict_key_resolution" value="1.0" />

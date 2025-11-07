@@ -71,6 +71,7 @@ class MultiVehicleSpawner:
         self.randomize_spawn = rospy.get_param("~randomize_spawn", True)
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
+        self.spawn_min_separation_m = float(rospy.get_param("~spawn_min_separation_m", 8.0))
 
         # Optional platoon spawn alignment
         self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
@@ -145,6 +146,17 @@ class MultiVehicleSpawner:
             for transform, spawn_index in pick_spawn_transform(
                 self.world, seed_hint, self.spawn_retry_limit
             ):
+                # Enforce minimum separation from previously spawned vehicles
+                too_close = False
+                for _role, (prev_tf, _idx) in self.spawned_transforms.items():
+                    dx = transform.location.x - prev_tf.location.x
+                    dy = transform.location.y - prev_tf.location.y
+                    dz = transform.location.z - prev_tf.location.z
+                    if math.sqrt(dx * dx + dy * dy + dz * dz) < max(0.0, self.spawn_min_separation_m):
+                        too_close = True
+                        break
+                if too_close:
+                    continue
                 vehicle = self.world.try_spawn_actor(blueprint, transform)
                 if vehicle is not None:
                     chosen_transform = transform

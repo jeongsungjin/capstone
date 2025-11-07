@@ -587,6 +587,22 @@ class MultiAgentConflictFreePlanner:
             if len(points) < 2:
                 continue
             return dest_index, route, points
+        # Fallback: broaden distance bounds deterministically over all spawn points
+        ordered = sorted(range(len(self.spawn_points)), key=lambda i: start_loc.distance(self.spawn_points[i].location))
+        for dest_index in ordered:
+            if dest_index in self.active_destinations:
+                continue
+            dest_loc = self.spawn_points[dest_index].location
+            euclid = start_loc.distance(dest_loc)
+            if euclid < max(5.0, self.min_destination_distance * 0.5) or euclid > max(self.max_destination_distance * 2.0, self.min_destination_distance + 10.0):
+                continue
+            route = self.route_planner.trace_route(start_loc, dest_loc)
+            if not route or len(route) < 2:
+                continue
+            points = self._route_to_points(route)
+            if len(points) < 2:
+                continue
+            return dest_index, route, points
         return None, None, None
 
     def _key_for_waypoint(self, wp: carla.Waypoint) -> Tuple[int, int]:

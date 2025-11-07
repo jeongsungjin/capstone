@@ -74,10 +74,11 @@ class RCCarUdpSender:
         xy_speed = int(round(speed))
         xy_speed = max(-50, min(50, xy_speed))
 
-        rospy.loginfo_throttle(
-            0.2,
-            f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed}, steer={steer:.3f}rad ({math.degrees(steer):.1f}°)",
-        )
+        if xy_angle < 5 and xy_angle > -5:
+            rospy.loginfo_throttle(
+                0.2,
+                f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed}, steer={steer:.3f}rad ({math.degrees(steer):.1f}°)",
+            )
 
         pkt = struct.pack(FMT, xy_angle, xy_speed, int(v["seq"]) & 0xFFFFFFFF)
         try:

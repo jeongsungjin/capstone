@@ -43,6 +43,7 @@ class PlatoonManager:
         self.accel_limit_mps2 = float(rospy.get_param("~accel_limit_mps2", 1.2))
         self.path_publish_min_dt = float(rospy.get_param("~path_publish_min_dt", 0.6))
         self.path_publish_min_index_advance = int(rospy.get_param("~path_publish_min_index_advance", 6))
+        # (simplified) no rolling tail / no grace switching
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
@@ -73,12 +74,14 @@ class PlatoonManager:
         rospy.Timer(rospy.Duration(1.0), self._refresh_actors, oneshot=True)
         rospy.Timer(rospy.Duration(2.0), self._maybe_teleport_followers, oneshot=True)
         self._leader_path: Optional[Path] = None
+        self._leader_path_updated_at: float = 0.0
         self._cmd_cache: Dict[str, AckermannDrive] = {}
         self._last_speed_cmd: Dict[str, float] = {}
         self._last_cmd_time: Dict[str, float] = {}
         self._last_path_idx: Dict[str, int] = {}
         self._last_path_pub_time: Dict[str, float] = {}
         self._path_initialized: Dict[str, bool] = {r: False for r in self.follower_roles}
+        # no last-valid hold in simplified version
 
     # ----------------- CARLA helpers -----------------
     def _refresh_actors(self, _evt=None) -> None:
@@ -127,9 +130,10 @@ class PlatoonManager:
 
     # ----------------- ROS callbacks -----------------
     def _path_cb(self, msg: Path) -> None:
-        # Cache leader path; follower paths will be trimmed per follower in _tick
+        # Simplified: cache leader path and immediately seed followers
         self._leader_path = msg
-        # Initial publish: immediately seed followers with leader path once available
+        self._leader_path_updated_at = rospy.Time.now().to_sec()
+        # Immediately seed followers with trimmed leader path
         for role, pub in self.path_pubs.items():
             if role not in self._path_initialized:
                 self._path_initialized[role] = False
@@ -137,7 +141,7 @@ class PlatoonManager:
             if odom is None:
                 continue
             follower_path = self._trim_path_from_projection(self._leader_path, odom)
-            if follower_path is not None and follower_path.poses:
+            if follower_path is not None and len(follower_path.poses) >= 1:
                 pub.publish(follower_path)
                 idx = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
                 now = rospy.Time.now().to_sec()
@@ -181,9 +185,9 @@ class PlatoonManager:
                 now = rospy.Time.now().to_sec()
                 last_idx = int(self._last_path_idx.get(role, -9999))
                 last_t = float(self._last_path_pub_time.get(role, 0.0))
-                if (dist <= max(0.0, self.path_switch_max_dist_m)) and ((idx - last_idx) >= max(1, self.path_publish_min_index_advance) or (now - last_t) >= self.path_publish_min_dt):
+                if ((idx - last_idx) >= max(1, self.path_publish_min_index_advance)) or ((now - last_t) >= self.path_publish_min_dt):
                     follower_path = self._trim_path_from_projection(self._leader_path, odom)
-                    if follower_path is not None:
+                    if follower_path is not None and follower_path.poses:
                         pub.publish(follower_path)
                         self._last_path_idx[role] = idx
                         self._last_path_pub_time[role] = now
@@ -240,9 +244,8 @@ class PlatoonManager:
             if speed > self.max_speed:
                 speed = self.max_speed
             cmd = AckermannDrive()
-            # Keep steering aligned with leader command to minimize oscillations; controller will use its own steering
-            leader_cmd = self._cmd_cache.get(self.leader_role)
-            cmd.steering_angle = float(leader_cmd.steering_angle) if leader_cmd is not None else 0.0
+            # Speed-only override: do not override steering
+            cmd.steering_angle = 0.0
             cmd.speed = float(speed)
             pub = self.override_pubs.get(role)
             if pub is not None:
@@ -276,9 +279,16 @@ class PlatoonManager:
 
     @staticmethod
     def _project_on_path(path: Path, px: float, py: float) -> Tuple[int, float]:
+        n = len(path.poses)
+        if n == 0:
+            return 0, float("inf")
+        if n == 1:
+            x = path.poses[0].pose.position.x
+            y = path.poses[0].pose.position.y
+            return 0, math.hypot(px - x, py - y)
         best_dist_sq = float("inf")
         best_index = 0
-        for idx in range(len(path.poses) - 1):
+        for idx in range(n - 1):
             x1 = path.poses[idx].pose.position.x
             y1 = path.poses[idx].pose.position.y
             x2 = path.poses[idx + 1].pose.position.x

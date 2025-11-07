@@ -39,32 +39,32 @@
     <!-- Per-vehicle calibration (defaults). Override as needed per car. -->
     <param name="vehicles/ego_vehicle_1/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_1/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_1/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
 
     <param name="vehicles/ego_vehicle_2/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_2/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_2/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_2/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_2/angle_invert" value="false" />
 
     <param name="vehicles/ego_vehicle_3/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_3/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_3/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_3/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_3/angle_invert" value="false" />
 
     <param name="vehicles/ego_vehicle_4/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_4/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_4/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_4/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_4/angle_invert" value="false" />
 
     <param name="vehicles/ego_vehicle_5/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_5/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_5/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_5/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_5/angle_invert" value="false" />
 
     <param name="vehicles/ego_vehicle_6/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_6/angle_clip" value="50" />
-    <param name="vehicles/ego_vehicle_6/angle_min_abs" value="8" />
+    <param name="vehicles/ego_vehicle_6/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_6/angle_invert" value="false" />
   </node>
 
