@@ -47,7 +47,7 @@ Model::Model(const std::string& pkg_path, const int batch_size):
     
     buffers_ = std::make_unique<samplesCommon::BufferManager>(engine_, /*batchSize=*/0, context_.get());
     CHECK(cudaStreamCreate(&stream_));
-
+    
     cv_stream_ = cv::cuda::StreamAccessor::wrapStream(stream_);
 }
 
@@ -79,7 +79,7 @@ int Model::preprocess(const std::vector<std::shared_ptr<cv::Mat>>& images){
 
     for (int b = 0; b < effective_batch; ++b) {
         cv::cuda::GpuMat d_img, d_resized;
-        d_img.upload(*images[b]);
+        d_img.upload(*images[b], cv_stream_);
         cv::cuda::resize(d_img, d_resized, cv::Size(W, H), 0, 0, cv::INTER_LINEAR, cv_stream_);
 
         cv::cuda::GpuMat roi = d_stacked.rowRange(b * H, (b + 1) * H).colRange(0, W);
@@ -162,6 +162,7 @@ xt::xarray<float> Model::__toXTensor(const char* tensor_name) {
 void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
     // nms_iou = 0.2
     // topk = 50
+    // (float conf_th=0.15, float nms_iou=0.2, int topk=50);
 
     std::vector<DetectionInfo>(batch_size_).swap(detections_info_);
 
@@ -173,10 +174,9 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
         auto reg = __toXTensor(name_iter[l][REG]);
         auto obj = __toXTensor(name_iter[l][OBJ]);
         auto cls = __toXTensor(name_iter[l][CLS]);
-        
-        for(int b = 0; b < batch_size_; b++){
-            int stride = strides_[l];
+        float stride = static_cast<float>(strides_[l]);
 
+        for(int b = 0; b < batch_size_; b++){
             auto obj_view = xt::view(obj, b, 0, xt::all(), xt::all());
             
             // @TODO 추후 multi class 추가 시 업데이트 해야 함.
@@ -327,12 +327,12 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
 
             float width  = rect.size.width;
             float height = rect.size.height;
-            float angle  = rect.angle;
+            float angle = rect.angle;
 
-            if(width < 0.3 || height < 0.3){
+            if(width < 3 || height < 3){
                 continue;
             }
-
+            
             if(width * height < 20.0){
                 continue;
             }

@@ -27,17 +27,22 @@ public:
     ~PerceptionNode();
 
 private:
+    void imageCallback(const sensor_msgs::ImageConstPtr& img1);
     void imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2);
     void publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs);
     void publishBEVInfo();
 
 private:
     ros::NodeHandle nh_;
+    
+    ros::Subscriber image_sub_;
+    
     // For now we support 2 synced image topics (batch=2)
     message_filters::Subscriber<sensor_msgs::Image> image_sub1_;
     message_filters::Subscriber<sensor_msgs::Image> image_sub2_;
     std::unique_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
     
+    ros::Publisher bev_info_pub_;
     std::vector<ros::Publisher> viz_result_pubs_;
     
     Model perception_model_;
