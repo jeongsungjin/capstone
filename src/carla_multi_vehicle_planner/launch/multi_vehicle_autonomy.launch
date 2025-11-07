@@ -8,10 +8,6 @@
       <param name="enable_autopilot" value="false" />
       <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
       <param name="target_speed" value="10.0" />
-      <!-- Reset CARLA world (and actor ID counter) at startup -->
-      <param name="reset_world_on_start" value="true" />
-      <!-- Reset CARLA world on shutdown so IDs start from 1 next run -->
-      <param name="reset_world_on_shutdown" value="true" />
     </node>
 
     <node pkg="carla_multi_vehicle_planner" type="networkx_path_planner.py" name="networkx_path_planner" output="screen">
@@ -59,5 +55,10 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="life_time" value="10.0" />
     <param name="override_to_path_window" value="3.0" />
+  </node>
+
+  <!-- Dedicated shutdown/reset node (reload CARLA world on ROS shutdown) -->
+  <node pkg="carla_multi_vehicle_planner" type="carla_shutdown.py" name="carla_shutdown" output="screen">
+    <param name="reset_world_on_shutdown" value="true" />
   </node>
 </launch>

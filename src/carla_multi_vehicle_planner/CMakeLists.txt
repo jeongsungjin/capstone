@@ -26,4 +26,5 @@ catkin_install_python(PROGRAMS
   scripts/carla_cleanup.py
   scripts/udp_recv.py
   scripts/path_visualization.py
+  scripts/carla_shutdown.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
