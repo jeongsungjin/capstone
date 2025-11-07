@@ -271,12 +271,56 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
             topk
         );
 
+        std::vector<bool> is_valid(batch_detections_indices_.size(), true);
+
+        for(auto idx1: batch_detections_indices_){
+            if(!is_valid[idx1]) continue;
+            for(auto idx2: batch_detections_indices_){
+                if(idx1 == idx2) continue;
+                if(!is_valid[idx2]) continue;
+
+                const auto& bbox1 = bboxes_for_nms[b][idx1];
+                const auto& bbox2 = bboxes_for_nms[b][idx2];
+
+                int x1 = std::max(bbox1.x, bbox2.x);
+                int y1 = std::max(bbox1.y, bbox2.y);
+                int x2 = std::min(bbox1.x + bbox1.width,  bbox2.x + bbox2.width);
+                int y2 = std::min(bbox1.y + bbox1.height, bbox2.y + bbox2.height);
+
+                int interWidth  = std::max(0, x2 - x1);
+                int interHeight = std::max(0, y2 - y1);
+                int interArea   = interWidth * interHeight;
+
+                // 각 박스의 면적
+                int areaA = bbox1.width * bbox1.height;
+                int areaB = bbox2.width * bbox2.height;
+
+                double minArea = static_cast<double>(std::min(areaA, areaB));
+                double IoS = static_cast<double>(interArea) / minArea;       
+                
+                if(IoS > 0.7){
+                    if(scores_for_nms[b][idx1] >= scores_for_nms[b][idx2]){
+                        is_valid[idx2] = false;
+                    }
+                    
+                    else{
+                        is_valid[idx1] = false;
+                    }
+                }
+            }
+        }
+
         for(auto idx: batch_detections_indices_){
+            if(!is_valid[idx]) continue;
+
+            const auto& poly4 = batch_results[b].poly4s[idx];
+            const auto& score = batch_results[b].scores[idx];
+
             std::vector<cv::Point2f> pts = {
-                cv::Point2f(batch_results[b].poly4s[idx](0, 0), batch_results[b].poly4s[idx](0, 1)),
-                cv::Point2f(batch_results[b].poly4s[idx](1, 0), batch_results[b].poly4s[idx](1, 1)),
-                cv::Point2f(batch_results[b].poly4s[idx](2, 0), batch_results[b].poly4s[idx](2, 1)),
-                cv::Point2f(batch_results[b].poly4s[idx](3, 0), batch_results[b].poly4s[idx](3, 1))
+                cv::Point2f(poly4(0, 0), poly4(0, 1)),
+                cv::Point2f(poly4(1, 0), poly4(1, 1)),
+                cv::Point2f(poly4(2, 0), poly4(2, 1)),
+                cv::Point2f(poly4(3, 0), poly4(3, 1))
             };
 
             cv::RotatedRect rect = cv::minAreaRect(pts);
