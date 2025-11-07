@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_filters
   nodelet
   pluginlib
+  capstone_msgs
 )
 
 find_package(OpenCV 4.10 REQUIRED)
@@ -35,6 +36,7 @@ link_directories(/home/ctrl/miniconda3/envs/xtensor/include)
 include_directories(/home/ctrl/miniconda3/envs/xtensor/include)
 
 find_package(BLAS REQUIRED)
+find_package(LAPACK REQUIRED)
 
 catkin_package(
 #  INCLUDE_DIRS include
@@ -61,6 +63,7 @@ add_executable(perception
   src/timer.cpp
   src/timer_logger.cpp
   src/Model.cpp
+  include/nvidia_helper/logger.cpp
 )
 
 target_link_libraries(perception 
@@ -68,10 +71,13 @@ target_link_libraries(perception
   nvinfer
   nvinfer_plugin
   cudart
-  ${BLAS_LIBRARIES}
+  # ${BLAS_LIBRARIES}
+  ${LAPACK_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${CUDA_LIBRARIES}
+  -lblas
+  -lcblas
 )
 
 add_dependencies(perception ${catkin_EXPORTED_TARGETS})
@@ -83,6 +89,7 @@ add_library(perception_nodelet SHARED
   src/timer.cpp
   src/timer_logger.cpp
   src/Model.cpp
+  include/nvidia_helper/logger.cpp
 )
 
 target_link_libraries(perception_nodelet 
@@ -90,10 +97,13 @@ target_link_libraries(perception_nodelet
   nvinfer
   nvinfer_plugin
   cudart
-  ${BLAS_LIBRARIES}
+  # ${BLAS_LIBRARIES}
+  ${LAPACK_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
   ${CUDA_LIBRARIES}
+  -lblas
+  -lcblas
 )
 
 add_dependencies(perception_nodelet ${catkin_EXPORTED_TARGETS})

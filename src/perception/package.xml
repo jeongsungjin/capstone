@@ -24,6 +24,7 @@
   <exec_depend>pluginlib</exec_depend>
 
   <depend>roslib</depend>
+  <depend>capstone_msgs</depend>
   <depend>message_filters</depend>
 
   <!-- The export tag contains other, unspecified, tags -->
