@@ -7,7 +7,8 @@ import struct
 import rospy
 from ackermann_msgs.msg import AckermannDrive
 
-FMT = "!iiI"  # int angle, int speed, uint32 seq
+FMT_INT = "!iiI"  # int angle, int speed, uint32 seq
+FMT_FLOAT = "!fiI"  # float angle(rad), int speed, uint32 seq
 
 
 class RCCarUdpSender:
@@ -18,6 +19,10 @@ class RCCarUdpSender:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.num_vehicles = max(1, min(6, self.num_vehicles))
 
+        # Packet mode
+        self.send_angle_as_float = bool(rospy.get_param("~send_angle_as_float", False))
+        self.pkt_fmt = FMT_FLOAT if self.send_angle_as_float else FMT_INT
+
         # Per-vehicle state
         self.vehicles = {}
 
@@ -27,10 +32,12 @@ class RCCarUdpSender:
             topic = rospy.get_param(f"{base}/topic", f"/carla/{role}/vehicle_control_cmd")
             dest_ip = rospy.get_param(f"{base}/dest_ip", "127.0.0.1")
             dest_port = int(rospy.get_param(f"{base}/dest_port", 5555))
-            angle_scale = float(rospy.get_param(f"{base}/angle_scale", 500.0))
+            angle_scale = float(rospy.get_param(f"{base}/angle_scale", 1.0))
             angle_clip = int(rospy.get_param(f"{base}/angle_clip", 50))
             angle_min_abs = int(rospy.get_param(f"{base}/angle_min_abs", 0))
             angle_invert = bool(rospy.get_param(f"{base}/angle_invert", False))
+            angle_center_rad = float(rospy.get_param(f"{base}/angle_center_rad", 0.0))
+            speed_scale = float(rospy.get_param(f"{base}/speed_scale", 1.0))
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
@@ -46,12 +53,14 @@ class RCCarUdpSender:
                 "clip": angle_clip,
                 "min_abs": angle_min_abs,
                 "invert": angle_invert,
+                "center_rad": angle_center_rad,
+                "speed_scale": speed_scale,
                 "seq": 0,
             }
             rospy.Subscriber(topic, AckermannDrive, self._cb, callback_args=role, queue_size=10)
             rospy.loginfo(
                 f"[RC-UDP] ready: {role} topic={topic} -> {dest_ip}:{dest_port} "
-                f"scale={angle_scale} clip={angle_clip} min_abs={angle_min_abs} invert={angle_invert}"
+                f"mode={'float(rad)' if self.send_angle_as_float else 'int(scaled)'} scale={angle_scale} clip={angle_clip} min_abs={angle_min_abs} invert={angle_invert}"
             )
 
         rospy.on_shutdown(self._shutdown)
@@ -64,23 +73,35 @@ class RCCarUdpSender:
         steer = float(msg.steering_angle)
         speed = float(msg.speed)
 
-        xy_angle = int(round(steer * float(v["scale"])))
-        if 0 < abs(xy_angle) < int(v["min_abs"]):
-            xy_angle = int(v["min_abs"]) if xy_angle > 0 else -int(v["min_abs"])
-        if bool(v["invert"]):
-            xy_angle = -xy_angle
-        xy_angle = max(-int(v["clip"]), min(int(v["clip"]), xy_angle))
-
-        xy_speed = int(round(speed))
-        xy_speed = max(-50, min(50, xy_speed))
-
-        if xy_angle < 5 and xy_angle > -5:
+        if self.send_angle_as_float:
+            # Send pure radians as float (apply only invert if requested)
+            send_angle = steer + float(v["center_rad"])
+            if bool(v["invert"]):
+                send_angle = -send_angle
+            xy_speed = int(round(speed * float(v["speed_scale"])))
+            xy_speed = max(-50, min(50, xy_speed))
             rospy.loginfo_throttle(
                 0.2,
-                f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed}, steer={steer:.3f}rad ({math.degrees(steer):.1f}°)",
+                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed}",
             )
-
-        pkt = struct.pack(FMT, xy_angle, xy_speed, int(v["seq"]) & 0xFFFFFFFF)
+            pkt = struct.pack(self.pkt_fmt, float(send_angle), xy_speed, int(v["seq"]) & 0xFFFFFFFF)
+        else:
+            # Legacy: send scaled integer angle
+            raw = (steer + float(v["center_rad"])) * float(v["scale"])
+            xy_angle = int(round(raw))
+            if 0 < abs(xy_angle) < int(v["min_abs"]):
+                xy_angle = int(v["min_abs"]) if xy_angle > 0 else -int(v["min_abs"])
+            if bool(v["invert"]):
+                xy_angle = -xy_angle
+            xy_angle = max(-int(v["clip"]), min(int(v["clip"]), xy_angle))
+            xy_speed = int(round(speed * float(v["speed_scale"])))
+            xy_speed = max(-50, min(50, xy_speed))
+            if xy_angle < 5 and xy_angle > -5:
+                rospy.loginfo_throttle(
+                    0.2,
+                    f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed}, steer={steer:.3f}rad ({math.degrees(steer):.1f}°)",
+                )
+            pkt = struct.pack(self.pkt_fmt, xy_angle, xy_speed, int(v["seq"]) & 0xFFFFFFFF)
         try:
             v["sock"].sendto(pkt, v["dest"])
             v["seq"] = int(v["seq"]) + 1

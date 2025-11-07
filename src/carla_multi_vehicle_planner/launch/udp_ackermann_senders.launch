@@ -5,7 +5,7 @@
   <!-- Per-vehicle network args (override as needed). Up to 6 vehicles supported -->
   <arg name="vehicle_1_ip" default="10.15.129.51" />
   <arg name="vehicle_2_ip" default="10.15.129.54" />
-  <arg name="vehicle_3_ip" default="10.15.129.55" />
+  <arg name="vehicle_3_ip" default="10.15.129.56" />
   <arg name="vehicle_4_ip" default="127.0.0.1" />
   <arg name="vehicle_5_ip" default="127.0.0.1" />
   <arg name="vehicle_6_ip" default="127.0.0.1" />
@@ -13,6 +13,7 @@
   <node pkg="carla_multi_vehicle_planner" type="udp_ackermann_sender.py" name="udp_ackermann_sender" output="screen">
     <param name="bind_ip" value="$(arg bind_ip)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="send_angle_as_float" value="true" />
 
     <!-- Per-vehicle topics (defaults align with CARLA bridge). Override if needed. -->
     <param name="vehicles/ego_vehicle_1/topic" value="/carla/ego_vehicle_1/vehicle_control_cmd" />
@@ -37,35 +38,47 @@
     <param name="vehicles/ego_vehicle_6/dest_port" value="5555" />
 
     <!-- Per-vehicle calibration (defaults). Override as needed per car. -->
-    <param name="vehicles/ego_vehicle_1/angle_scale" value="500.0" />
+    <param name="vehicles/ego_vehicle_1/angle_scale" value="1.5" />
     <param name="vehicles/ego_vehicle_1/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.075" />
+    <param name="vehicles/ego_vehicle_1/speed_scale" value="1.0" />
 
-    <param name="vehicles/ego_vehicle_2/angle_scale" value="500.0" />
+    <param name="vehicles/ego_vehicle_2/angle_scale" value="1.5" />
     <param name="vehicles/ego_vehicle_2/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_2/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_2/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_2/angle_center_rad" value="-0.15" />
+    <param name="vehicles/ego_vehicle_2/speed_scale" value="1.4" />
 
-    <param name="vehicles/ego_vehicle_3/angle_scale" value="500.0" />
+    <param name="vehicles/ego_vehicle_3/angle_scale" value="1.5" />
     <param name="vehicles/ego_vehicle_3/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_3/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_3/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_3/angle_center_rad" value="-0.1" />
+    <param name="vehicles/ego_vehicle_3/speed_scale" value="1.0" />
 
     <param name="vehicles/ego_vehicle_4/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_4/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_4/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_4/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_4/angle_center_rad" value="0.0" />
+    <param name="vehicles/ego_vehicle_4/speed_scale" value="1.0" />
 
     <param name="vehicles/ego_vehicle_5/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_5/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_5/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_5/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_5/angle_center_rad" value="0.0" />
+    <param name="vehicles/ego_vehicle_5/speed_scale" value="1.0" />
 
     <param name="vehicles/ego_vehicle_6/angle_scale" value="500.0" />
     <param name="vehicles/ego_vehicle_6/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_6/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_6/angle_invert" value="false" />
+    <param name="vehicles/ego_vehicle_6/angle_center_rad" value="0.0" />
+    <param name="vehicles/ego_vehicle_6/speed_scale" value="1.0" />
   </node>
 
 </launch>

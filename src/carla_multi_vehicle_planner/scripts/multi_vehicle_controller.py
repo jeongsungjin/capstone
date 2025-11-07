@@ -41,6 +41,7 @@ class MultiVehicleController:
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
         # Target selection policy: use arc-length along path (preserves waypoint order)
         self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
+        # (removed) projection stabilization params
 
         # Safety stop parameters (area-limited)
         self.enable_safety_stop = bool(rospy.get_param("~enable_safety_stop", True))
@@ -373,10 +374,7 @@ class MultiVehicleController:
                 best_t = t
         if best_index is None:
             return None
-        seg_length = math.hypot(
-            path[best_index + 1][0] - path[best_index][0],
-            path[best_index + 1][1] - path[best_index][1],
-        )
+        seg_length = math.hypot(path[best_index + 1][0] - path[best_index][0], path[best_index + 1][1] - path[best_index][1])
         if seg_length < 1e-6:
             s_now = s_profile[best_index]
         else:
