@@ -45,88 +45,116 @@ def get_projection_matrix(fx, fy, cx, cy, cam_pos, cam_rot):
 
 cam_infos = {
     1: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     2: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     3: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     4: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     5: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     6: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     7: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     8: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     9: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     10: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     11: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     12: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     13: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
     },
 
     14: {
+        'ip': '192.168.0.20',
+        'frame_id': 'ipcam_1',
         'intrin': [653.54682, 653.54682, 640.0, 360.0], # fx, fy, cx, cy
         'pos'   : [0.38, -40.4, 8.55],                  # x, y, z
         'rot'   : [0.0, 24.34, 68.85]                   # roll, pitch, yaw
-    }
+    },
 }
 
 config_dir = '/home/ctrl/capstone/src/ip_camera/config'
@@ -152,6 +180,9 @@ for cam_id in range(1, 15):
     H = np.linalg.inv(homograpy)
     H /= H[2,2]
 
+    data['camera_id'] = cam_id
+    data['frame_id'] = f'ipcam_{cam_id}'
+    data['ip'] = cam_infos[cam_id]['ip']
     data['H'] = [[float(x) for x in row] for row in H]
 
     with open(yaml_path, 'w') as f:
