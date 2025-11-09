@@ -31,6 +31,11 @@ cameras:
     stream_path: "/stream2"
     topic_name: "/camera/camera_1/image_raw"
     frame_id: "camera_1_link"
+    # Perception homography (image -> world); ip_camera node ignores this
+    H:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
     
   camera_2:
     ip: "192.168.0.195"
@@ -40,6 +45,11 @@ cameras:
     stream_path: "/stream2"
     topic_name: "/camera/camera_2/image_raw"
     frame_id: "camera_2_link"
+    # Perception homography (image -> world); ip_camera node ignores this
+    H:
+      - [1.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0]
+      - [0.0, 0.0, 1.0]
 
 # 로깅 설정
 logging:

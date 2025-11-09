@@ -9,3 +9,9 @@ transport: "tcp"
 width: 1280
 height: 720
 publish_rate: 60.0
+
+# Perception homography (image -> world); not used by ip_camera node
+H:
+	- [1.0, 0.0, 0.0]
+	- [0.0, 1.0, 0.0]
+	- [0.0, 0.0, 1.0]
