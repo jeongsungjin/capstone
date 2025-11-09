@@ -1,14 +1,6 @@
 ip: 192.168.0.21
-port: 554
-username: admin
-password: zjsxmfhf
-topic_name: /ip_cam/cam_2/image_raw
-camera_id: 2
-frame_id: camera_2_link
-transport: tcp
-width: 1280
-height: 720
-publish_rate: 60.0
+camera_id: 1
+frame_id: camera_1_link
 H:
 - - 0.13597870891738845
   - 0.0157776440621783

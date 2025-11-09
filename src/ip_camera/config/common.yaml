@@ -1,0 +1,8 @@
+port: 554
+username: admin
+password: zjsxmfhf
+topic_name_prefix: /ip_cam/cam_
+transport: tcp
+width: 1280
+height: 720
+publish_rate: 60.0
