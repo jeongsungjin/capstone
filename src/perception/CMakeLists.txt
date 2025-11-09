@@ -82,6 +82,31 @@ target_link_libraries(perception
 
 add_dependencies(perception ${catkin_EXPORTED_TARGETS})
 
+add_executable(perception_single
+  src/perception_single.cpp
+  src/perception_single_node.cpp
+  src/timer.cpp
+  src/timer_logger.cpp
+  src/Model.cpp
+  include/nvidia_helper/logger.cpp
+)
+
+target_link_libraries(perception_single 
+  preprocess_cuda
+  nvinfer
+  nvinfer_plugin
+  cudart
+  # ${BLAS_LIBRARIES}
+  ${LAPACK_LIBRARIES}
+  ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+  ${CUDA_LIBRARIES}
+  -lblas
+  -lcblas
+)
+
+add_dependencies(perception_single ${catkin_EXPORTED_TARGETS})
+
 # Nodelet library (reuse sources except main)
 add_library(perception_nodelet SHARED
   src/perception_nodelet.cpp
