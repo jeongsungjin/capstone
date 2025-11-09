@@ -1,16 +1,21 @@
-ip: "192.168.0.20"
+ip: 192.168.0.20
 port: 554
-username: "admin"
-password: "zjsxmfhf"
-topic_name: "/ip_cam/cam_1/image_raw"
+username: admin
+password: zjsxmfhf
+topic_name: /ip_cam/cam_1/image_raw
 camera_id: 1
-frame_id: "camera_1_link"
-transport: "tcp"
+frame_id: camera_1_link
+transport: tcp
 width: 1280
 height: 720
 publish_rate: 60.0
-# Perception homography (image -> world); not used by ip_camera node
 H:
-	- [1.0, 0.0, 0.0]
-	- [0.0, 1.0, 0.0]
-	- [0.0, 0.0, 1.0]
+- - 0.13597870891738845
+  - 0.0157776440621783
+  - -125.77649254464309
+- - -0.05260619503552321
+  - 0.6837350441029794
+  - -107.87721467021635
+- - -2.168404344971009e-19
+  - -0.015536914507295923
+  - 1.0
