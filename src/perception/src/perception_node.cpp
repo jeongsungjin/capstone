@@ -25,61 +25,54 @@
 #include <chrono>
 
 PerceptionNode::PerceptionNode(
-    const std::string& pkg_path, 
-    const std::string& image_topic_name,
-    const int batch_size
+    const std::string& pkg_path, const int batch_size
 ): nh_("~"), perception_model_(pkg_path, batch_size)
 {
-    // 현재는 2개 이미지 동기화만 지원합니다.
-    if (batch_size != 1) {
+    if (batch_size != 2 && batch_size != 4) {
         ROS_WARN("PerceptionNode currently supports batch_size=2 for synchronized topics. Using first 2.");
     }
 
-    image_sub_ = nh_.subscribe<sensor_msgs::Image>(
-        image_topic_name + std::string("1/image_raw"), 
-        1, 
-        &PerceptionNode::imageCallback, 
-        this
+    bev_info_pub_ = nh_.advertise<capstone_msgs::BEVInfo>("bev_info", 1);
+
+    std::string image_topic_prefix;
+    ros::param::param<std::string>(
+        "~image_topic_prefix", image_topic_prefix, "/camera/image_raw"
     );
 
-    // Initialize subscribers directly (non-copyable)
-    // const int queue_size = 5;
-    // image_sub1_.subscribe(nh_, image_topic_name + std::string("1/image_raw"), queue_size);
-    // image_sub2_.subscribe(nh_, image_topic_name + std::string("2/image_raw"), queue_size);
-
-    // // Synchronizer must be constructed with policy and subscribers
-    // sync_ = std::make_unique<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(queue_size), image_sub1_, image_sub2_);
-    // using namespace boost::placeholders;
-    // sync_->registerCallback(boost::bind(&PerceptionNode::imageCallback, this, _1, _2));
-
-    // Visualization publishers (2 outputs)
-
-    bev_info_pub_ = nh_.advertise<capstone_msgs::BEVInfo>("bev_info", 1);
-    viz_result_pubs_.emplace_back(nh_.advertise<sensor_msgs::Image>("viz_result_1", 1));
-    viz_result_pubs_.emplace_back(nh_.advertise<sensor_msgs::Image>("viz_result_2", 1));
-}
-
-void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1){
-    cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
-    std::shared_ptr<cv::Mat> img1_mat_ptr = std::make_shared<cv::Mat>(cv_ptr1->image);
-
-    std::vector<std::shared_ptr<cv::Mat>> img_batch;
-    img_batch.emplace_back(img1_mat_ptr);
-
-    int ret = perception_model_.preprocess(img_batch);
-    if (ret != 0) {
-        std::cerr << "Preprocessing failed!" << std::endl;
-        return;
+    const int queue_size = 5;
+    std::vector<ros::Publisher>(batch_size).swap(viz_result_pubs_);
+    std::vector<message_filters::Subscriber<sensor_msgs::Image>>(batch_size).swap(image_subs_);
+    for(int b = 0; b < batch_size; b++){
+        viz_result_pubs_[b] = nh_.advertise<sensor_msgs::Image>("viz_result_" + std::to_string(b + 1), 1);
+        image_subs_[b].subscribe(nh_, image_topic_prefix + std::to_string(b + 1) + "/image_raw", queue_size);
     }
+    
+    if(batch_size == 2){
+        sync2_ = std::make_unique<message_filters::Synchronizer<SyncPolicy2>>(
+            SyncPolicy2(queue_size), 
+            image_subs_[0], 
+            image_subs_[1]
+        );
 
-    perception_model_.inference();
-    perception_model_.postprocess();
+        using namespace boost::placeholders;
+        sync2_->registerCallback(boost::bind(&PerceptionNode::imageCallback2, this, _1, _2));
+    }
+    
+    else if(batch_size == 4){
+        sync4_ = std::make_unique<message_filters::Synchronizer<SyncPolicy4>>(
+            SyncPolicy4(queue_size), 
+            image_subs_[0], 
+            image_subs_[1],
+            image_subs_[2],
+            image_subs_[3]
+        );
 
-    publishBEVInfo();
-    publishVizResult(img_batch);
+        using namespace boost::placeholders;
+        sync4_->registerCallback(boost::bind(&PerceptionNode::imageCallback4, this, _1, _2, _3, _4));
+    }
 }
 
-void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2){
+void PerceptionNode::imageCallback2(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2){
     cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
     std::shared_ptr<cv::Mat> img1_mat_ptr = std::make_shared<cv::Mat>(cv_ptr1->image);
 
@@ -90,6 +83,32 @@ void PerceptionNode::imageCallback(const sensor_msgs::ImageConstPtr& img1, const
     img_batch.emplace_back(img1_mat_ptr);
     img_batch.emplace_back(img2_mat_ptr);
 
+    __processing(img_batch);
+}
+
+void PerceptionNode::imageCallback4(const sensor_msgs::ImageConstPtr& img1, const sensor_msgs::ImageConstPtr& img2, const sensor_msgs::ImageConstPtr& img3, const sensor_msgs::ImageConstPtr& img4){
+    cv_bridge::CvImagePtr cv_ptr1 = cv_bridge::toCvCopy(img1, sensor_msgs::image_encodings::BGR8);
+    std::shared_ptr<cv::Mat> img1_mat_ptr = std::make_shared<cv::Mat>(cv_ptr1->image);
+
+    cv_bridge::CvImagePtr cv_ptr2 = cv_bridge::toCvCopy(img2, sensor_msgs::image_encodings::BGR8);
+    std::shared_ptr<cv::Mat> img2_mat_ptr = std::make_shared<cv::Mat>(cv_ptr2->image);
+
+    cv_bridge::CvImagePtr cv_ptr3 = cv_bridge::toCvCopy(img3, sensor_msgs::image_encodings::BGR8);
+    std::shared_ptr<cv::Mat> img3_mat_ptr = std::make_shared<cv::Mat>(cv_ptr3->image);
+
+    cv_bridge::CvImagePtr cv_ptr4 = cv_bridge::toCvCopy(img4, sensor_msgs::image_encodings::BGR8);
+    std::shared_ptr<cv::Mat> img4_mat_ptr = std::make_shared<cv::Mat>(cv_ptr4->image);
+
+    std::vector<std::shared_ptr<cv::Mat>> img_batch;
+    img_batch.emplace_back(img1_mat_ptr);
+    img_batch.emplace_back(img2_mat_ptr);
+    img_batch.emplace_back(img3_mat_ptr);
+    img_batch.emplace_back(img4_mat_ptr);
+
+    __processing(img_batch);
+}
+
+void PerceptionNode::__processing(const std::vector<std::shared_ptr<cv::Mat>>& img_batch){
     int ret = perception_model_.preprocess(img_batch);
     if (ret != 0) {
         std::cerr << "Preprocessing failed!" << std::endl;
@@ -157,14 +176,12 @@ void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>
         
         for(int i = 0; i < detections[b].poly4s.size(); i++){
             cv::polylines(out_msg.image, 
-                std::vector<std::vector<cv::Point>>{
-                    {
+                std::vector<std::vector<cv::Point>>{{
                         cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
                         cv::Point(detections[b].poly4s[i](1, 0), detections[b].poly4s[i](1, 1)),
                         cv::Point(detections[b].poly4s[i](2, 0), detections[b].poly4s[i](2, 1)),
                         cv::Point(detections[b].poly4s[i](3, 0), detections[b].poly4s[i](3, 1))
-                    }
-                }, 
+                }}, 
                 true, 
                 cv::Scalar(0, 255, 0), 
                 2

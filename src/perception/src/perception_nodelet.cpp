@@ -11,16 +11,13 @@ void PerceptionNodelet::onInit() {
 
     std::string pkg_path = ros::package::getPath("perception");
 
-    std::string image_topic_prefix;
-    pnh.param<std::string>("image_topic_prefix", image_topic_prefix, std::string("/camera/camera_"));
-
     int batch_size;
     pnh.param<int>("batch_size", batch_size, 2);
 
-    NODELET_INFO_STREAM("PerceptionNodelet params: image_topic_prefix=" << image_topic_prefix
+    NODELET_INFO_STREAM("PerceptionNodelet params: pkg_path=" << pkg_path
                         << ", batch_size=" << batch_size);
 
-    node_ = std::make_unique<PerceptionNode>(pkg_path, image_topic_prefix, batch_size);
+    node_ = std::make_unique<PerceptionNode>(pkg_path, batch_size);
     // Nodelet uses shared callback queues, no spin() call here.
 }
 
