@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   nodelet
   pluginlib
   capstone_msgs
+  yaml-cpp
 )
 
 find_package(OpenCV 4.10 REQUIRED)
@@ -75,6 +76,7 @@ target_link_libraries(perception
   ${LAPACK_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
   ${CUDA_LIBRARIES}
   -lblas
   -lcblas
@@ -100,6 +102,7 @@ target_link_libraries(perception_single
   ${LAPACK_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
   ${CUDA_LIBRARIES}
   -lblas
   -lcblas
@@ -126,6 +129,7 @@ target_link_libraries(perception_nodelet
   ${LAPACK_LIBRARIES}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
+  ${YAML_CPP_LIBRARIES}
   ${CUDA_LIBRARIES}
   -lblas
   -lcblas

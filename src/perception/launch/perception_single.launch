@@ -1,5 +1,7 @@
 <?xml version="1.0"?>
 <launch>
+    <rosparam file="$(find ip_camera)/config/common.yaml" command="load"/>
+
     <group ns="front_cam">
         <rosparam file="$(find ip_camera)/config/ipcam_1.yaml" command="load"/>
     </group>

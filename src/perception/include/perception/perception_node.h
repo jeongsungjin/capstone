@@ -45,6 +45,8 @@ private:
     std::vector<ros::Publisher> viz_result_pubs_;
     
     Model perception_model_;
+
+    xt::xarray<double> Hs_; // (batch, 3, 3)
 };
 
 #endif

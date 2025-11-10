@@ -22,21 +22,23 @@
 
 #include <capstone_msgs/BEVInfo.h>
 
+#include <yaml-cpp/yaml.h>
+
 #include <chrono>
 
 PerceptionNode::PerceptionNode(
     const std::string& pkg_path, const int batch_size
-): nh_("~"), perception_model_(pkg_path, batch_size)
+): nh_("~"), Hs_(xt::zeros<double>({batch_size, 3, 3})), perception_model_(pkg_path, batch_size)
 {
     if (batch_size != 2 && batch_size != 4) {
         ROS_WARN("PerceptionNode currently supports batch_size=2 for synchronized topics. Using first 2.");
     }
-
+    
     bev_info_pub_ = nh_.advertise<capstone_msgs::BEVInfo>("bev_info", 1);
 
-    std::string image_topic_prefix;
+    std::string topic_name_prefix;
     ros::param::param<std::string>(
-        "~image_topic_prefix", image_topic_prefix, "/camera/image_raw"
+        "~topic_name_prefix", topic_name_prefix, "/camera/image_raw"
     );
 
     const int queue_size = 5;
@@ -44,7 +46,17 @@ PerceptionNode::PerceptionNode(
     std::vector<message_filters::Subscriber<sensor_msgs::Image>>(batch_size).swap(image_subs_);
     for(int b = 0; b < batch_size; b++){
         viz_result_pubs_[b] = nh_.advertise<sensor_msgs::Image>("viz_result_" + std::to_string(b + 1), 1);
-        image_subs_[b].subscribe(nh_, image_topic_prefix + std::to_string(b + 1) + "/image_raw", queue_size);
+        image_subs_[b].subscribe(nh_, topic_name_prefix + std::to_string(b + 1) + "/image_raw", queue_size);
+    
+        XmlRpc::XmlRpcValue H_param;
+        nh_.getParam("/cam" + std::to_string(b + 1) + "/H", H_param);
+        for (int i = 0; i < 3; i++) {
+            XmlRpc::XmlRpcValue row = H_param[i];
+            for (int j = 0; j < 3; j++) {
+                Hs_(b, i, j) = static_cast<double>(row[j]);
+                std::cout << "Hs_(" << b << ", " << i << ", " << j << ") = " << Hs_(b, i, j) << std::endl;
+            }
+        }
     }
     
     if(batch_size == 2){
@@ -122,42 +134,23 @@ void PerceptionNode::__processing(const std::vector<std::shared_ptr<cv::Mat>>& i
 }
 
 void PerceptionNode::publishBEVInfo(){
-    xt::xarray<float> H = {
-        {99.001f, 212.3083f, -7019.0732f},
-        {-656.1083f, 107.3403f, -2376.5612f},
-        {-0.2113f, -0.4532f, -9.6068f}
-    };
-
-    auto Hinv = xt::linalg::inv(H);
-
     const auto& detections = perception_model_.getDetections();
-
-    std::vector<size_t> ones_shape = {4, 1};
 
     capstone_msgs::BEVInfo bev_info;
     for(int b = 0; b < detections.size(); b++){
-        for(auto& img_pts: detections[b].poly4s){
-            auto ones = xt::ones<float>(ones_shape);
-            
-            auto homo_img_pts = xt::concatenate(
-                xt::xtuple(
-                    img_pts,
-                    ones
-                ), 1
-            );
+        auto H = xt::view(Hs_, b, xt::all(), xt::all());
 
-            auto homo_img_pts_T = xt::transpose(homo_img_pts);
-            auto homo_world_pts = xt::linalg::dot(Hinv, homo_img_pts_T);
-            auto world_pts = xt::view(homo_world_pts, xt::range(0, 2), xt::all()) / xt::view(homo_world_pts, 2, xt::all());
-            // std::cout << world_pts << '\n';
+        for(auto& tri_pts: detections[b].tri_ptss){            
+            auto center = xt::view(tri_pts, 0, xt::all());
+            auto center3 = xt::concatenate(xt::xtuple(center, xt::xarray<double>({1.0})));
 
-            auto center_point = xt::mean(world_pts, {1});
-            // std::cout << center_point << '\n';
+            auto bev_center = xt::linalg::dot(H, center3);
+            bev_center /= bev_center(2);
 
             bev_info.detCounts += 1;
             bev_info.ids.emplace_back(10);
-            bev_info.center_xs.emplace_back(center_point(0));
-            bev_info.center_ys.emplace_back(center_point(1));
+            bev_info.center_xs.emplace_back(bev_center(0));
+            bev_info.center_ys.emplace_back(bev_center(1));
             bev_info.yaws.emplace_back(1.50);
         }
     }
@@ -177,10 +170,10 @@ void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>
         for(int i = 0; i < detections[b].poly4s.size(); i++){
             cv::polylines(out_msg.image, 
                 std::vector<std::vector<cv::Point>>{{
-                        cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
-                        cv::Point(detections[b].poly4s[i](1, 0), detections[b].poly4s[i](1, 1)),
-                        cv::Point(detections[b].poly4s[i](2, 0), detections[b].poly4s[i](2, 1)),
-                        cv::Point(detections[b].poly4s[i](3, 0), detections[b].poly4s[i](3, 1))
+                    cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
+                    cv::Point(detections[b].poly4s[i](1, 0), detections[b].poly4s[i](1, 1)),
+                    cv::Point(detections[b].poly4s[i](2, 0), detections[b].poly4s[i](2, 1)),
+                    cv::Point(detections[b].poly4s[i](3, 0), detections[b].poly4s[i](3, 1))
                 }}, 
                 true, 
                 cv::Scalar(0, 255, 0), 
