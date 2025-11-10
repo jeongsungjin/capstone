@@ -9,6 +9,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   visualization_msgs
   ackermann_msgs
+  capstone_msgs
 )
 
 catkin_package()
@@ -24,4 +25,5 @@ catkin_install_python(PROGRAMS
   scripts/udp_ackermann_sender.py
   scripts/path_relay.py
   scripts/platoon_manager.py
+  scripts/bev_id_teleporter.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
