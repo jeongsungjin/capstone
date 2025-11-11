@@ -12,6 +12,8 @@ catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/spawn_cameras.py
+  scripts/spawn_cameras_n.py
+  scripts/spawn_single_camera.py
   scripts/spawn_traffic_vehicles.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
