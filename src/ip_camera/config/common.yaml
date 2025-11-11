@@ -1,7 +1,7 @@
 port: 554
 username: admin
 password: zjsxmfhf
-topic_name_prefix: /ip_cam/cam_
+topic_name_prefix: /ipcam_
 transport: tcp
 width: 1280
 height: 720
