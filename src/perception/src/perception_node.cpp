@@ -4,6 +4,7 @@
 
 #include <cv_bridge/cv_bridge.h>
 #include <opencv2/highgui.hpp>
+#include <cmath>
 
 #include <boost/bind.hpp>
 #include <boost/bind/placeholders.hpp>
@@ -22,43 +23,62 @@
 
 #include <capstone_msgs/BEVInfo.h>
 
-#include <yaml-cpp/yaml.h>
-
 #include <chrono>
 
 PerceptionNode::PerceptionNode(
-    const std::string& pkg_path, const int batch_size
-): nh_("~"), Hs_(xt::zeros<double>({batch_size, 3, 3})), perception_model_(pkg_path, batch_size)
+    ros::NodeHandle nh, ros::NodeHandle pnh, const std::string& pkg_path, const int batch_size
+): nh_(nh), pnh_(pnh), Hs_(xt::zeros<double>({batch_size, 3, 3})), perception_model_(pkg_path, batch_size)
 {
     if (batch_size != 2 && batch_size != 4) {
         ROS_WARN("PerceptionNode currently supports batch_size=2 for synchronized topics. Using first 2.");
     }
-    
-    bev_info_pub_ = nh_.advertise<capstone_msgs::BEVInfo>("bev_info", 1);
 
+    // private ns 기반 발행
+    bev_info_pub_ = pnh_.advertise<capstone_msgs::BEVInfo>("bev_info", 1);
+
+    // 전역 ns 기반 parameter 가져오기 ( common.yaml )
     std::string topic_name_prefix;
     ros::param::param<std::string>(
-        "~topic_name_prefix", topic_name_prefix, "/camera/image_raw"
+        "/topic_name_prefix", topic_name_prefix, "/camera/image_raw"
     );
+
+    ROS_INFO_STREAM("Image topic name prefix: " << topic_name_prefix);
 
     const int queue_size = 5;
     std::vector<ros::Publisher>(batch_size).swap(viz_result_pubs_);
     std::vector<message_filters::Subscriber<sensor_msgs::Image>>(batch_size).swap(image_subs_);
     for(int b = 0; b < batch_size; b++){
-        viz_result_pubs_[b] = nh_.advertise<sensor_msgs::Image>("viz_result_" + std::to_string(b + 1), 1);
-        image_subs_[b].subscribe(nh_, topic_name_prefix + std::to_string(b + 1) + "/image_raw", queue_size);
-    
+        // private ns 기반 발행 -> nodelet node 안에 정의된 param 에서 가져오는 것임!
+        int cam_id = 0;
+        pnh_.getParam("ipcam_" + std::to_string(b + 1), cam_id);
+        
+        const std::string& s_cam_id = std::to_string(cam_id);
+        
+        // private ns 기반 발행
+        viz_result_pubs_[b] = pnh_.advertise<sensor_msgs::Image>("viz_result_" + s_cam_id, 1);
+        
+        // global ns 기반 parameter 가져오기 (개별 카메라에서 가져와야 하기 때문!)
         XmlRpc::XmlRpcValue H_param;
-        nh_.getParam("/cam" + std::to_string(b + 1) + "/H", H_param);
-        for (int i = 0; i < 3; i++) {
-            XmlRpc::XmlRpcValue row = H_param[i];
-            for (int j = 0; j < 3; j++) {
-                Hs_(b, i, j) = static_cast<double>(row[j]);
-                std::cout << "Hs_(" << b << ", " << i << ", " << j << ") = " << Hs_(b, i, j) << std::endl;
-            }
-        }
+        nh_.getParam("/ipcam_" + s_cam_id + "/H", H_param);
+
+        Hs_(b, 0, 0) = static_cast<double>(H_param[0][0]);
+        Hs_(b, 0, 1) = static_cast<double>(H_param[0][1]);
+        Hs_(b, 0, 2) = static_cast<double>(H_param[0][2]);
+
+        Hs_(b, 1, 0) = static_cast<double>(H_param[1][0]);
+        Hs_(b, 1, 1) = static_cast<double>(H_param[1][1]);
+        Hs_(b, 1, 2) = static_cast<double>(H_param[1][2]);
+
+        Hs_(b, 2, 0) = static_cast<double>(H_param[2][0]);
+        Hs_(b, 2, 1) = static_cast<double>(H_param[2][1]);
+        Hs_(b, 2, 2) = static_cast<double>(H_param[2][2]);
+        
+        // global ns 기반 구독
+        ROS_INFO_STREAM("Subscribing to: " << topic_name_prefix + s_cam_id + "/image_raw");
+        
+        image_subs_[b].subscribe(nh_, topic_name_prefix + s_cam_id + "/image_raw", queue_size);
     }
-    
+
     if(batch_size == 2){
         sync2_ = std::make_unique<message_filters::Synchronizer<SyncPolicy2>>(
             SyncPolicy2(queue_size), 
@@ -131,6 +151,7 @@ void PerceptionNode::__processing(const std::vector<std::shared_ptr<cv::Mat>>& i
     perception_model_.postprocess();
 
     publishVizResult(img_batch);
+    publishBEVInfo();
 }
 
 void PerceptionNode::publishBEVInfo(){
@@ -147,11 +168,22 @@ void PerceptionNode::publishBEVInfo(){
             auto bev_center = xt::linalg::dot(H, center3);
             bev_center /= bev_center(2);
 
+            // Compute yaw using the front edge midpoint projected to BEV.
+            auto front1 = xt::view(tri_pts, 1, xt::all());
+            auto front2 = xt::view(tri_pts, 2, xt::all());
+            auto front_center = (front1 + front2) / 2.0;
+            auto front3 = xt::concatenate(xt::xtuple(front_center, xt::xarray<double>({1.0})));
+            auto bev_front = xt::linalg::dot(H, front3);
+            bev_front /= bev_front(2);
+            double dx = static_cast<double>(bev_front(0) - bev_center(0));
+            double dy = static_cast<double>(bev_front(1) - bev_center(1));
+            float yaw = static_cast<float>(std::atan2(dy, dx));
+
             bev_info.detCounts += 1;
             bev_info.ids.emplace_back(10);
             bev_info.center_xs.emplace_back(bev_center(0));
             bev_info.center_ys.emplace_back(bev_center(1));
-            bev_info.yaws.emplace_back(1.50);
+            bev_info.yaws.emplace_back(yaw);
         }
     }
 

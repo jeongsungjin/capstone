@@ -21,7 +21,7 @@ typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sens
 
 class PerceptionNode{
 public:
-    PerceptionNode(const std::string& pkg_path, const int batch_size);
+    PerceptionNode(ros::NodeHandle nh, ros::NodeHandle pnh, const std::string& pkg_path, const int batch_size);
     ~PerceptionNode();
 
 private:
@@ -34,7 +34,7 @@ private:
 
 private:
     ros::NodeHandle nh_;
-    
+    ros::NodeHandle pnh_;
     ros::Subscriber image_sub_;
     
     std::vector<message_filters::Subscriber<sensor_msgs::Image>> image_subs_;
