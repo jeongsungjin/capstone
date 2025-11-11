@@ -13,7 +13,8 @@
         type="bev_id_teleporter.py"
         name="bev_id_teleporter"
         output="screen">
-    <param name="topic" value="/perception/bev_info" />
+    <!-- <param name="topic" value="/perception/bev_info" /> -->
+    <param name="topic" value="/bev_info" />
     <param name="max_vehicle_count" value="$(arg max_vehicle_count)" />
     <param name="role_names" value="$(arg role_names)" />
     <param name="yaw_in_degrees" value="$(arg yaw_in_degrees)" />

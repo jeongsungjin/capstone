@@ -19,6 +19,7 @@ catkin_install_python(PROGRAMS
   scripts/multi_vehicle_controller.py
   scripts/bev_visualizer.py
   scripts/occupancy_grid_publisher.py
+  scripts/inference_recv.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
   scripts/rviz_person_spawner.py
