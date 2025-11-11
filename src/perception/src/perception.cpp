@@ -18,7 +18,7 @@ int main(int argc, char** argv) {
     ROS_INFO_STREAM("ros param list");
     ROS_INFO_STREAM("batch size : " << batch_size);    
 
-    PerceptionNode node(pkg_path, batch_size);
+    // PerceptionNode node(pkg_path, batch_size);
     ros::spin();
 
     return 0;

@@ -17,7 +17,7 @@ void PerceptionNodelet::onInit() {
     NODELET_INFO_STREAM("PerceptionNodelet params: pkg_path=" << pkg_path
                         << ", batch_size=" << batch_size);
 
-    node_ = std::make_unique<PerceptionNode>(pkg_path, batch_size);
+    node_ = std::make_unique<PerceptionNode>(nh, pnh, pkg_path, batch_size);
     // Nodelet uses shared callback queues, no spin() call here.
 }
 
