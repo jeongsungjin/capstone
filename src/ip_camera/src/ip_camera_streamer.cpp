@@ -20,17 +20,18 @@ IPCameraStreamer::~IPCameraStreamer() {
 }
 
 void IPCameraStreamer::init() {
-    pnh_.param("publish_rate", publish_rate_, 60.0);
+    pnh_.param("/username", camera_config_.username, std::string());
+    pnh_.param("/password", camera_config_.password, std::string());
+    pnh_.param("/width", camera_config_.width, camera_config_.width);
+    pnh_.param("/height", camera_config_.height, camera_config_.height);
+    pnh_.param("/port", camera_config_.port, camera_config_.port);
+    pnh_.param("/transport", camera_config_.transport, std::string("tcp"));
+    pnh_.param("/topic_name_prefix", camera_config_.topic_name, std::string());
+    pnh_.param("/publish_rate", publish_rate_, 60.0);
+    
     pnh_.getParam("ip", camera_config_.ip);
-    pnh_.param("port", camera_config_.port, camera_config_.port);
-    pnh_.param("username", camera_config_.username, std::string());
-    pnh_.param("password", camera_config_.password, std::string());
-    pnh_.param("topic_name", camera_config_.topic_name, std::string());
     pnh_.param("frame_id", camera_config_.frame_id, std::string());
     pnh_.param("camera_id", camera_config_.camera_id, 1);
-    pnh_.param("transport", camera_config_.transport, std::string("tcp"));
-    pnh_.param("width", camera_config_.width, camera_config_.width);
-    pnh_.param("height", camera_config_.height, camera_config_.height);
 
     bool valid = true;
     if (camera_config_.ip.empty()) {
@@ -40,7 +41,8 @@ void IPCameraStreamer::init() {
     if (camera_config_.topic_name.empty()) {
         ROS_ERROR("[ip_camera] Param '~topic_name' is required but empty");
         valid = false;
-    }
+    } else camera_config_.topic_name += std::to_string(camera_config_.camera_id) + "/image_raw";
+
     if (camera_config_.frame_id.empty()) {
         ROS_ERROR("[ip_camera] Param '~frame_id' is required but empty");
         valid = false;
