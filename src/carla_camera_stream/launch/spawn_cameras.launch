@@ -1,27 +1,70 @@
 <?xml version="1.0"?>
 <launch>
   <!-- CARLA 서버 설정 -->
-  <arg name="host" default="localhost" />
-  <arg name="port" default="2000" />
+  <rosparam file="$(find ip_camera)/config/common.yaml" command="load"/>
+  
+  <param name="host" value="localhost" />
+  <param name="port" value="2000" />
   
   <!-- 카메라 설정 -->
-  <arg name="image_width" default="1280" />
-  <arg name="image_height" default="720" />
-  <arg name="fov" default="90.0" />
-  
+  <param name="image_width" value="1280" />
+  <param name="image_height" value="720" />
+  <param name="fov" value="90.0" />
+
   <!-- 카메라 스폰 노드 -->
-  <node pkg="carla_camera_stream" 
-        type="spawn_cameras.py" 
-        name="carla_camera_stream" 
-        output="screen">
-    <param name="host" value="$(arg host)" />
-    <param name="port" value="$(arg port)" />
-    <param name="image_width" value="$(arg image_width)" />
-    <param name="image_height" value="$(arg image_height)" />
-    <param name="fov" value="$(arg fov)" />
+
+  <!-- -3.5 -1
+
+    -1.5, -1
+
+    -1.5, -2.5
+
+    -2.5 -5 -->
+
+
+  <!-- 회전 교차로 라인에서 먼 녀석 -->
+  <arg name="ipcam_1" default="1" />
+  <node name="ipcam_1" output="screen" pkg="carla_camera_stream" type="spawn_single_camera.py">
+    <param name="x" value="-35" />
+    <param name="y" value="-10" />
+
+    <param name="yaw" value="-180.0" />
+
+    <rosparam file="$(find ip_camera)/config/ipcam_$(arg ipcam_1).yaml" command="load"/>
   </node>
-  
-  <!-- RViz 실행 (옵션) -->
-  <!-- <node pkg="rviz" type="rviz" name="rviz" args="-d $(find carla_camera_stream)/config/cameras.rviz" /> -->
+
+  <!-- 회전 교차로 라인에서 가까운 녀석 -->
+  <arg name="ipcam_2" default="2" />
+  <node name="ipcam_2" output="screen" pkg="carla_camera_stream" type="spawn_single_camera.py">
+    <param name="x" value="-15" />
+    <param name="y" value="-10" />
+    
+    <param name="yaw" value="135.0" />
+
+    <rosparam file="$(find ip_camera)/config/ipcam_$(arg ipcam_2).yaml" command="load"/>
+  </node>
+
+  <!-- 그냥 교차로 구석에 있는 녀석 -->
+  <arg name="ipcam_3" default="3" />
+  <node name="ipcam_3" output="screen" pkg="carla_camera_stream" type="spawn_single_camera.py">   
+    <param name="x" value="-15" />
+    <param name="y" value="-25" />
+
+    <param name="yaw" value="-135.0" />
+
+    <rosparam file="$(find ip_camera)/config/ipcam_$(arg ipcam_3).yaml" command="load"/>
+  </node>
+
+  <!-- 인포 데스크 쪽 -->
+  <arg name="ipcam_4" default="4" />
+  <node name="ipcam_4" output="screen" pkg="carla_camera_stream" type="spawn_single_camera.py">
+    <param name="x" value="-25" />
+    <param name="y" value="-50" />
+
+    <param name="yaw" value="-180.0" />
+
+    <rosparam file="$(find ip_camera)/config/ipcam_$(arg ipcam_4).yaml" command="load"/>
+  </node>
+
 </launch>
 
