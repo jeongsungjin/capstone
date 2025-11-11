@@ -123,7 +123,8 @@ class RCCarUdpSender:
 
         # Build and send packet
         if self.send_angle_as_float:
-            send_angle = steer + float(v["center_rad"])
+            # Apply center offset, scaling, and optional invert for float mode too
+            send_angle = (steer + float(v["center_rad"])) * float(v["scale"])
             if bool(v["invert"]):
                 send_angle = -send_angle
             sp = speed * float(v["speed_scale"])
