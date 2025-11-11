@@ -70,6 +70,9 @@ class CamPerspective:
             {"name": "goal3", "x": -33.490, "y":  -1.780, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
             {"name": "goal4", "x":  46.970, "y":  -1.650, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
             {"name": "goal5", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
+            {"name": "goal6", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal6_yaw_deg", -90.0))},
+            {"name": "goal7", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal7_yaw_deg", -90.0))},
+            {"name": "goal8", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal8_yaw_deg", -90.0))},
         ]
         # Optional per-destination camera overrides (position + orientation)
         # Defaults for per-destination camera overrides (so launch params are optional)
@@ -79,6 +82,9 @@ class CamPerspective:
             3: {"use_cam": True, "cam_x":  -28.830, "cam_y": -51.600, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -40.0},
             4: {"use_cam": True, "cam_x":  41.950, "cam_y":  -54.720, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -28.0},
             5: {"use_cam": True, "cam_x":   0.000, "cam_y":  6.180, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
+            6: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
+            7: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
+            8: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
         }
         for idx, p in enumerate(self._goal_presets, start=1):
             d = _override_defaults.get(idx, None)
