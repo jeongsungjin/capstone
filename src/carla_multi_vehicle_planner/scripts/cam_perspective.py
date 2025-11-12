@@ -66,25 +66,25 @@ class CamPerspective:
         self.goal_match_tolerance = float(rospy.get_param("~goal_match_tolerance", 3.0))
         self._goal_presets = [
             {"name": "goal1", "x": -58.010, "y": -42.790, "yaw": float(rospy.get_param("~goal1_yaw_deg", 180.0))},
-            {"name": "goal2", "x":  43.090, "y": -53.940, "yaw": float(rospy.get_param("~goal2_yaw_deg", 0.0))},
-            {"name": "goal3", "x": -33.490, "y":  -1.780, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
-            {"name": "goal4", "x":  46.970, "y":  -1.650, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
-            {"name": "goal5", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
-            {"name": "goal6", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal6_yaw_deg", -90.0))},
-            {"name": "goal7", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal7_yaw_deg", -90.0))},
-            {"name": "goal8", "x":   0.000, "y":   0.000,  "yaw": float(rospy.get_param("~goal8_yaw_deg", -90.0))},
+            {"name": "goal2", "x": -41.980, "y": -54.270, "yaw": float(rospy.get_param("~goal2_yaw_deg", 0.0))},
+            {"name": "goal3", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
+            {"name": "goal4", "x":  43.090, "y": -53.940, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
+            {"name": "goal5", "x":  58.250, "y": -37.830, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
+            {"name": "goal6", "x":  42.520, "y":  -6.030,  "yaw": float(rospy.get_param("~goal6_yaw_deg", -90.0))},
+            {"name": "goal7", "x": -35.870, "y":  -2.040,  "yaw": float(rospy.get_param("~goal7_yaw_deg", -90.0))},
+            {"name": "goal8", "x":  20.000, "y":  -1.750,  "yaw": float(rospy.get_param("~goal8_yaw_deg", -90.0))},
         ]
         # Optional per-destination camera overrides (position + orientation)
         # Defaults for per-destination camera overrides (so launch params are optional)
         _override_defaults = {
-            1: {"use_cam": True, "cam_x":  -6.680, "cam_y": -16.730, "cam_z": 60.0, "cam_yaw_deg": 210.0, "cam_pitch_deg": -25.0},
-            2: {"use_cam": True, "cam_x":  43.160, "cam_y":  0.030, "cam_z": 50.0, "cam_yaw_deg":  -90.0, "cam_pitch_deg": -35.0},
-            3: {"use_cam": True, "cam_x":  -28.830, "cam_y": -51.600, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -40.0},
-            4: {"use_cam": True, "cam_x":  41.950, "cam_y":  -54.720, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -28.0},
-            5: {"use_cam": True, "cam_x":   0.000, "cam_y":  6.180, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
-            6: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
-            7: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
-            8: {"use_cam": True, "cam_x":   0.000, "cam_y":  0.000, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -35.0},
+            1: {"use_cam": True, "cam_x":   1.650, "cam_y":  2.810, "cam_z": 80.0, "cam_yaw_deg": 220.0, "cam_pitch_deg": -35.0},
+            2: {"use_cam": True, "cam_x":  -41.980, "cam_y": 1.460, "cam_z": 70.0, "cam_yaw_deg":  -90.0, "cam_pitch_deg": -40.0},
+            3: {"use_cam": True, "cam_x":   0.000, "cam_y":  6.180, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
+            4: {"use_cam": True, "cam_x":  43.090, "cam_y": -21.460, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
+            5: {"use_cam": True, "cam_x":  7.310, "cam_y": -35.620, "cam_z": 70.0, "cam_yaw_deg":  0.0, "cam_pitch_deg": -40.0},
+            6: {"use_cam": True, "cam_x":  42.520, "cam_y":  10.800, "cam_z": 30.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -43.0},
+            7: {"use_cam": True, "cam_x": -31.150, "cam_y": -58.830, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -35.0},
+            8: {"use_cam": True, "cam_x":  17.200, "cam_y": -38.110, "cam_z": 60.0, "cam_yaw_deg": 90.0, "cam_pitch_deg": -45.0},
         }
         for idx, p in enumerate(self._goal_presets, start=1):
             d = _override_defaults.get(idx, None)
