@@ -134,6 +134,18 @@ class CamPerspective:
         self._goal_target = None # {'x','y','z','yaw','pitch'} target for goal animation
         self._goal_anim_timer = None
         self._selected_ignore_until = rospy.Time.now().to_sec() + max(0.0, self.selected_ignore_window_s)
+        # Destination-driven camera override (1..8), set by /destination
+        self._forced_use_cam_index = None
+        self._destination_to_cam_index = {
+            "hotel": 1,
+            "building": 2,
+            "office": 3,
+            "school": 4,
+            "home": 5,
+            "church": 6,
+            "mart": 7,
+            "hospital": 8,
+        }
 
         # Compute and apply default BEV
         self._compute_and_apply_default_view()
@@ -146,6 +158,7 @@ class CamPerspective:
         # Subscriptions
         rospy.Subscriber("/selected_vehicle", String, self._selected_cb)
         rospy.Subscriber("/click_button", String, self._click_cb)
+        rospy.Subscriber("/destination", String, self._destination_cb)
         for i in range(1, self.num_vehicles + 1):
             role = f"ego_vehicle_{i}"
             topic = f"/override_goal/{role}"
@@ -367,6 +380,84 @@ class CamPerspective:
         if self._default_transform is not None:
             self._apply_transform(self._default_transform)
 
+    def _start_smooth_transition(self, tx: float, ty: float, tz: float, yaw_deg: float, pitch_deg: float, mode_str: str):
+        # Set mode (e.g., "goal" for destination, "default" for BEV)
+        self.mode = mode_str
+        # Stop any existing animation
+        if self._goal_anim_timer is not None:
+            try:
+                self._goal_anim_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_anim_timer = None
+        # Initialize current camera state from spectator
+        try:
+            tcur = self.spectator.get_transform()
+            self._goal_cam = {
+                'x': float(tcur.location.x),
+                'y': float(tcur.location.y),
+                'z': float(tcur.location.z),
+                'yaw': float(tcur.rotation.yaw),
+                'pitch': float(tcur.rotation.pitch),
+            }
+        except Exception:
+            self._goal_cam = {'x': tx, 'y': ty, 'z': tz, 'yaw': yaw_deg, 'pitch': pitch_deg}
+        # Set animation target
+        self._goal_target = {'x': tx, 'y': ty, 'z': tz, 'yaw': yaw_deg, 'pitch': pitch_deg}
+        # Start animation timer
+        self._goal_anim_timer = rospy.Timer(
+            rospy.Duration(1.0 / max(1.0, self.goal_rate_hz)),
+            self._goal_anim_cb,
+            oneshot=False,
+            reset=True,
+        )
+
+    def _destination_cb(self, msg: String):
+        name = (msg.data or "").strip().lower()
+        idx = self._destination_to_cam_index.get(name, None)
+        if idx is not None:
+            self._forced_use_cam_index = idx
+            # Stop any ongoing follow/goal timers
+            if self._follow_timer is not None:
+                try:
+                    self._follow_timer.shutdown()
+                except Exception:
+                    pass
+                self._follow_timer = None
+            if self._goal_timer is not None:
+                try:
+                    self._goal_timer.shutdown()
+                except Exception:
+                    pass
+                self._goal_timer = None
+            if self._goal_anim_timer is not None:
+                try:
+                    self._goal_anim_timer.shutdown()
+                except Exception:
+                    pass
+                self._goal_anim_timer = None
+            self._goal_cam = None
+            self._goal_target = None
+            # Prevent default lock from overriding this view
+            # Smooth transition to the mapped preset viewpoint
+            try:
+                if 1 <= idx <= len(self._goal_presets):
+                    preset = self._goal_presets[idx - 1]
+                    tx = float(preset.get("cam_x", preset.get("x", 0.0)))
+                    ty = float(preset.get("cam_y", preset.get("y", 0.0)))
+                    tz = float(preset.get("cam_z", self.goal_height))
+                    yaw_used = float(preset.get("cam_yaw_deg", preset.get("yaw", self.goal_yaw_deg)))
+                    pitch_used = float(preset.get("cam_pitch_deg", self.goal_pitch_deg))
+                    self._start_smooth_transition(tx, ty, tz, yaw_used, pitch_used, mode_str="goal")
+                    rospy.loginfo("cam_perspective: destination '%s' → use_cam %d (preset=%s)",
+                                  name, idx, preset.get("name", "unknown"))
+                else:
+                    rospy.logwarn("cam_perspective: destination index out of range: %d", idx)
+            except Exception as exc:
+                rospy.logwarn("cam_perspective: failed to apply destination view '%s' (idx=%d): %s", name, idx, str(exc))
+        else:
+            rospy.logwarn("cam_perspective: unknown destination '%s'", name)
+
     def _goal_cb(self, msg: PoseStamped, role: str):
         # Cancel follow if running
         if self._follow_timer is not None:
@@ -376,42 +467,26 @@ class CamPerspective:
                 pass
             self._follow_timer = None
 
-        self.mode = "goal"
-        x = float(msg.pose.position.x)
-        y = float(msg.pose.position.y)
-        z = float(self.goal_height)
-        # Compute nearest preset and decide camera pose
-        yaw_to_use = self.goal_yaw_deg
-        best = None
-        best_d = None
-        try:
-            for p in self._goal_presets:
-                dxp = float(p["x"]) - x
-                dyp = float(p["y"]) - y
-                d = math.hypot(dxp, dyp)
-                if best is None or d < best_d:
-                    best = p
-                    best_d = d
-            if best is not None and best_d is not None and best_d <= self.goal_match_tolerance:
-                yaw_to_use = float(best["yaw"])
-        except Exception:
-            pass
-
-        use_override = bool(best is not None and best_d is not None and best_d <= self.goal_match_tolerance and best.get("use_cam", False))
-        if use_override:
-            tx = float(best.get("cam_x", x))
-            ty = float(best.get("cam_y", y))
-            tz = float(best.get("cam_z", z))
-            yaw_used = float(best.get("cam_yaw_deg", yaw_to_use))
-            pitch_used = float(best.get("cam_pitch_deg", self.goal_pitch_deg))
-            preset_name = best.get("name", "unknown")
+        # Smoothly switch to default BEV view on goal
+        self.mode = "default"
+        # stop any goal timers/animation if previously running
+        if self._goal_timer is not None:
+            try:
+                self._goal_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_timer = None
+        # Start smooth animation to default transform
+        if self._default_transform is not None:
+            tx = float(self._default_transform.location.x)
+            ty = float(self._default_transform.location.y)
+            tz = float(self._default_transform.location.z)
+            yaw_used = float(self._default_transform.rotation.yaw)
+            pitch_used = float(self._default_transform.rotation.pitch)
+            self._start_smooth_transition(tx, ty, tz, yaw_used, pitch_used, mode_str="default")
+            rospy.loginfo("cam_perspective: smooth BEV transition on goal for %s", role)
         else:
-            tx = x
-            ty = y
-            tz = z
-            yaw_used = yaw_to_use
-            pitch_used = self.goal_pitch_deg
-            preset_name = best.get("name", "default") if best is not None else "default"
+            rospy.loginfo("cam_perspective: default transform unavailable; skipping smooth BEV")
 
         # Initialize smoothing state for goal animation from current spectator
         try:
@@ -520,6 +595,19 @@ class CamPerspective:
                 carla.Rotation(pitch=npitch, yaw=nyaw, roll=0.0),
             )
         )
+        # Stop animation when sufficiently close to target
+        pos_err = math.hypot(math.hypot(nx - tx, ny - ty), nz - tz)
+        ang_err = max(abs(((nyaw - tyaw + 180.0) % 360.0) - 180.0),
+                      abs(((npitch - tpitch + 180.0) % 360.0) - 180.0))
+        if pos_err <= 0.15 and ang_err <= 1.0:
+            try:
+                if self._goal_anim_timer is not None:
+                    self._goal_anim_timer.shutdown()
+            except Exception:
+                pass
+            self._goal_anim_timer = None
+            self._goal_cam = None
+            self._goal_target = None
 
 
 def main():

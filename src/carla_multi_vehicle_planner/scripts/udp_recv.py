@@ -25,6 +25,7 @@ def main():
 
     selected_pub = rospy.Publisher("/selected_vehicle", String, queue_size=1, latch=True)
     click_pub = rospy.Publisher("/click_button", String, queue_size=1, latch=False)
+    destination_pub = rospy.Publisher("/destination", String, queue_size=1, latch=True)
     override_publishers: Dict[str, rospy.Publisher] = {}
 
     def get_override_pub(role: str) -> rospy.Publisher:
@@ -36,6 +37,16 @@ def main():
         return pub
 
     current_vehicle_id = None
+    destinations = {
+        "hotel",
+        "building",  
+        "office",
+        "school",
+        "home",
+        "church",
+        "mart",
+        "hospital",
+    }
 
     try:
         while not rospy.is_shutdown():
@@ -56,6 +67,12 @@ def main():
                 role = _role_name(current_vehicle_id)
                 selected_pub.publish(String(data=role))
                 rospy.loginfo("udp_goal_bridge: selected %s", role)
+                continue
+
+            # 1.5) 목적지 키워드 수신
+            if msg.lower() in destinations:
+                destination_pub.publish(String(data=msg))
+                rospy.loginfo("udp_goal_bridge: destination → %s", msg)
                 continue
 
             # 2) 좌표 수신 ("X=..." 형태)
