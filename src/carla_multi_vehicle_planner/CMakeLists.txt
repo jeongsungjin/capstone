@@ -20,7 +20,6 @@ catkin_install_python(PROGRAMS
   scripts/bev_visualizer.py
   scripts/occupancy_grid_publisher.py
   scripts/inference_recv.py
-  scripts/udp_dump.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
   scripts/rviz_person_spawner.py
@@ -28,4 +27,5 @@ catkin_install_python(PROGRAMS
   scripts/path_relay.py
   scripts/platoon_manager.py
   scripts/bev_id_teleporter.py
+  scripts/rviz_click_teleporter.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

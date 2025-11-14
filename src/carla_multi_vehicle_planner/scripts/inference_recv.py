@@ -29,8 +29,8 @@ class InferenceReceiverNode:
         self.input_yaw_degrees = bool(rospy.get_param("~input_yaw_degrees", True))
         # Pose adjustment before publishing
         self.x_offset_m = float(rospy.get_param("~x_offset_m", 0.0))
-        self.y_offset_m = float(rospy.get_param("~y_offset_m", +2.0))
-        self.yaw_add_deg = float(rospy.get_param("~yaw_add_deg", 180.0))
+        self.y_offset_m = float(rospy.get_param("~y_offset_m", 0.0))
+        self.yaw_add_deg = float(rospy.get_param("~yaw_add_deg", 0.0))
         self.max_items = int(rospy.get_param("~max_items", 64))
         self.topic = str(rospy.get_param("~topic", "/bev_info"))
 

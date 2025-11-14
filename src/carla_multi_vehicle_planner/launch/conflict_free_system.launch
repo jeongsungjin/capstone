@@ -3,6 +3,8 @@
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="enable_platooning" default="false" />
+  <!-- 수동 RViz 목표 재계획 기능 온/오프 -->
+  <arg name="enable_manual_goal" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -60,8 +62,18 @@
   </node>
 
   <!-- 3.6) Manual goal tools: RViz goal mux + key selector -->
-  <node pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+  <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
     <param name="default_vehicle" value="ego_vehicle_1" />
+  </node>
+
+  <!-- 클릭 텔레포트 모드(수동 재계획 OFF일 때): 선택 차량을 클릭 위치로 텔레포트 후 재계획 트리거 -->
+  <node unless="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_click_teleporter.py" name="rviz_click_teleporter" output="screen">
+    <param name="carla_host" value="localhost" />
+    <param name="carla_port" value="2000" />
+    <param name="use_waypoint_heading" value="true" />
+    <param name="snap_to_waypoint_height" value="true" />
+    <param name="default_z" value="0.5" />
+    <param name="z_offset" value="0.0" />
   </node>
 
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />

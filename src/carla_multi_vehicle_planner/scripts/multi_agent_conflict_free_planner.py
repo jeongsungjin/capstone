@@ -10,6 +10,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
+from std_msgs.msg import String
 from typing import Any
 
 # Ensure CARLA Python API is available on sys.path before import
@@ -137,6 +138,9 @@ class MultiAgentConflictFreePlanner:
             topic = f"/override_goal/{role}"
             sub = rospy.Subscriber(topic, PoseStamped, self._make_override_cb(role), queue_size=1)
             self.override_subscribers.append(sub)
+
+        # External replan trigger (e.g., after teleport)
+        rospy.Subscriber("/force_replan", String, self._force_replan_cb, queue_size=10)
 
         # Publishers per role
         self.path_publishers: Dict[str, rospy.Publisher] = {}
@@ -297,6 +301,18 @@ class MultiAgentConflictFreePlanner:
                 self.vehicle_path_len.pop(role, None)
             rospy.loginfo("%s: override set to (%.2f, %.2f)", role, goal_info[0], goal_info[1])
         return _cb
+
+    def _force_replan_cb(self, msg: String) -> None:
+        role = msg.data.strip()
+        if not role:
+            return
+        with self._planning_lock:
+            # Clear any override and stored path so next cycle plans fresh from current pose
+            self.override_goal[role] = None
+            self.vehicle_paths.pop(role, None)
+            self.vehicle_path_s.pop(role, None)
+            self.vehicle_path_len.pop(role, None)
+        rospy.loginfo("%s: force replan requested", role)
 
     def _snap_to_waypoint(self, xy: Tuple[float, float]):
         loc = carla.Location(x=xy[0], y=xy[1], z=0.5)
