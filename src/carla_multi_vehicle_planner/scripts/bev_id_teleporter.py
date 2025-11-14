@@ -86,6 +86,8 @@ class BevIdTeleporter:
 
 		# Yaw interpretation
 		self.yaw_in_degrees: bool = bool(rospy.get_param("~yaw_in_degrees", False))
+		self.enable_yaw_flip: bool = bool(rospy.get_param("~enable_yaw_flip", True))
+		self.yaw_flip_threshold_deg: float = float(rospy.get_param("~yaw_flip_threshold_deg", 150.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -336,6 +338,40 @@ class BevIdTeleporter:
 			pass
 		return self.default_z + self.z_offset
 
+	def _input_yaw_to_rad(self, yaw_val: float) -> float:
+		if self.yaw_in_degrees:
+			return math.radians(yaw_val)
+		return yaw_val
+
+	def _maybe_flip_yaw(self, x: float, y: float, yaw_rad: float) -> float:
+		if not self.enable_yaw_flip or self.carla_map is None:
+			return yaw_rad
+		try:
+			wp = self.carla_map.get_waypoint(
+				carla.Location(x=float(x), y=float(y), z=0.5),
+				project_to_road=True,
+				lane_type=carla.LaneType.Driving,
+			)
+		except Exception:
+			wp = None
+		if wp is None:
+			return yaw_rad
+		lane_yaw_rad = math.radians(wp.transform.rotation.yaw)
+		delta = abs(normalize_angle(yaw_rad - lane_yaw_rad))
+		thresh = math.radians(max(0.0, min(180.0, self.yaw_flip_threshold_deg)))
+		if delta > thresh:
+			flipped = normalize_angle(yaw_rad + math.pi)
+			rospy.loginfo_throttle(
+				1.0,
+				"Yaw flip applied at (%.1f, %.1f): det %.1f°, lane %.1f°",
+				float(x),
+				float(y),
+				math.degrees(yaw_rad),
+				wp.transform.rotation.yaw,
+			)
+			return flipped
+		return yaw_rad
+
 	def _bev_cb(self, msg: BEVInfo) -> None:
 		# Validate array lengths
 		n = int(msg.detCounts)
@@ -348,14 +384,20 @@ class BevIdTeleporter:
 			return
 
 		tracking_ok_map = {role: False for role in self.role_names}
+		det_yaws_rad: List[float] = []
+		for idx in range(len(ids)):
+			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
+			yaw_rad = self._input_yaw_to_rad(raw_yaw)
+			yaw_rad = self._maybe_flip_yaw(float(cxs[idx]), float(cys[idx]), yaw_rad)
+			det_yaws_rad.append(yaw_rad)
 
 		if self.enable_matching:
 			# Hungarian-based robust assignment
 			roles = list(self.role_names)[: self.max_vehicle_count]
 			if roles and ids:
-				costs = self._compute_cost_matrix(roles, ids, cxs, cys, yaws)
+				costs = self._compute_cost_matrix(roles, ids, cxs, cys, det_yaws_rad)
 				assignment = self._hungarian_assign(costs)
-				self._update_mappings_with_assignment(roles, ids, assignment, cxs, cys, yaws)
+				self._update_mappings_with_assignment(roles, ids, assignment, cxs, cys, det_yaws_rad)
 			# Teleport using current stable mapping for ids present in this frame
 			with self._lock:
 				role_to_id_snapshot = dict(self.role_to_id)
@@ -368,8 +410,8 @@ class BevIdTeleporter:
 					continue
 				x = float(cxs[idx])
 				y = float(cys[idx])
-				yaw_in = float(yaws[idx]) if idx < len(yaws) else 0.0
-				yaw_deg = yaw_in if self.yaw_in_degrees else deg(yaw_in)
+				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
+				yaw_deg = math.degrees(yaw_rad)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
@@ -422,8 +464,8 @@ class BevIdTeleporter:
 					continue
 				x = float(cxs[idx])
 				y = float(cys[idx])
-				yaw_in = float(yaws[idx]) if idx < len(yaws) else 0.0
-				yaw_deg = yaw_in if self.yaw_in_degrees else deg(yaw_in)
+				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
+				yaw_deg = math.degrees(yaw_rad)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue

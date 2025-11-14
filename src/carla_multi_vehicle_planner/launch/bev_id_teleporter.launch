@@ -19,6 +19,8 @@
   <arg name="max_teleport_distance_m" default="20.0" />
   <arg name="teleport_yaw_gate_deg" default="80.0" />
   <arg name="teleport_stability_warmup_sec" default="0.2" />
+  <arg name="enable_yaw_flip" default="true" />
+  <arg name="yaw_flip_threshold_deg" default="150.0" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
@@ -45,6 +47,8 @@
     <param name="max_teleport_distance_m" value="$(arg max_teleport_distance_m)" />
     <param name="teleport_yaw_gate_deg" value="$(arg teleport_yaw_gate_deg)" />
     <param name="teleport_stability_warmup_sec" value="$(arg teleport_stability_warmup_sec)" />
+    <param name="enable_yaw_flip" value="$(arg enable_yaw_flip)" />
+    <param name="yaw_flip_threshold_deg" value="$(arg yaw_flip_threshold_deg)" />
   </node>
 </launch>
 
