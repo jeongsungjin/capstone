@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 import rospy
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 
 # Ensure CARLA API is on sys.path
 try:
@@ -90,6 +91,10 @@ class BevIdTeleporter:
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
 		self.default_z: float = float(rospy.get_param("~default_z", 0.5))
 		self.z_offset: float = float(rospy.get_param("~z_offset", 0.0))
+		# Teleport safety
+		self.max_teleport_distance_m: float = float(rospy.get_param("~max_teleport_distance_m", 20.0))
+		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 120.0))
+		self.teleport_stability_warmup_sec: float = float(rospy.get_param("~teleport_stability_warmup_sec", 0.2))
 
 		# Connect to CARLA
 		self.client = carla.Client(self.host, self.port)
@@ -105,6 +110,8 @@ class BevIdTeleporter:
 		self.role_state: Dict[str, Dict[str, object]] = {role: {"pos": None, "yaw": None, "stamp": None} for role in []}
 		self.role_last_switch: Dict[str, float] = {}
 		self.id_last_seen: Dict[int, float] = {}
+		self.role_tracking_ok: Dict[str, bool] = {}
+		self.tracking_publishers: Dict[str, rospy.Publisher] = {}
 
 		self._refresh_role_to_actor()
 
@@ -112,6 +119,10 @@ class BevIdTeleporter:
 		self.role_state = {role: {"pos": None, "yaw": None, "stamp": None} for role in self.role_names}
 		for role in self.role_names:
 			rospy.Subscriber(f"/carla/{role}/odometry", Odometry, self._odom_cb, callback_args=role, queue_size=10)
+			topic = f"/carla/{role}/bev_tracking_ok"
+			self.tracking_publishers[role] = rospy.Publisher(topic, Bool, queue_size=1, latch=True)
+			self.role_tracking_ok[role] = False
+			self._set_tracking_status(role, False, force=True)
 		self.sub = rospy.Subscriber(self.topic_name, BEVInfo, self._bev_cb, queue_size=1)
 		rospy.loginfo(
 			"bev_id_teleporter ready: topic=%s, roles=%s (max=%d)",
@@ -136,6 +147,16 @@ class BevIdTeleporter:
 			for role in role_to_actor.keys():
 				if role not in self.role_state:
 					self.role_state[role] = {"pos": None, "yaw": None, "stamp": None}
+			# Initialize switch timestamps if missing
+			for role in role_to_actor.keys():
+				if role not in self.role_last_switch:
+					self.role_last_switch[role] = float(rospy.Time.now().to_sec())
+			for role in role_to_actor.keys():
+				if role not in self.tracking_publishers:
+					topic = f"/carla/{role}/bev_tracking_ok"
+					self.tracking_publishers[role] = rospy.Publisher(topic, Bool, queue_size=1, latch=True)
+					self.role_tracking_ok[role] = False
+					self._set_tracking_status(role, False, force=True)
 
 	def _resolve_actor_for_role(self, role: str) -> Optional[carla.Actor]:
 		with self._lock:
@@ -290,6 +311,16 @@ class BevIdTeleporter:
 				assigned.append((vid, role))
 		return assigned
 
+	def _set_tracking_status(self, role: str, ok: bool, force: bool = False) -> None:
+		self.role_tracking_ok[role] = ok
+		pub = self.tracking_publishers.get(role)
+		if pub is None:
+			return
+		try:
+			pub.publish(Bool(data=ok))
+		except Exception:
+			pass
+
 	def _pick_height(self, x: float, y: float) -> float:
 		if not self.snap_to_waypoint_height or self.carla_map is None:
 			return self.default_z + self.z_offset
@@ -316,6 +347,8 @@ class BevIdTeleporter:
 		if not ids:
 			return
 
+		tracking_ok_map = {role: False for role in self.role_names}
+
 		if self.enable_matching:
 			# Hungarian-based robust assignment
 			roles = list(self.role_names)[: self.max_vehicle_count]
@@ -340,12 +373,41 @@ class BevIdTeleporter:
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
+				# Teleport safety checks
+				try:
+					curr_tf = actor.get_transform()
+					curr_x = float(curr_tf.location.x)
+					curr_y = float(curr_tf.location.y)
+					curr_yaw_deg = float(curr_tf.rotation.yaw)
+				except Exception:
+					curr_x = x
+					curr_y = y
+					curr_yaw_deg = yaw_deg
+				dist = math.hypot(x - curr_x, y - curr_y)
+				if self.max_teleport_distance_m > 0.0 and dist > self.max_teleport_distance_m:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: jump %.1fm > %.1fm", role, dist, self.max_teleport_distance_m)
+					continue
+				# Optional yaw gate at teleport stage
+				dyaw = abs((yaw_deg - curr_yaw_deg + 180.0) % 360.0 - 180.0)
+				if self.teleport_yaw_gate_deg > 0.0 and dyaw > self.teleport_yaw_gate_deg:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: yaw delta %.1f° > %.1f°", role, dyaw, self.teleport_yaw_gate_deg)
+					continue
+				# Stability warmup after mapping switches
+				now_sec = float(rospy.Time.now().to_sec())
+				last_sw = self.role_last_switch.get(role, now_sec)
+				if (now_sec - last_sw) < max(0.0, self.teleport_stability_warmup_sec):
+					rospy.loginfo_throttle(1.0, "Teleport hold for %s: stabilizing mapping (%.2fs)", role, now_sec - last_sw)
+					continue
+				if role in tracking_ok_map:
+					tracking_ok_map[role] = False
 				z = self._pick_height(x, y)
 				location = carla.Location(x=x, y=y, z=z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
 				try:
 					actor.set_transform(tf)
+					if role in tracking_ok_map:
+						tracking_ok_map[role] = True
 				except Exception as exc:
 					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
 		else:
@@ -365,14 +427,21 @@ class BevIdTeleporter:
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
+				if role in tracking_ok_map:
+					tracking_ok_map[role] = False
 				z = self._pick_height(x, y)
 				location = carla.Location(x=x, y=y, z=z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
 				try:
 					actor.set_transform(tf)
+					if role in tracking_ok_map:
+						tracking_ok_map[role] = True
 				except Exception as exc:
 					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
+
+		for role, ok in tracking_ok_map.items():
+			self._set_tracking_status(role, ok)
 
 
 if __name__ == "__main__":

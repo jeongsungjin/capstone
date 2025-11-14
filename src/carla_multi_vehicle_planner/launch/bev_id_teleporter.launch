@@ -8,6 +8,17 @@
   <arg name="z_offset" default="0.0" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <!-- Matching and safety tuning -->
+  <arg name="enable_matching" default="true" />
+  <arg name="w_pos" default="1.0" />
+  <arg name="w_yaw" default="0.3" />
+  <arg name="dist_gate_m" default="10.0" />
+  <arg name="yaw_gate_deg" default="60.0" />
+  <arg name="hold_sec" default="0.5" />
+  <arg name="ttl_sec" default="3.0" />
+  <arg name="max_teleport_distance_m" default="20.0" />
+  <arg name="teleport_yaw_gate_deg" default="80.0" />
+  <arg name="teleport_stability_warmup_sec" default="0.2" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
@@ -23,6 +34,17 @@
     <param name="z_offset" value="$(arg z_offset)" />
     <param name="carla_host" value="$(arg carla_host)" />
     <param name="carla_port" value="$(arg carla_port)" />
+    <!-- Matching and safety params -->
+    <param name="enable_matching" value="$(arg enable_matching)" />
+    <param name="w_pos" value="$(arg w_pos)" />
+    <param name="w_yaw" value="$(arg w_yaw)" />
+    <param name="dist_gate_m" value="$(arg dist_gate_m)" />
+    <param name="yaw_gate_deg" value="$(arg yaw_gate_deg)" />
+    <param name="hold_sec" value="$(arg hold_sec)" />
+    <param name="ttl_sec" value="$(arg ttl_sec)" />
+    <param name="max_teleport_distance_m" value="$(arg max_teleport_distance_m)" />
+    <param name="teleport_yaw_gate_deg" value="$(arg teleport_yaw_gate_deg)" />
+    <param name="teleport_stability_warmup_sec" value="$(arg teleport_stability_warmup_sec)" />
   </node>
 </launch>
 

@@ -43,6 +43,8 @@
   <include file="$(find carla_multi_vehicle_planner)/launch/conflict_free_system.launch">
     <arg name="enable_platooning" value="$(arg enable_platooning)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="enable_manual_goal" default="false" />
+
   </include>
 
   <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->

@@ -102,6 +102,11 @@ class MultiVehicleController:
         self.person_topic = str(rospy.get_param("~person_topic", "/spawned_person"))
         self._person_xy = None  # type: ignore
         self._person_stamp = None  # type: ignore
+        # Tracking hold (pause control when BEV tracking unavailable)
+        self.enable_tracking_hold = bool(rospy.get_param("~enable_tracking_hold", True))
+        self.tracking_hold_timeout_sec = float(rospy.get_param("~tracking_hold_timeout_sec", 0.5))
+        self._tracking_ok = {}
+        self._tracking_stamp = {}
         # Track per-role intersection entry order
         self.intersection_orders = {0: {}, 1: {}}
         self._intersection_counters = {0: 0, 1: 0}
@@ -128,6 +133,7 @@ class MultiVehicleController:
                 # safety/deadlock fields
                 "safety_stop_since": None,
                 "deadlock_escape_until": None,
+                "tracking_hold": False,
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
@@ -140,6 +146,11 @@ class MultiVehicleController:
             if self.enable_external_control_override:
                 override_topic = f"/carla/{role}/vehicle_control_cmd_override"
                 rospy.Subscriber(override_topic, AckermannDrive, self._override_cb, callback_args=role, queue_size=1)
+            if self.enable_tracking_hold:
+                tracking_topic = f"/carla/{role}/bev_tracking_ok"
+                rospy.Subscriber(tracking_topic, Bool, self._tracking_cb, callback_args=role, queue_size=1)
+                self._tracking_ok[role] = False
+                self._tracking_stamp[role] = 0.0
 
         # Global emergency stop topic
         rospy.Subscriber("/emergency_stop", Bool, self._emergency_cb, queue_size=1)
@@ -416,10 +427,23 @@ class MultiVehicleController:
             vehicle = self.vehicles.get(role)
             if vehicle is None:
                 continue
+            now_sec = float(rospy.Time.now().to_sec())
+            tracking_hold = False
+            if self.enable_tracking_hold:
+                ok_flag = self._tracking_ok.get(role, False)
+                last_stamp = self._tracking_stamp.get(role, 0.0)
+                if (not ok_flag) or ((now_sec - last_stamp) > max(0.0, self.tracking_hold_timeout_sec)):
+                    tracking_hold = True
+                state["tracking_hold"] = tracking_hold
+            else:
+                state["tracking_hold"] = False
             self._update_progress(role, state, vehicle)
             steer, speed = self._compute_control(state)
             if steer is None:
                 continue
+            if tracking_hold:
+                speed = 0.0
+                rospy.loginfo_throttle(1.0, "%s: waiting for reliable BEV tracking", role)
             # Apply external override if enabled and recent
             if self.enable_external_control_override:
                 cmd = self._override_cmds.get(role)
@@ -535,6 +559,10 @@ class MultiVehicleController:
         except Exception:
             self._person_xy = None
             self._person_stamp = None
+
+    def _tracking_cb(self, msg: Bool, role: str) -> None:
+        self._tracking_ok[role] = bool(getattr(msg, "data", False))
+        self._tracking_stamp[role] = rospy.Time.now().to_sec()
 
     def _compute_control(self, state):
         path = state["path"]

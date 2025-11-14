@@ -102,6 +102,9 @@
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
     <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- Tracking hold when BEV ids missing -->
+    <param name="enable_tracking_hold" value="true" />
+    <param name="tracking_hold_timeout_sec" value="0.5" />
     <!-- Intersection dynamic priority: Area 0 and Area 1 -->
     <param name="intersection_dynamic_priority" value="true" />
     <!-- Area 0 -->
