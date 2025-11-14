@@ -8,6 +8,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "Model.h"
+#include "sort_tracker.h"
 
 #include <vector>
 #include <memory>
@@ -47,6 +48,8 @@ private:
     Model perception_model_;
 
     xt::xarray<double> Hs_; // (batch, 3, 3)
+
+    SortTracker tracker_;
 };
 
 #endif

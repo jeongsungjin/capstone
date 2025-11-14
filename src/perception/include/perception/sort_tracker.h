@@ -32,6 +32,7 @@ struct TrackOutput {
 class SortTracker {
 public:
     SortTracker(int max_age=3, int min_hits=3, double iou_threshold=0.3);
+    ~SortTracker();
     std::vector<TrackOutput> update(const std::vector<Detection>& detections);
 
 private:
@@ -46,6 +47,9 @@ private:
     static std::vector<std::vector<double>> compute_cost_matrix(const std::vector<Detection>& dets,
                                                                  const std::vector<std::unique_ptr<Track>>& tracks);
     static std::vector<std::pair<int,int>> hungarian_assignment(const std::vector<std::vector<double>>& cost);
+
+    static double __wrap_deg(double angle);
+    static double __nearest_equivalent_deg(double meas, double ref, double period=360.0);
 };
 
 #endif

@@ -5,20 +5,20 @@
   <rosparam file="$(find ip_camera)/config/common.yaml" command="load"/>
 
   <!-- 1번 카메라 아이디 입력!!!! -->
-  <arg name="arg_ipcam_1" default="1" />
+  <!-- <arg name="arg_ipcam_1" default="1" />
   <node pkg="nodelet" type="nodelet" 
         name="ipcam_$(arg arg_ipcam_1)" 
         args="load ip_camera/StreamerNodelet $(arg manager_name)">
     <rosparam file="$(find ip_camera)/config/ipcam_$(arg arg_ipcam_1).yaml" command="load"/>
-  </node>
+  </node> -->
 
   <!-- 2번 카메라 아이디 입력!!!! -->
-  <arg name="arg_ipcam_2" default="2" />
+  <!-- <arg name="arg_ipcam_2" default="2" />
   <node pkg="nodelet" type="nodelet" 
         name="ipcam_$(arg arg_ipcam_2)" 
         args="load ip_camera/StreamerNodelet $(arg manager_name)">
     <rosparam file="$(find ip_camera)/config/ipcam_$(arg arg_ipcam_2).yaml" command="load"/>
-  </node>
+  </node> -->
 
   <!-- 3번 카메라 아이디 입력!!!! -->
   <!-- <arg name="ipcam_3" default="3" />
@@ -40,7 +40,7 @@
   <arg name="ipcam_2" default="2" />
   <arg name="ipcam_3" default="3" />
   <arg name="ipcam_4" default="4" />
-  <arg name="batch_size" default="2" />
+  <arg name="batch_size" default="4" />
   <node pkg="nodelet" type="nodelet" name="perception" args="load perception/PerceptionNodelet $(arg manager_name)" output="screen">
     <param name="batch_size" value="$(arg batch_size)" />
     <param name="ipcam_1" value="$(arg ipcam_1)" />

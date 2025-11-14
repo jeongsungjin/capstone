@@ -5,6 +5,7 @@
 #include <xtensor-blas/xlinalg.hpp>
 #include <limits>
 #include <algorithm>
+#include <cmath>
 
 struct SimpleKF {
     xt::xarray<double> x; // shape: (n)
@@ -23,23 +24,23 @@ struct SimpleKF {
         auto y = z - xt::linalg::dot(H, x);                         // (m)
         auto S = xt::linalg::dot(H, xt::linalg::dot(P, xt::transpose(H))) + R; // (m,m)
         // Invert S (typically 1x1 or 2x2 here) without requiring LAPACK
-        xt::xarray<double> Si;
         std::size_t m = S.shape()[0];
+        auto PHt = xt::linalg::dot(P, xt::transpose(H)); // (n,m)
+        xt::xarray<double> K;
         if (m == 1) {
             double s00 = S(0,0);
             double inv = (std::abs(s00) > 1e-12) ? 1.0 / s00 : 0.0;
-            Si = xt::xarray<double>{{inv}};
+            K = PHt * inv; // scale each element
         } else if (m == 2) {
             double a = S(0,0), b = S(0,1), c = S(1,0), d = S(1,1);
             double det = a*d - b*c;
             if (std::abs(det) < 1e-12) det = (det >= 0 ? 1e-12 : -1e-12);
-            Si = xt::xarray<double>{{ d/det, -b/det },
-                                    { -c/det, a/det }};
+            xt::xtensor<double,2> Sii{{ d/det, -b/det }, { -c/det, a/det }}; // (2,2)
+            K = xt::linalg::dot(PHt, Sii);
         } else {
-            // Fallback to generic inverse if available
-            Si = xt::linalg::inv(S);
+            auto Si = xt::linalg::inv(S);
+            K = xt::linalg::dot(PHt, Si);
         }
-        auto K = xt::linalg::dot(P, xt::linalg::dot(xt::transpose(H), Si));     // (n,m)
         x = x + xt::linalg::dot(K, y);                               // (n)
         std::size_t n = P.shape()[0];
         auto I = xt::eye<double>(n);
@@ -103,8 +104,8 @@ struct SortTracker::Track {
         kf_yaw.predict();
         kf_length.predict();
         kf_width.predict();
-        // normalize yaw
-        car_yaw = wrap_deg(kf_yaw.x(0));
+    // normalize yaw
+    car_yaw = SortTracker::__wrap_deg(kf_yaw.x(0));
         kf_yaw.x(0) = car_yaw;
         car_length = kf_length.x(0);
         car_width = kf_width.x(0);
@@ -121,15 +122,15 @@ struct SortTracker::Track {
     xt::xarray<double> zw = {d.W};
     kf_length.update(zl);
     kf_width.update(zw);
-        // yaw: adjust to nearest equivalent (period 180)
+    // yaw: adjust to nearest equivalent (period 180)
         double ref = kf_yaw.x(0);
-        double adj = nearest_equivalent_deg(d.yaw, ref, 180.0);
+    double adj = SortTracker::__nearest_equivalent_deg(d.yaw, ref, 180.0);
     xt::xarray<double> zy = {adj};
     kf_yaw.update(zy);
 
         car_length = kf_length.x(0);
         car_width = kf_width.x(0);
-        car_yaw = wrap_deg(kf_yaw.x(0));
+    car_yaw = SortTracker::__wrap_deg(kf_yaw.x(0));
         kf_yaw.x(0) = car_yaw;
 
         time_since_update = 0;
@@ -144,16 +145,16 @@ struct SortTracker::Track {
     }
 };
 
-// Utility functions
-static double wrap_deg(double angle) {
-    double a = fmod(angle + 180.0, 360.0);
+// Utility functions as static class members
+double SortTracker::__wrap_deg(double angle) {
+    double a = std::fmod(angle + 180.0, 360.0);
     if (a < 0) a += 360.0;
     return a - 180.0;
 }
 
-static double nearest_equivalent_deg(double meas, double ref, double period=360.0) {
+double SortTracker::__nearest_equivalent_deg(double meas, double ref, double period) {
     double d = meas - ref;
-    d = fmod(d + period/2.0, period) - period/2.0;
+    d = std::fmod(d + period/2.0, period) - period/2.0;
     return ref + d;
 }
 
@@ -234,6 +235,8 @@ std::vector<std::pair<int,int>> SortTracker::hungarian_assignment(const std::vec
 
 SortTracker::SortTracker(int max_age, int min_hits, double iou_threshold)
     : max_age_(max_age), min_hits_(min_hits), iou_threshold_(iou_threshold) {}
+
+SortTracker::~SortTracker() = default;
 
 std::vector<TrackOutput> SortTracker::update(const std::vector<Detection>& detections) {
     // 1) predict

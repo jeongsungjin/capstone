@@ -63,6 +63,7 @@ add_executable(perception
   src/timer.cpp
   src/timer_logger.cpp
   src/Model.cpp
+  src/sort_tracker.cpp
   include/nvidia_helper/logger.cpp
 )
 
@@ -88,6 +89,7 @@ add_executable(perception_single
   src/timer.cpp
   src/timer_logger.cpp
   src/Model.cpp
+  src/sort_tracker.cpp
   include/nvidia_helper/logger.cpp
 )
 
@@ -114,6 +116,7 @@ add_library(perception_nodelet SHARED
   src/timer.cpp
   src/timer_logger.cpp
   src/Model.cpp
+  src/sort_tracker.cpp
   include/nvidia_helper/logger.cpp
 )
 
