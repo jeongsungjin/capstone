@@ -1,59 +1,57 @@
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.8)
 project(ip_camera)
 
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  rospy
-  std_msgs
-  sensor_msgs
-  cv_bridge
-  nodelet
-  pluginlib
-)
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
 
+# find dependencies
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(OpenCV REQUIRED)
-
-catkin_package(
-  CATKIN_DEPENDS roscpp rospy std_msgs sensor_msgs cv_bridge nodelet pluginlib
-)
+find_package(Threads REQUIRED)
 
 include_directories(
   include
-  ${catkin_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
 )
 
-catkin_install_python(PROGRAMS
-  scripts/ip_camera_streamer.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-add_executable(ip_camera_streamer_node
+# 실행 파일: ROS2 노드 (멀티 카메라 매니저 + 스트리머 구현)
+add_executable(ip_camera_node
   src/ip_camera_node.cpp
   src/ip_camera_streamer.cpp
 )
 
-target_link_libraries(ip_camera_streamer_node
-  ${catkin_LIBRARIES}
+ament_target_dependencies(ip_camera_node
+  rclcpp
+  sensor_msgs
+)
+
+target_link_libraries(ip_camera_node
   ${OpenCV_LIBRARIES}
+  Threads::Threads
 )
 
-add_dependencies(ip_camera_streamer_node ${catkin_EXPORTED_TARGETS})
-
-# Nodelet library
-add_library(ip_camera_streamer_nodelet SHARED
-  src/ip_camera_streamer_nodelet.cpp
-  src/ip_camera_streamer.cpp
+install(TARGETS ip_camera_node
+  DESTINATION lib/${PROJECT_NAME}
 )
 
-target_link_libraries(ip_camera_streamer_nodelet
-  ${catkin_LIBRARIES}
-  ${OpenCV_LIBRARIES}
+install(DIRECTORY include/
+  DESTINATION include
 )
 
-add_dependencies(ip_camera_streamer_nodelet ${catkin_EXPORTED_TARGETS})
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  # the following line skips the linter which checks for copyrights
+  # comment the line when a copyright and license is added to all source files
+  set(ament_cmake_copyright_FOUND TRUE)
+  # the following line skips cpplint (only works in a git repo)
+  # comment the line when this package is in a git repo and when
+  # a copyright and license is added to all source files
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
 
-# Install nodelet plugin description
-install(FILES nodelet_plugins.xml
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
-)
+ament_package()
+
