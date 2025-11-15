@@ -60,8 +60,8 @@ int main(int argc, char** argv) {
     std::vector<rclcpp::Node::SharedPtr> nodes;
     nodes.reserve(batch);
 
-    for (int i = 0; i < batch; ++i) {
-        int cam_id = offset + 1 + i;
+    for (int i = 0; i < batch; i++) {
+        int cam_id = offset + i + 1;
         std::string cfg_path = pkg_path + "/src/ip_camera/config/ipcam_" + std::to_string(cam_id) + ".yaml";
         CameraConfig cfg = load_config_from_yaml(cfg_path, cam_id);
 
