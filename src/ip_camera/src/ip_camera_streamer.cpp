@@ -24,8 +24,7 @@ IPCameraStreamer::IPCameraStreamer(const CameraConfig& camera_config)
     cv::setNumThreads(1);
 
     running_.store(true);
-    auto* buf = new uint8_t[static_cast<size_t>(camera_config_.width) * static_cast<size_t>(camera_config_.height) * 3];
-    worker_ = std::thread(&IPCameraStreamer::cameraThread, this, buf);
+    worker_ = std::thread(&IPCameraStreamer::cameraThread, this);
 }
 
 IPCameraStreamer::~IPCameraStreamer() {
