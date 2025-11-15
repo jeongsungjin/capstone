@@ -9,37 +9,6 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(Threads REQUIRED)
-
-include_directories(
-  include
-  ${OpenCV_INCLUDE_DIRS}
-)
-
-# 실행 파일: ROS2 노드 (멀티 카메라 매니저 + 스트리머 구현)
-add_executable(ip_camera_node
-  src/ip_camera_node.cpp
-  src/ip_camera_streamer.cpp
-)
-
-ament_target_dependencies(ip_camera_node
-  rclcpp
-  sensor_msgs
-)
-
-target_link_libraries(ip_camera_node
-  ${OpenCV_LIBRARIES}
-  Threads::Threads
-)
-
-install(TARGETS ip_camera_node
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-install(DIRECTORY include/
-  DESTINATION include
-)
 
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
@@ -54,4 +23,3 @@ if(BUILD_TESTING)
 endif()
 
 ament_package()
-
