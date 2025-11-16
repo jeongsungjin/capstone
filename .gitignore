@@ -26,3 +26,5 @@ src/perception/engine/
 dataset/
 src/perception/scripts/
 src/perception/logging/
+
+log/

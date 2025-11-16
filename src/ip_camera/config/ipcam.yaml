@@ -1,0 +1,48 @@
+"/**":
+  ros__parameters:
+    port: 554
+    username: admin
+    password: zjsxmfhf
+    topic_name_prefix: /ipcam_
+    transport: udp
+    width: 1280
+    height: 720
+    publish_rate: 60.0
+    use_compression: true
+    jpeg_quality: 90
+
+"ipcam_1":
+  ros__parameters:
+    ip: "192.168.0.27"
+    camera_id: 1
+    frame_id: "ipcam_1"
+    
+"ipcam_2":
+  ros__parameters:
+    ip: "192.168.0.21"
+    camera_id: 2
+    frame_id: "ipcam_2"
+    
+"ipcam_3":
+  ros__parameters:
+    ip: "192.168.0.36"
+    camera_id: 3
+    frame_id: "ipcam_3"
+    
+"ipcam_4":
+  ros__parameters:
+    ip: "192.168.0.32"
+    camera_id: 4
+    frame_id: "ipcam_4"
+    
+"ipcam_5":
+  ros__parameters:
+    ip: "192.168.0.37"
+    camera_id: 5
+    frame_id: "ipcam_5"
+
+"ipcam_6":
+  ros__parameters:
+    ip: "192.168.0.29"
+    camera_id: 6
+    frame_id: "ipcam_6"
