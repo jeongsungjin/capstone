@@ -2,6 +2,7 @@
   <!-- Top-level unified args -->
   <arg name="num_vehicles" default="1" />
   <arg name="enable_platooning" default="false" />
+
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
   <arg name="enable_bev_pipeline" default="false" />
 
