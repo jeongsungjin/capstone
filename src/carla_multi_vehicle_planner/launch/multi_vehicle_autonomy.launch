@@ -36,9 +36,7 @@
     <param name="udp_port" value="9001" />
   </node>
 
-  <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/predictive_collision_avoidance.launch">
-    <arg name="num_vehicles" value="$(arg num_vehicles)" />
-  </include>
+  <!-- predictive_collision_avoidance removed -->
 
   <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
     <param name="max_vehicle_count" value="6" />

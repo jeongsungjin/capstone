@@ -2,16 +2,9 @@
   <arg name="num_vehicles" default="4" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
-  <arg name="include_collision_avoidance" default="true" />
 
   <!-- Basic multi-vehicle system -->
   <include file="$(find carla_multi_vehicle_planner)/launch/multi_vehicle_autonomy.launch">
-    <arg name="num_vehicles" value="$(arg num_vehicles)" />
-    <arg name="include_collision_avoidance" value="false" />
-  </include>
-
-  <!-- Predictive collision avoidance (optional) -->
-  <include if="$(arg include_collision_avoidance)" file="$(find carla_multi_vehicle_planner)/launch/predictive_collision_avoidance.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
   </include>
 
