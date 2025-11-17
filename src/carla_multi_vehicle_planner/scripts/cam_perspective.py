@@ -515,13 +515,7 @@ class CamPerspective:
             reset=True,
         )
 
-        rospy.loginfo(
-            "cam_perspective: goal view at (%.1f, %.1f, %.1f) yaw=%.1f pitch=%.1f (preset=%s, d=%.2f, tol=%.2f, override=%s)",
-            tx, ty, tz, yaw_used, pitch_used,
-            preset_name,
-            (best_d if best_d is not None else -1.0), self.goal_match_tolerance,
-            str(use_override),
-        )
+        rospy.loginfo("cam_perspective: goal override received for %s", role)
 
         # Revert to default after duration
         def _revert(_evt):
@@ -567,7 +561,8 @@ class CamPerspective:
             pass
 
     def _goal_anim_cb(self, _event):
-        if self.mode != "goal" or self._goal_target is None or self._goal_cam is None:
+        # Animate towards the pending target regardless of current mode
+        if self._goal_target is None or self._goal_cam is None:
             return
         tx = self._goal_target['x']
         ty = self._goal_target['y']

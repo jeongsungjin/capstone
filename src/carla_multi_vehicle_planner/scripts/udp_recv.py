@@ -85,8 +85,9 @@ def main():
                         continue
                     role = _role_name(current_vehicle_id)
                     pub = get_override_pub(role)
-                    # Re-publish selection to ensure downstream nodes latch current role
-                    selected_pub.publish(String(data=role))
+                    # Optional: re-publish selection (default: disabled to avoid forcing follow view)
+                    if bool(rospy.get_param("~republish_selected_on_coords", False)):
+                        selected_pub.publish(String(data=role))
                     ps = PoseStamped()
                     ps.header.stamp = rospy.Time.now()
                     ps.header.frame_id = "map"
