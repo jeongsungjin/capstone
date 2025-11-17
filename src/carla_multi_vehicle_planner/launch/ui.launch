@@ -1,0 +1,26 @@
+<launch>
+  <arg name="num_vehicles" default="1" />
+  <arg name="udp_ip" default="0.0.0.0" />
+  <arg name="udp_port" default="9001" />
+
+  <!-- Camera/spectator controller -->
+  <node pkg="carla_multi_vehicle_planner" type="cam_perspective.py" name="cam_perspective" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+  </node>
+
+  <!-- Graceful CARLA world reset on shutdown -->
+  <node pkg="carla_multi_vehicle_planner" type="carla_shutdown.py" name="carla_shutdown" output="screen" />
+
+  <!-- UDP bridge for selection/destination/goal override -->
+  <node pkg="carla_multi_vehicle_planner" type="udp_recv.py" name="udp_goal_bridge" output="screen">
+    <param name="udp_ip" value="$(arg udp_ip)" />
+    <param name="udp_port" value="$(arg udp_port)" />
+  </node>
+
+  <!-- Replan path visualization in CARLA world -->
+  <node pkg="carla_multi_vehicle_planner" type="path_visualization.py" name="path_visualization" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+  </node>
+</launch>
+
+
