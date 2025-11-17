@@ -9,21 +9,23 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   visualization_msgs
   ackermann_msgs
+  capstone_msgs
 )
 
 catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/multi_vehicle_spawner.py
-  scripts/networkx_path_planner.py
   scripts/multi_vehicle_controller.py
   scripts/bev_visualizer.py
   scripts/occupancy_grid_publisher.py
+  scripts/inference_recv.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
-  scripts/rccar_udp_sender.py
-  scripts/carla_cleanup.py
-  scripts/udp_recv.py
-  scripts/path_visualization.py
-  scripts/carla_shutdown.py
+  scripts/rviz_person_spawner.py
+  scripts/udp_ackermann_sender.py
+  scripts/path_relay.py
+  scripts/platoon_manager.py
+  scripts/bev_id_teleporter.py
+  scripts/rviz_click_teleporter.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

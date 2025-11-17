@@ -19,3 +19,10 @@ __pycache__/
 .idea/
 .DS_Store
 *.bag
+*.onnx
+src/perception/engine/
+
+.catkin_tools/
+dataset/
+src/perception/scripts/
+src/perception/logging/

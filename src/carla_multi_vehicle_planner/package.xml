@@ -16,6 +16,7 @@
   <build_depend>sensor_msgs</build_depend>
   <build_depend>visualization_msgs</build_depend>
   <build_depend>ackermann_msgs</build_depend>
+  <build_depend>capstone_msgs</build_depend>
 
   <exec_depend>rospy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
@@ -24,6 +25,7 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <exec_depend>ackermann_msgs</exec_depend>
+  <exec_depend>capstone_msgs</exec_depend>
   <exec_depend>python3</exec_depend>
   <exec_depend>python3-networkx</exec_depend>
 

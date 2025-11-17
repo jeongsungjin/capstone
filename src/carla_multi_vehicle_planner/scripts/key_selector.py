@@ -7,12 +7,33 @@ import tty
 
 import rospy
 from std_msgs.msg import String
+from ackermann_msgs.msg import AckermannDrive
+from std_msgs.msg import Bool
 
 
 class KeySelectorNode:
     def __init__(self) -> None:
         self._node_name = rospy.get_name() or "key_selector"
         self._pub = rospy.Publisher("/selected_vehicle", String, queue_size=1, latch=True)
+        self._e_stop_pub = rospy.Publisher("/emergency_stop", Bool, queue_size=1, latch=True)
+        self._spawn_person_pub = rospy.Publisher("/spawn_person_mode", Bool, queue_size=1, latch=True)
+        self._emergency_active = False
+        self._spawn_person_active = False
+        self._e_stop_timer = None
+        self._e_stop_hz = float(rospy.get_param("~emergency_burst_hz", 20.0))
+        # Emergency stop publishers (speed-only override)
+        self._roles = [
+            "ego_vehicle_1",
+            "ego_vehicle_2",
+            "ego_vehicle_3",
+            "ego_vehicle_4",
+            "ego_vehicle_5",
+            "ego_vehicle_6",
+        ]
+        self._stop_pubs = {
+            r: rospy.Publisher(f"/carla/{r}/vehicle_control_cmd_override", AckermannDrive, queue_size=1)
+            for r in self._roles
+        }
         self._stdin = sys.stdin
         if not self._stdin.isatty():
             rospy.logerr("%s: stdin is not a TTY; cannot capture key presses", self._node_name)
@@ -24,7 +45,7 @@ class KeySelectorNode:
         self._restored = False
         rospy.on_shutdown(self._restore_terminal)
 
-        rospy.loginfo("Press 1/2/3 to choose vehicle. ESC to exit.")
+        rospy.loginfo("Press 1/2/3/4/5/6 to choose vehicle, SPACE to EMERGENCY STOP ALL, ESC to exit.")
         self._publish_selection("ego_vehicle_1")
 
     def spin(self) -> None:
@@ -40,6 +61,12 @@ class KeySelectorNode:
                         break
                     if key == "\x03":  # Ctrl-C
                         raise KeyboardInterrupt
+                    if key == " ":  # SPACE: toggle emergency stop
+                        self._toggle_emergency()
+                        continue
+                    if key.lower() == "o":  # toggle RViz person spawn mode
+                        self._toggle_spawn_person()
+                        continue
                     self._handle_key(key)
                 rate.sleep()
         except KeyboardInterrupt:
@@ -63,6 +90,59 @@ class KeySelectorNode:
         msg = String(data=vehicle_id)
         self._pub.publish(msg)
         rospy.loginfo("%s: selected %s", self._node_name, vehicle_id)
+
+    def _toggle_emergency(self) -> None:
+        self._emergency_active = not self._emergency_active
+        if self._emergency_active:
+            # Activate emergency: latch True and start periodic zero-speed publish
+            try:
+                self._e_stop_pub.publish(Bool(data=True))
+            except Exception:
+                pass
+            self._start_stop_burst()
+            rospy.logwarn("%s: EMERGENCY STOP ON", self._node_name)
+        else:
+            # Deactivate emergency: latch False and stop periodic publishing
+            try:
+                self._e_stop_pub.publish(Bool(data=False))
+            except Exception:
+                pass
+            self._stop_stop_burst()
+            rospy.logwarn("%s: EMERGENCY STOP OFF", self._node_name)
+
+    def _toggle_spawn_person(self) -> None:
+        self._spawn_person_active = not self._spawn_person_active
+        try:
+            self._spawn_person_pub.publish(Bool(data=self._spawn_person_active))
+        except Exception:
+            pass
+        rospy.loginfo("%s: spawn person mode %s", self._node_name, "ON" if self._spawn_person_active else "OFF")
+
+    def _start_stop_burst(self) -> None:
+        if self._e_stop_timer is not None:
+            return
+        period = 1.0 / max(1.0, self._e_stop_hz)
+        self._e_stop_timer = rospy.Timer(rospy.Duration(period), self._e_stop_tick)
+
+    def _stop_stop_burst(self) -> None:
+        if self._e_stop_timer is not None:
+            try:
+                self._e_stop_timer.shutdown()
+            except Exception:
+                pass
+            self._e_stop_timer = None
+
+    def _e_stop_tick(self, _evt) -> None:
+        if not self._emergency_active:
+            return
+        stop = AckermannDrive()
+        stop.speed = 0.0
+        stop.steering_angle = 0.0
+        for role, pub in self._stop_pubs.items():
+            try:
+                pub.publish(stop)
+            except Exception:
+                pass
 
     def _restore_terminal(self) -> None:
         if not self._restored:

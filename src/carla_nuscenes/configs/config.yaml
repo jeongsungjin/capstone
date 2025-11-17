@@ -1,0 +1,57 @@
+dataset:
+  root: "/home/ctrl/capstone_2025/carla_nuscenes/dataset"
+  version: "v1.0-trainval"
+
+client:
+  host: 127.0.0.1
+  port: 2000
+  time_out: 300.0
+
+sensors:
+  !include ./sensors.yaml
+
+categories:
+  !include ./categories.yaml
+
+attributes:
+  !include ./attributes.yaml
+
+visibility:
+  !include ./visibility.yaml 
+
+worlds:  # 단일 Town10 시나리오
+  -
+    map_name: "Town10HD"  # 또는 "Town10HD_Opt" 사용 중이면 해당 값으로 변경
+    map_category: "semantic_prior"
+    settings:
+      fixed_delta_seconds: 0.05
+      no_rendering_mode: true   # 렌더링 비활성화로 GPU 메모리/부하 절감
+    use_existing_world: true   # 현재 실행 중인 시뮬레이터 월드를 그대로 사용
+    captures:
+      -
+        date: "2025-10-01"
+        time: "12-00-00"
+        timezone: "+0900"
+        capture_vehicle: "c0001"
+        location: "Town10"
+        scenes:
+          -
+            count: 5
+            custom: True
+            collect_time: 20         # 수집 시간(초)
+            keyframe_time: 0.5       # 키프레임 간격(초)
+            weather_mode: "ClearNoon"
+            use_existing_world: true
+            ros_like_random_spawn: false
+            vehicles: []
+            walkers: []
+            ego_random_from_paths: false
+            spawn_path_file_in: ~
+            spawn_path_file_out: ~
+            ego_vehicle:
+              bp_name: "vehicle.tesla.model3"
+              location: { x: 0.0, y: 0.0, z: 0.6 }
+              rotation: { yaw: 0.0, pitch: 0.0, roll: 0.0 }
+            calibrated_sensors:
+              !include ./calibrated_sensors.yaml
+            description: "Town10_2Cam1Lidar"

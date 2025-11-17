@@ -1,0 +1,56 @@
+<launch>
+  <!-- Top-level unified args -->
+  <arg name="num_vehicles" default="1" />
+  <arg name="enable_platooning" default="false" />
+
+  <!-- Inference (UDP) args -->
+  <arg name="udp_ip" default="0.0.0.0" />
+  <arg name="udp_ports" default="60200" />
+  <arg name="bev_topic" default="/bev_info" />
+  <arg name="input_yaw_degrees" default="true" />
+  <arg name="x_offset_m" default="0.0" />
+  <arg name="y_offset_m" default="2.0" />
+  <arg name="yaw_add_deg" default="180.0" />
+  <arg name="max_items" default="64" />
+
+  <!-- 1) UDP inference receiver (publishes BEVInfo on /bev_info) -->
+  <node pkg="carla_multi_vehicle_planner" type="inference_recv.py" name="inference_receiver" output="screen">
+    <param name="udp_ip" value="$(arg udp_ip)" />
+    <param name="udp_ports" value="$(arg udp_ports)" />
+    <param name="topic" value="$(arg bev_topic)" />
+    <param name="input_yaw_degrees" value="$(arg input_yaw_degrees)" />
+    <param name="x_offset_m" value="$(arg x_offset_m)" />
+    <param name="y_offset_m" value="$(arg y_offset_m)" />
+    <param name="yaw_add_deg" value="$(arg yaw_add_deg)" />
+    <param name="max_items" value="$(arg max_items)" />
+  </node>
+
+  <!-- 2) Teleporter: BEVInfo -> CARLA vehicle teleport (keep existing options via its own launch) -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter.launch">
+    <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
+    <!-- Pass-through optional overrides:
+         <arg name="topic" value="/bev_info" />
+         <arg name="yaw_in_degrees" value="false" />
+         <arg name="snap_to_waypoint_height" value="true" />
+         <arg name="default_z" value="0.5" />
+         <arg name="z_offset" value="0.0" />
+         <arg name="carla_host" value="localhost" />
+         <arg name="carla_port" value="2000" />
+    -->
+  </include>
+
+  <!-- 3) Planner + Controller + Visualizers (keep all original args) -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/conflict_free_system.launch">
+    <arg name="enable_platooning" value="$(arg enable_platooning)" />
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="enable_manual_goal" default="false" />
+
+  </include>
+
+  <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  </include>
+</launch>
+
+

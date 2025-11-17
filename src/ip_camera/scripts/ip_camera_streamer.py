@@ -22,7 +22,7 @@ class IPCameraStreamer:
         # 카메라 설정 (FFmpeg 파이프 기반)
         self.camera_configs = [
             {
-                'ip': '192.168.0.171',
+                'ip': '192.168.0.20',
                 'port': 554,
                 'username': 'admin',
                 'password': 'zjsxmfhf',
@@ -34,7 +34,7 @@ class IPCameraStreamer:
                 'height': 720,
             },
             {
-                'ip': '192.168.0.195',
+                'ip': '192.168.0.21',
                 'port': 554,
                 'username': 'admin',
                 'password': 'zjsxmfhf',
@@ -87,8 +87,8 @@ class IPCameraStreamer:
     def create_stream_urls(self, config):
         """RTSP URL 목록 생성 (서브 스트림 우선)"""
         return [
-            f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/stream2",
             f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/stream1",
+            f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/stream2",
         ]
 
     def spawn_ffmpeg(self, url: str, width: int, height: int, transport: str):
