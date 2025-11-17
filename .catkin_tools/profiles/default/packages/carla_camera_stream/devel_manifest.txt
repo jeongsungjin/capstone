@@ -1,8 +1,0 @@
-carla_camera_stream
-/home/ctrl/capstone/devel/.private/carla_camera_stream/share/carla_camera_stream/cmake/carla_camera_streamConfig-version.cmake /home/ctrl/capstone/devel/share/carla_camera_stream/cmake/carla_camera_streamConfig-version.cmake
-/home/ctrl/capstone/devel/.private/carla_camera_stream/share/carla_camera_stream/cmake/carla_camera_streamConfig.cmake /home/ctrl/capstone/devel/share/carla_camera_stream/cmake/carla_camera_streamConfig.cmake
-/home/ctrl/capstone/devel/.private/carla_camera_stream/lib/pkgconfig/carla_camera_stream.pc /home/ctrl/capstone/devel/lib/pkgconfig/carla_camera_stream.pc
-/home/ctrl/capstone/devel/.private/carla_camera_stream/lib/carla_camera_stream/spawn_cameras.py /home/ctrl/capstone/devel/lib/carla_camera_stream/spawn_cameras.py
-/home/ctrl/capstone/devel/.private/carla_camera_stream/lib/carla_camera_stream/spawn_traffic_vehicles.py /home/ctrl/capstone/devel/lib/carla_camera_stream/spawn_traffic_vehicles.py
-/home/ctrl/capstone/devel/.private/carla_camera_stream/lib/carla_camera_stream/click_coordinate.py /home/ctrl/capstone/devel/lib/carla_camera_stream/click_coordinate.py
-/home/ctrl/capstone/devel/.private/carla_camera_stream/lib/carla_camera_stream/spawn_cameras_n.py /home/ctrl/capstone/devel/lib/carla_camera_stream/spawn_cameras_n.py
