@@ -26,9 +26,17 @@ VEHICLE_MARKER_SIZE_X = 4.0   # length
 VEHICLE_MARKER_SIZE_Y = 2.0   # width
 VEHICLE_MARKER_SIZE_Z = 1.6   # height
 
-CARLA_BUILD_PATH = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
-if CARLA_BUILD_PATH not in sys.path:
-    sys.path.insert(0, CARLA_BUILD_PATH)
+import os
+# Prefer centralized CARLA path setup if available
+try:
+    from setup_carla_path import CARLA_BUILD_PATH  # noqa: F401
+except Exception:
+    # Fallbacks: env var → default user path (expanded)
+    _env = os.environ.get("CARLA_PYTHON_PATH")
+    _default = os.path.expanduser("~/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38")
+    CARLA_BUILD_PATH = _env if _env else _default
+    if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
+        sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
