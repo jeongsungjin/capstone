@@ -6,6 +6,7 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 
 #include <cv_bridge/cv_bridge.hpp>
+#include <image_transport/image_transport.hpp>
 
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -27,36 +28,26 @@ struct CameraConfig {
 
 class IPCameraStreamer : public rclcpp::Node {
 public:
-    explicit IPCameraStreamer();
     explicit IPCameraStreamer(const rclcpp::NodeOptions & options);
     ~IPCameraStreamer() override;
 
-    void init();
     void stop();
 
 private:
+    void initConfig();
     void cameraThread();
     FILE* createCameraStream();
 
+private:
     CameraConfig camera_config_;
+    
     std::string stream_url_;
     std::string ffmpeg_cmd_;
-
-    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr compressed_publisher_;
-
-    bool use_compression_{false};
-    int jpeg_quality_{80};
+    
+    image_transport::Publisher image_transport_pub_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};
-
-    double publish_rate_{60.0};
-    // publish timing stats
-    std::atomic<uint64_t> publish_count_{0};
-    std::atomic<uint64_t> total_publish_ns_{0};
-    std::atomic<uint64_t> max_publish_ns_{0};
-    std::chrono::steady_clock::time_point publish_stats_start_;
 };
 
 #endif
