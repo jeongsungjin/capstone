@@ -15,8 +15,11 @@ try:
 except ImportError:
     setup_carla_path = None  # noqa: F841 so linters do not complain
 
-default_build_path = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
-CARLA_BUILD_PATH = os.environ.get("CARLA_BUILD_PATH") or getattr(setup_carla_path, "CARLA_BUILD_PATH", None) or default_build_path
+default_build_path = os.path.expanduser("~/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38")
+# Prefer explicit env var first, then setup helper, then legacy env, then default
+_env_primary = os.environ.get("CARLA_PYTHON_PATH") or os.environ.get("CARLA_BUILD_PATH")
+_helper_path = getattr(setup_carla_path, "CARLA_BUILD_PATH", None) if setup_carla_path else None
+CARLA_BUILD_PATH = _env_primary or _helper_path or default_build_path
 
 if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
     sys.path.insert(0, CARLA_BUILD_PATH)
