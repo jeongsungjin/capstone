@@ -144,9 +144,11 @@ class MultiVehicleSpawner:
         # Per-vehicle model mapping
         model_map = [
             "vehicle.vehicle.greenxycar",   # vehicle 1
-            "vehicle.vehicle.bluexycar",    # vehicle 2
-            "vehicle.vehicle.coloredxycar", # vehicle 3
+            "vehicle.vehicle.purplexycar",    # vehicle 2
+            "vehicle.vehicle.redxycar", # vehicle 3
             "vehicle.vehicle.yellowxycar", # vehicle 4
+            "vehicle.vehicle.pinkxycar", # vehicle 5
+            "vehicle.vehicle.whitexycar", # vehicle 6
         ]
 
         for index in range(self.num_vehicles):

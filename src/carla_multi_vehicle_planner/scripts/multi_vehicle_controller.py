@@ -119,6 +119,12 @@ class MultiVehicleController:
         followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
         self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
 
+        # Dynamic lookahead distance based on path curvature (optional)
+        self.dynamic_lookahead_enable = bool(rospy.get_param("~dynamic_lookahead_enable", True))
+        self.lookahead_min = float(rospy.get_param("~lookahead_min", 2.0))
+        self.lookahead_max = float(rospy.get_param("~lookahead_max", self.lookahead_distance))
+        self.lookahead_kappa_gain = float(rospy.get_param("~lookahead_kappa_gain", 3.0))
+
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             self.states[role] = {
@@ -321,6 +327,39 @@ class MultiVehicleController:
                     continue
             return True
         return False
+
+    def _estimate_path_curvature(self, points, center_index):
+        # Estimate curvature (1/R) using three path points around current index.
+        try:
+            if not points or len(points) < 3:
+                return 0.0
+            i = max(1, min(center_index, len(points) - 2))
+            x1, y1 = points[i - 1]
+            x2, y2 = points[i]
+            x3, y3 = points[i + 1]
+            a = math.hypot(x2 - x1, y2 - y1)
+            b = math.hypot(x3 - x2, y3 - y2)
+            c = math.hypot(x3 - x1, y3 - y1)
+            if a < 1e-6 or b < 1e-6 or c < 1e-6:
+                return 0.0
+            twice_area = abs((x2 - x1) * (y3 - y1) - (y2 - y1) * (x3 - x1))
+            curvature = (2.0 * twice_area) / max(1e-6, a * b * c)
+            return max(0.0, float(curvature))
+        except Exception:
+            return 0.0
+
+    def _compute_effective_lookahead(self, state):
+        base_ld = float(self.lookahead_distance)
+        if not self.dynamic_lookahead_enable:
+            return base_ld
+        path_points = state.get("path") or []
+        current_index = int(state.get("current_index", 0))
+        kappa = self._estimate_path_curvature(path_points, current_index)
+        # Shrink lookahead with curvature: ld_eff = base / (1 + gain * kappa), clamped
+        denom = 1.0 + max(0.0, self.lookahead_kappa_gain) * max(0.0, kappa)
+        ld_eff = base_ld / max(1e-6, denom)
+        ld_eff = max(self.lookahead_min, min(self.lookahead_max, ld_eff))
+        return ld_eff
 
     def _path_cb(self, msg, role):
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
@@ -575,12 +614,15 @@ class MultiVehicleController:
         y = position.y
         yaw = quaternion_to_yaw(orientation)
 
+        # Determine effective lookahead distance considering path curvature
+        effective_lookahead = self._compute_effective_lookahead(state)
+
         target = None
         if self.target_select_by_arclength and state.get("s_profile"):
             # Choose the point whose arc-length >= s_now + lookahead_distance
             s_profile = state["s_profile"]
             s_now = float(state.get("progress_s", 0.0))
-            s_target = s_now + float(self.lookahead_distance)
+            s_target = s_now + float(effective_lookahead)
             # Binary search could be used; linear scan is fine for typical sizes
             target_idx = None
             for i, s in enumerate(s_profile):
@@ -597,7 +639,7 @@ class MultiVehicleController:
             index = state["current_index"]
             while index < len(path):
                 px, py = path[index]
-                if math.hypot(px - x, py - y) > self.lookahead_distance * 0.5:
+                if math.hypot(px - x, py - y) > effective_lookahead * 0.5:
                     break
                 index += 1
             state["current_index"] = min(index, len(path) - 1)
@@ -605,7 +647,7 @@ class MultiVehicleController:
                 candidate_index = (state["current_index"] + offset) % len(path)
                 px, py = path[candidate_index]
                 dist = math.hypot(px - x, py - y)
-                if dist >= self.lookahead_distance:
+                if dist >= effective_lookahead:
                     target = (px, py)
                     break
             if target is None:
@@ -630,8 +672,8 @@ class MultiVehicleController:
         speed = self.target_speed
         if abs(steer) > 0.2:
             speed *= 0.7
-        if Ld < self.lookahead_distance:
-            speed *= max(0.0, Ld / self.lookahead_distance)
+        if Ld < effective_lookahead:
+            speed *= max(0.0, Ld / max(1e-6, effective_lookahead))
 
         return steer, speed
 

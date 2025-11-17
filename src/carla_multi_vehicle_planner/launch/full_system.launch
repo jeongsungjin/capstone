@@ -2,6 +2,8 @@
   <!-- Top-level unified args -->
   <arg name="num_vehicles" default="1" />
   <arg name="enable_platooning" default="false" />
+  <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
+  <arg name="enable_bev_pipeline" default="false" />
 
   <!-- Inference (UDP) args -->
   <arg name="udp_ip" default="0.0.0.0" />
@@ -14,7 +16,7 @@
   <arg name="max_items" default="64" />
 
   <!-- 1) UDP inference receiver (publishes BEVInfo on /bev_info) -->
-  <node pkg="carla_multi_vehicle_planner" type="inference_recv.py" name="inference_receiver" output="screen">
+  <node if="$(arg enable_bev_pipeline)" pkg="carla_multi_vehicle_planner" type="inference_recv.py" name="inference_receiver" output="screen">
     <param name="udp_ip" value="$(arg udp_ip)" />
     <param name="udp_ports" value="$(arg udp_ports)" />
     <param name="topic" value="$(arg bev_topic)" />
@@ -26,7 +28,7 @@
   </node>
 
   <!-- 2) Teleporter: BEVInfo -> CARLA vehicle teleport (keep existing options via its own launch) -->
-  <include file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter.launch">
+  <include if="$(arg enable_bev_pipeline)" file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter.launch">
     <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
     <!-- Pass-through optional overrides:
          <arg name="topic" value="/bev_info" />
@@ -44,6 +46,8 @@
     <arg name="enable_platooning" value="$(arg enable_platooning)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
     <arg name="enable_manual_goal" default="false" />
+    <!-- When BEV pipeline disabled, also disable controller's tracking hold -->
+    <arg name="enable_bev_tracking_hold" value="$(arg enable_bev_pipeline)" />
 
   </include>
 
