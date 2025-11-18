@@ -15,15 +15,28 @@ from visualization_msgs.msg import Marker, MarkerArray
 # =======================
 # Vehicle Visualization Settings
 # =======================
-VEHICLE_RECT_W = 16    # 직사각형 가로 (픽셀)
-VEHICLE_RECT_H = 12    # 직사각형 세로 (픽셀)
+# Map scale is meters-per-pixel (default 0.25). For a ~4 m car:
+# 4.0 m / 0.25 m/px = 16 px width, 2.0 m ~ 8 px height
+VEHICLE_RECT_W = 16   # 직사각형 가로 (픽셀)
+VEHICLE_RECT_H = 8    # 직사각형 세로 (픽셀)
 
-VEHICLE_MARKER_SCALE = 6.0    # RViz 마커 큐브 크기 (meter 단위)
-VEHICLE_MARKER_TYPE = Marker.CUBE  # RViz 마커: CUBE 로 변경
+# RViz marker (meters)
+VEHICLE_MARKER_TYPE = Marker.CUBE
+VEHICLE_MARKER_SIZE_X = 4.0   # length
+VEHICLE_MARKER_SIZE_Y = 2.0   # width
+VEHICLE_MARKER_SIZE_Z = 1.6   # height
 
-CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-if CARLA_EGG not in sys.path:
-    sys.path.insert(0, CARLA_EGG)
+import os
+# Prefer centralized CARLA path setup if available
+try:
+    from setup_carla_path import CARLA_BUILD_PATH  # noqa: F401
+except Exception:
+    # Fallbacks: env var → default user path (expanded)
+    _env = os.environ.get("CARLA_PYTHON_PATH")
+    _default = os.path.expanduser("~/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38")
+    CARLA_BUILD_PATH = _env if _env else _default
+    if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
+        sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
@@ -59,7 +72,7 @@ class BEVVisualizer:
         for index in range(1, self.max_vehicle_count + 1):
             role = f"ego_vehicle_{index}"
             rospy.Subscriber(f"/carla/{role}/odometry", Odometry, self._odom_cb, callback_args=role)
-            rospy.Subscriber(f"/planned_path_{role}", Path, self._path_cb, callback_args=role)
+            rospy.Subscriber(f"/global_path_{role}", Path, self._path_cb, callback_args=role)
 
         rospy.Timer(rospy.Duration(1.0 / max(self.update_rate, 0.1)), self._timer_cb)
 
@@ -137,9 +150,9 @@ class BEVVisualizer:
                 marker.type = VEHICLE_MARKER_TYPE  # CUBE
                 marker.action = Marker.ADD
                 marker.pose = pose
-                marker.scale.x = VEHICLE_MARKER_SCALE
-                marker.scale.y = VEHICLE_MARKER_SCALE/2
-                marker.scale.z = VEHICLE_MARKER_SCALE
+                marker.scale.x = VEHICLE_MARKER_SIZE_X
+                marker.scale.y = VEHICLE_MARKER_SIZE_Y
+                marker.scale.z = VEHICLE_MARKER_SIZE_Z
                 marker.color = ColorRGBA(
                     r=color_bgr[2] / 255.0,
                     g=color_bgr[1] / 255.0,
@@ -191,9 +204,9 @@ class BEVVisualizer:
             "ego_vehicle_1": (0, 255, 0),
             "ego_vehicle_2": (255, 0, 0),
             "ego_vehicle_3": (0, 0, 255),
-            "ego_vehicle_4": (255, 255, 0),
+            "ego_vehicle_4": (0, 255, 255),
             "ego_vehicle_5": (255, 0, 255),
-            "ego_vehicle_6": (0, 255, 255),
+            "ego_vehicle_6": (255, 255, 0),
         }
         return palette.get(role, (200, 200, 200))
 

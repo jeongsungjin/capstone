@@ -17,60 +17,43 @@ else
     echo "⚠ ROS Noetic setup.bash를 찾을 수 없습니다"
 fi
 
-# Capstone 워크스페이스 환경
-if [ -f "$HOME/capstone/devel/setup.bash" ]; then
-    source "$HOME/capstone/devel/setup.bash"
-    echo "✓ Capstone 워크스페이스 환경 설정 완료"
-else
-    echo "⚠ Capstone 워크스페이스 devel/setup.bash를 찾을 수 없습니다"
+# 워크스페이스 설정 (devel이 있는 경우)
+if [ -f "/home/ctrl/capstone/devel/setup.bash" ]; then
+    source /home/ctrl/capstone/devel/setup.bash
+    echo "✓ capstone 워크스페이스 설정 완료"
 fi
 
-# CARLA Python API 경로 자동 탐색(egg + PythonAPI)
-add_carla_paths() {
-    local roots=(
-        "$HOME/carla"
-        "$HOME/CARLA_0.9.16"
-        "$HOME/CARLA_0.9.14"
-        "/opt/carla-simulator"
-        "/opt/CARLA_0.9.16"
-        "/opt/CARLA_0.9.14"
-    )
-
-    for root in "${roots[@]}"; do
-        if [ -d "$root/PythonAPI" ]; then
-            # egg 파일 탐색 (현재 Python 3.8 기준)
-            local egg=$(ls "$root"/PythonAPI/carla/dist/*py3.8*.egg 2>/dev/null | head -n1)
-            if [ -f "$egg" ]; then
-                export PYTHONPATH="$egg:$PYTHONPATH"
-                echo "✓ CARLA egg 추가됨: $egg"
-            fi
-            export PYTHONPATH="$root/PythonAPI:$PYTHONPATH"
-            echo "✓ CARLA PythonAPI 추가됨: $root/PythonAPI"
-            return 0
-        fi
-    done
-
-    # 시스템 전역 탐색(비용 있음)
-    local egg=$(sudo bash -c "ls -1 /usr/local/*/PythonAPI/carla/dist/*py3.8*.egg 2>/dev/null" | head -n1)
-    if [ -f "$egg" ]; then
-        local base=$(dirname $(dirname $(dirname "$egg")))
-        export PYTHONPATH="$egg:$base/PythonAPI:$PYTHONPATH"
-        echo "✓ CARLA 경로 자동 탐색 추가됨: $egg, $base/PythonAPI"
-        return 0
-    fi
-
-    echo "⚠ CARLA Python API를 찾지 못했습니다. CARLA 설치 경로를 확인하세요."
-    return 1
-}
-
-add_carla_paths || true
-
-# 시스템 Python 패키지 경로 추가
+# ROS 패키지를 위한 시스템 Python 패키지 경로 추가
 export PYTHONPATH="$PYTHONPATH:/usr/lib/python3/dist-packages"
 
-# ROS Python 설정
+# Python 3.8을 기본으로 사용하도록 설정
+if [ -f "/home/ctrl/anaconda3/envs/ros/bin/python3.8" ]; then
+    export PATH="/home/ctrl/anaconda3/envs/ros/bin:$PATH"
+    export PYTHON="/home/ctrl/anaconda3/envs/ros/bin/python3.8"
+    export PYTHON3="/home/ctrl/anaconda3/envs/ros/bin/python3.8"
+    export PYTHON_EXECUTABLE="/home/ctrl/anaconda3/envs/ros/bin/python3.8"
+fi
+
+# ROS가 올바른 Python을 사용하도록 환경변수 설정
 export ROS_PYTHON_VERSION=3
-export ROS_PYTHON_EXECUTABLE="/usr/bin/python3"
+export ROS_PYTHON_EXECUTABLE="/home/ctrl/anaconda3/envs/ros/bin/python3.8"
+
+# CARLA Python API 경로 추가
+CARLA_ROOT="/home/ctrl/carla"
+CARLA_BUILD_PATH="$CARLA_ROOT/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+CARLA_AGENTS_PATH="$CARLA_ROOT/PythonAPI/carla"
+
+if [ -d "$CARLA_BUILD_PATH" ]; then
+    export PYTHONPATH="$CARLA_BUILD_PATH:$PYTHONPATH"
+    echo "✓ CARLA build 경로 추가됨"
+fi
+
+if [ -d "$CARLA_AGENTS_PATH" ]; then
+    export PYTHONPATH="$CARLA_AGENTS_PATH:$PYTHONPATH"
+    echo "✓ CARLA agents 경로 추가됨"
+fi
+
+export CARLA_ROOT="$CARLA_ROOT"
 
 # 필수 Python 패키지 확인
 echo ""
@@ -85,7 +68,7 @@ echo "=== 환경 상태 ==="
 echo "Python 경로: $(which python3)"
 echo "Python 버전: $(python3 --version)"
 echo "ROS 버전: $ROS_DISTRO"
-echo "워크스페이스: $HOME/capstone"
+echo "워크스페이스: /home/ctrl/capstone"
 echo ""
 echo "🎉 Capstone 환경 설정 완료!"
 echo ""

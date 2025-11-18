@@ -3,6 +3,7 @@
 import math
 import random
 import sys
+import os
 import time
 
 import rospy
@@ -10,9 +11,15 @@ from geometry_msgs.msg import Pose, PoseStamped, Quaternion, Twist, Vector3
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Header
 
-CARLA_EGG = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-if CARLA_EGG not in sys.path:
-    sys.path.insert(0, CARLA_EGG)
+# Prefer centralized CARLA path setup if available
+try:
+    from setup_carla_path import CARLA_BUILD_PATH  # noqa: F401
+except Exception:
+    _env = os.environ.get("CARLA_PYTHON_PATH")
+    _default = os.path.expanduser("~/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38")
+    CARLA_BUILD_PATH = _env if _env else _default
+if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla
@@ -67,10 +74,18 @@ class MultiVehicleSpawner:
         self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.coloredxycar")
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
-        self.target_speed = rospy.get_param("~target_speed", 15.0)
+        self.target_speed = rospy.get_param("~target_speed", 8.0)
         self.randomize_spawn = rospy.get_param("~randomize_spawn", True)
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
+        self.spawn_min_separation_m = float(rospy.get_param("~spawn_min_separation_m", 8.0))
+
+        # Optional platoon spawn alignment
+        self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
+        self.platoon_leader = str(rospy.get_param("~platoon_leader", "ego_vehicle_1"))
+        followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
+        self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
+        self.platoon_gap_m = float(rospy.get_param("~platoon_gap_m", 9.0))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -99,21 +114,72 @@ class MultiVehicleSpawner:
         self.odom_publishers = {}
         self.spawned_transforms = {}
 
+        self._autopilot_pending = []
+        self.autopilot_post_delay = float(rospy.get_param("~autopilot_enable_post_delay_sec", 0.8))
         self.spawn_vehicles()
+        if self.platoon_enable:
+            try:
+                self._align_platoon_after_spawn()
+            except Exception as exc:
+                rospy.logwarn("platoon alignment after spawn failed: %s", exc)
+        if self.enable_autopilot and self._autopilot_pending:
+            rospy.Timer(rospy.Duration(self.autopilot_post_delay), self._enable_autopilot_for_pending, oneshot=True)
         rospy.on_shutdown(self.cleanup)
         rospy.Timer(rospy.Duration(0.1), self.publish_odometry)
 
+    def _configure_tm_globals(self):
+        tm = self.traffic_manager
+        # Best-effort: guard for API availability across versions
+        try:
+            tm.set_synchronous_mode(False)
+        except Exception:
+            pass
+        try:
+            tm.set_hybrid_physics_mode(self.tm_hybrid_physics)
+        except Exception:
+            pass
+        try:
+            tm.set_global_distance_to_leading_vehicle(self.tm_global_min_headway)
+        except Exception:
+            pass
+
     def spawn_vehicles(self):
         blueprint_library = self.world.get_blueprint_library()
-        base_bp = blueprint_library.find(self.vehicle_model)
-        if base_bp is None:
-            rospy.logwarn(f"Vehicle model {self.vehicle_model} not found; using first available")
-            base_bp = blueprint_library.filter("vehicle.*")[0]
+        if self.enable_autopilot:
+            self._configure_tm_globals()
+
+        # Per-vehicle model mapping
+        model_map = [
+            "vehicle.vehicle.greenxycar",   # vehicle 1
+            "vehicle.vehicle.purplexycar",    # vehicle 2
+            "vehicle.vehicle.redxycar", # vehicle 3
+            "vehicle.vehicle.yellowxycar", # vehicle 4
+            "vehicle.vehicle.pinkxycar", # vehicle 5
+            "vehicle.vehicle.whitexycar", # vehicle 6
+        ]
 
         for index in range(self.num_vehicles):
             role_name = f"ego_vehicle_{index + 1}"
-            blueprint = blueprint_library.find(base_bp.id)
-            if blueprint.has_attribute("role_name"):
+            # Pick model by index; fallback to configured default, then first available
+            desired_model = model_map[index] if index < len(model_map) else "vehicle.vehicle.coloredxycar"
+            blueprint = blueprint_library.find(desired_model)
+            if blueprint is None:
+                rospy.logwarn(
+                    "%s: vehicle model %s not found; falling back to %s",
+                    role_name,
+                    desired_model,
+                    "vehicle.vehicle.coloredxycar",
+                )
+                blueprint = blueprint_library.find("vehicle.vehicle.coloredxycar")
+            if blueprint is None:
+                bp_list = blueprint_library.filter("vehicle.*")
+                if not bp_list:
+                    rospy.logerr("%s: no vehicle blueprints available", role_name)
+                    continue
+                blueprint = bp_list[0]
+            # Use a fresh blueprint instance per spawn (by id) and set role
+            blueprint = blueprint_library.find(blueprint.id)
+            if blueprint is not None and blueprint.has_attribute("role_name"):
                 blueprint.set_attribute("role_name", role_name)
 
             vehicle = None
@@ -129,6 +195,17 @@ class MultiVehicleSpawner:
             for transform, spawn_index in pick_spawn_transform(
                 self.world, seed_hint, self.spawn_retry_limit
             ):
+                # Enforce minimum separation from previously spawned vehicles
+                too_close = False
+                for _role, (prev_tf, _idx) in self.spawned_transforms.items():
+                    dx = transform.location.x - prev_tf.location.x
+                    dy = transform.location.y - prev_tf.location.y
+                    dz = transform.location.z - prev_tf.location.z
+                    if math.sqrt(dx * dx + dy * dy + dz * dz) < max(0.0, self.spawn_min_separation_m):
+                        too_close = True
+                        break
+                if too_close:
+                    continue
                 vehicle = self.world.try_spawn_actor(blueprint, transform)
                 if vehicle is not None:
                     chosen_transform = transform
@@ -140,14 +217,9 @@ class MultiVehicleSpawner:
                 rospy.logerr(f"Failed to spawn vehicle {role_name} after {self.spawn_retry_limit} attempts")
                 continue
 
-            if self.enable_autopilot and self.traffic_manager is not None:
-                try:
-                    vehicle.set_autopilot(True, self.traffic_manager.get_port())
-                    self.traffic_manager.vehicle_percentage_speed_difference(
-                        vehicle, max(0, 100 - self.target_speed * 2)
-                    )
-                except Exception as exc:
-                    rospy.logwarn("Traffic Manager config failed for %s: %s", role_name, exc)
+            if self.enable_autopilot:
+                # Defer enabling autopilot until after spawn loop finishes to avoid TM map-build races
+                self._autopilot_pending.append(vehicle)
 
             self.vehicles.append(vehicle)
             topic = f"/carla/{role_name}/odometry"
@@ -160,6 +232,30 @@ class MultiVehicleSpawner:
             rospy.loginfo("%s: spawned at map spawn index %s", role_name, spawn_idx_str)
             self.publish_initial_pose(chosen_transform)
             time.sleep(self.spawn_delay)
+
+    def _enable_autopilot_for_pending(self, _event):
+        if not self._autopilot_pending:
+            return
+        tm_port = None
+        if self.traffic_manager is not None:
+            try:
+                tm_port = self.traffic_manager.get_port()
+            except Exception as exc:
+                rospy.logwarn("Traffic Manager port read failed: %s", exc)
+        for veh in list(self._autopilot_pending):
+            try:
+                if tm_port is not None:
+                    veh.set_autopilot(True, tm_port)
+                    try:
+                        # Keep a conservative speed difference; CARLA expects percentage of limit
+                        self.traffic_manager.vehicle_percentage_speed_difference(veh, 30)
+                    except Exception as exc:
+                        rospy.logwarn("TM speed config failed: %s", exc)
+                else:
+                    veh.set_autopilot(True)
+            except Exception as exc:
+                rospy.logwarn("set_autopilot failed: %s", exc)
+        self._autopilot_pending.clear()
 
     def publish_odometry(self, _event):
         stamp = rospy.Time.now()
@@ -201,6 +297,7 @@ class MultiVehicleSpawner:
             if vehicle is not None and vehicle.is_alive:
                 vehicle.destroy()
         self.vehicles.clear()
+        # Spectator control moved to cam_perspective.py
 
     def publish_initial_pose(self, transform):
         if self.initial_pose_pub is None:
@@ -216,6 +313,51 @@ class MultiVehicleSpawner:
             math.radians(transform.rotation.yaw),
         )
         self.initial_pose_pub.publish(pose_msg)
+
+    def _align_platoon_after_spawn(self):
+        if not self.platoon_followers:
+            return
+        leader = None
+        for veh in self.vehicles:
+            try:
+                role = veh.attributes.get("role_name", "")
+            except Exception:
+                continue
+            if role == self.platoon_leader:
+                leader = veh
+                break
+        if leader is None:
+            rospy.logwarn("platoon: leader %s not found among spawned vehicles", self.platoon_leader)
+            return
+        base = leader.get_transform()
+        yaw_rad = math.radians(base.rotation.yaw)
+        fx = math.cos(yaw_rad)
+        fy = math.sin(yaw_rad)
+        for idx, follower_name in enumerate(self.platoon_followers, start=1):
+            follower = None
+            for veh in self.vehicles:
+                try:
+                    role = veh.attributes.get("role_name", "")
+                except Exception:
+                    continue
+                if role == follower_name:
+                    follower = veh
+                    break
+            if follower is None:
+                rospy.logwarn("platoon: follower %s not found; skip", follower_name)
+                continue
+            offset = self.platoon_gap_m * float(idx)
+            loc = carla.Location(
+                x=base.location.x - fx * offset,
+                y=base.location.y - fy * offset,
+                z=base.location.z,
+            )
+            tf = carla.Transform(location=loc, rotation=base.rotation)
+            try:
+                follower.set_transform(tf)
+                rospy.loginfo("platoon: aligned %s behind %s at %.1fm", follower_name, self.platoon_leader, offset)
+            except Exception as exc:
+                rospy.logwarn("platoon: set_transform failed for %s: %s", follower_name, exc)
 
 
 if __name__ == "__main__":

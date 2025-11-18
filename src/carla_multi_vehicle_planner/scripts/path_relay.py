@@ -8,6 +8,8 @@ class PathRelay:
         rospy.init_node("path_relay", anonymous=True)
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        ignore_str = str(rospy.get_param("~ignore_roles", "")).strip()
+        self.ignore_roles = set([s.strip() for s in ignore_str.split(",") if s.strip()]) if ignore_str else set()
 
         self._publishers = {}
         for index in range(self.num_vehicles):
@@ -22,6 +24,8 @@ class PathRelay:
         rospy.loginfo("path_relay running: /global_path_* -> /planned_path_*")
 
     def _cb(self, msg: Path, role: str):
+        if role in self.ignore_roles:
+            return
         pub = self._publishers.get(role)
         if pub is None:
             return

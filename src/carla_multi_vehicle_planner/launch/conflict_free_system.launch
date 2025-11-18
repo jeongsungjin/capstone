@@ -1,0 +1,144 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="enable_rviz" default="true" />
+  <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
+  <arg name="enable_platooning" default="false" />
+  <!-- 수동 RViz 목표 재계획 기능 온/오프 -->
+  <arg name="enable_manual_goal" default="true" />
+  <!-- BEV 파이프라인이 없을 때 컨트롤러 tracking hold를 끌 수 있도록 노출 -->
+  <arg name="enable_bev_tracking_hold" default="false" />
+
+  <!-- 1) Spawner (no autopilot) -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="enable_autopilot" value="false" />
+    <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
+    <param name="target_speed" value="5.0" />
+    <param name="spawn_delay" value="1.0" />
+    <!-- Optional: spawn-time platoon alignment -->
+    <param name="platoon_enable" value="$(arg enable_platooning)" />
+    <param name="platoon_leader" value="ego_vehicle_1" />
+    <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
+    <param name="platoon_gap_m" value="6.0" />
+  </node>
+
+  <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
+    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="global_route_resolution" value="1.0" />
+    <param name="path_sampling" value="0.3" />
+    <param name="min_destination_distance" value="30.0" />
+    <param name="max_destination_distance" value="180.0" />
+    <param name="destination_retry_limit" value="120" />
+    <param name="start_k_candidates" value="80" />
+    <param name="start_search_radius" value="5.0" />
+    <param name="start_search_radius_max" value="20.0" />
+    <param name="start_heading_deg" value="70.0" />
+    <param name="start_join_max_gap_m" value="6.0" />
+    <param name="conflict_horizon_m" value="40.0" />
+    <param name="conflict_key_resolution" value="1.0" />
+    <param name="heading_compat_deg" value="75.0" />
+    <!-- Replanning only when close to destination -->
+    <param name="replan_remaining_m" value="30.0" />
+    <param name="replan_interval" value="1.0" />
+  </node>
+
+  <!-- 2.5) Occupancy grid for road geometry (RViz Map display on /map) -->
+  <node pkg="carla_multi_vehicle_planner" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
+    <param name="resolution" value="0.25" />
+    <param name="update_rate" value="1.0" />
+  </node>
+
+  <!-- 3) Relay global_path_* -> planned_path_* for controller compatibility -->
+  <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <!-- Avoid relaying planner paths for platoon followers (platoon publishes planned_path directly) -->
+    <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_2,ego_vehicle_3" />
+  </node>
+
+  <!-- 3.5) BEV / Marker visualizer: vehicle cubes + colored path markers on map frame -->
+  <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
+    <param name="max_vehicle_count" value="$(arg num_vehicles)" />
+    <param name="update_rate" value="2.0" />
+  </node>
+
+  <!-- 3.6) Manual goal tools: RViz goal mux + key selector -->
+  <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+    <param name="default_vehicle" value="ego_vehicle_1" />
+  </node>
+
+  <!-- 클릭 텔레포트 모드(수동 재계획 OFF일 때): 선택 차량을 클릭 위치로 텔레포트 후 재계획 트리거 -->
+  <node unless="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_click_teleporter.py" name="rviz_click_teleporter" output="screen">
+    <param name="carla_host" value="localhost" />
+    <param name="carla_port" value="2000" />
+    <param name="use_waypoint_heading" value="true" />
+    <param name="snap_to_waypoint_height" value="true" />
+    <param name="default_z" value="0.5" />
+    <param name="z_offset" value="0.0" />
+  </node>
+
+  <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
+
+  <!-- 4) Controller -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="lookahead_distance" value="4.0" />
+    <param name="target_speed" value="5.0" />
+    <!-- Safety stop defaults; tune as needed -->
+    <param name="enable_safety_stop" value="true" />
+    <param name="safety_x_min" value="-20.0" />
+    <param name="safety_x_max" value="20.0" />
+    <param name="safety_y_min" value="-32.0" />
+    <param name="safety_y_max" value="8.0" />
+    <param name="safety_distance" value="20.0" />
+    <param name="safety_front_cone_deg" value="140.0" />
+    <param name="safety_require_closing" value="true" />
+    <param name="enable_opposite_lane_ignore" value="true" />
+    <!-- Controller extensions: hysteresis & external overrides & platoon priority -->
+    <param name="intersection_hysteresis_margin" value="2.0" />
+    <param name="intersection_exit_grace_sec" value="1.5" />
+    <!-- Enable override so emergency stop (key_selector) can take effect anytime -->
+    <param name="enable_external_control_override" value="true" />
+    <param name="override_speed_only" value="true" />
+    <param name="platoon_enable" value="$(arg enable_platooning)" />
+    <param name="platoon_leader" value="ego_vehicle_1" />
+    <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- Tracking hold when BEV ids missing -->
+    <param name="enable_tracking_hold" value="$(arg enable_bev_tracking_hold)" />
+    <param name="tracking_hold_timeout_sec" value="0.5" />
+    <!-- Intersection dynamic priority: Area 0 and Area 1 -->
+    <param name="intersection_dynamic_priority" value="true" />
+    <!-- Area 0 -->
+    <param name="intersection_x_min" value="-19.0" />
+    <param name="intersection_x_max" value="18.0" />
+    <param name="intersection_y_min" value="-32.0" />
+    <param name="intersection_y_max" value="-20.0" />
+    <!-- Area 1 -->
+    <param name="intersection2_enabled" value="true" />
+    <param name="intersection2_x_min" value="-20.0" />
+    <param name="intersection2_x_max" value="20.0" />
+    <param name="intersection2_y_min" value="-18.0" />
+    <param name="intersection2_y_max" value="8.0" />
+  </node>
+
+  <!-- 4.5) Platoon manager (optional) -->
+  <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="platoon_manager.py" name="platoon_manager" output="screen">
+    <param name="leader_role" value="ego_vehicle_1" />
+    <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
+    <param name="desired_gap_m" value="6.0" />
+    <param name="teleport_on_start" value="true" />
+    <param name="kp_gap" value="0.6" />
+    <param name="kd_gap" value="0.6" />
+    <param name="max_speed" value="10.0" />
+  </node>
+
+  <!-- Optional RViz -->
+  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
+        args="-d $(arg rviz_config)"
+        output="screen"
+        required="false" />
+
+</launch>
+
+

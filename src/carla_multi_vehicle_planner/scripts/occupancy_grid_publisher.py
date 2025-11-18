@@ -15,18 +15,21 @@ try:
 except ImportError:
     setup_carla_path = None  # noqa: F841 so linters do not complain
 
-default_egg = "/home/ctrl/carla/PythonAPI/carla/dist/carla-0.9.16-py3.8-linux-x86_64.egg"
-CARLA_EGG_PATH = os.environ.get("CARLA_EGG") or getattr(setup_carla_path, "CARLA_EGG", None) or default_egg
+default_build_path = os.path.expanduser("~/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38")
+# Prefer explicit env var first, then setup helper, then legacy env, then default
+_env_primary = os.environ.get("CARLA_PYTHON_PATH") or os.environ.get("CARLA_BUILD_PATH")
+_helper_path = getattr(setup_carla_path, "CARLA_BUILD_PATH", None) if setup_carla_path else None
+CARLA_BUILD_PATH = _env_primary or _helper_path or default_build_path
 
-if CARLA_EGG_PATH and CARLA_EGG_PATH not in sys.path:
-    sys.path.insert(0, CARLA_EGG_PATH)
+if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:
+    sys.path.insert(0, CARLA_BUILD_PATH)
 
 try:
     import carla  # type: ignore
 except ImportError as exc:  # pragma: no cover - handled at runtime with ROS logging
     rospy.logfatal(
-        "occupancy_grid_publisher: failed to import CARLA egg %s under Python %s: %s",
-        CARLA_EGG_PATH,
+        "occupancy_grid_publisher: failed to import CARLA build path %s under Python %s: %s",
+        CARLA_BUILD_PATH,
         sys.version.replace("\n", " "),
         exc,
     )
@@ -41,10 +44,10 @@ class CarlaOccupancyGridPublisher:
 
     def __init__(self) -> None:
         self._node_name = rospy.get_name() or "occupancy_grid_publisher"
-        self._resolution = float(rospy.get_param("~resolution", 0.25))
+        self._resolution = float(rospy.get_param("~resolution", 0.10))
         if self._resolution <= 0:
             rospy.logwarn("%s: resolution <= 0 requested, falling back to 0.25", self._node_name)
-            self._resolution = 0.25
+            self._resolution = 0.10
 
         self._update_rate = float(rospy.get_param("~update_rate", 1.0))
         if self._update_rate <= 0:
