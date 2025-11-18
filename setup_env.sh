@@ -18,8 +18,8 @@ else
 fi
 
 # 워크스페이스 설정 (devel이 있는 경우)
-if [ -f "/home/jamie/capstone/devel/setup.bash" ]; then
-    source /home/jamie/capstone/devel/setup.bash
+if [ -f "/home/ctrl/capstone/devel/setup.bash" ]; then
+    source /home/ctrl/capstone/devel/setup.bash
     echo "✓ capstone 워크스페이스 설정 완료"
 fi
 
@@ -39,7 +39,7 @@ export ROS_PYTHON_VERSION=3
 export ROS_PYTHON_EXECUTABLE="/home/ctrl/anaconda3/envs/ros/bin/python3.8"
 
 # CARLA Python API 경로 추가
-CARLA_ROOT="/home/jamie/carla"
+CARLA_ROOT="/home/ctrl/carla"
 CARLA_BUILD_PATH="$CARLA_ROOT/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
 CARLA_AGENTS_PATH="$CARLA_ROOT/PythonAPI/carla"
 
@@ -68,7 +68,7 @@ echo "=== 환경 상태 ==="
 echo "Python 경로: $(which python3)"
 echo "Python 버전: $(python3 --version)"
 echo "ROS 버전: $ROS_DISTRO"
-echo "워크스페이스: /home/jamie/capstone"
+echo "워크스페이스: /home/ctrl/capstone"
 echo ""
 echo "🎉 Capstone 환경 설정 완료!"
 echo ""
