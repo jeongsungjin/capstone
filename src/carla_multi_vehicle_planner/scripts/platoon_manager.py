@@ -54,6 +54,8 @@ class PlatoonManager:
         self.follow_path_min_points = int(rospy.get_param("~follow_path_min_points", 3))
         self.min_follow_gap_m = float(rospy.get_param("~min_follow_gap_m", 2.0))
         self.gap_warmup_margin_m = float(rospy.get_param("~gap_warmup_margin_m", 1.0))
+        self.start_gap_history_m = float(rospy.get_param("~start_gap_history_m", 5.0))
+        self.start_gap_follow_m = float(rospy.get_param("~start_gap_follow_m", 0.5))
         # (simplified) no rolling tail / no grace switching
 
         self.client = carla.Client("localhost", 2000)
@@ -180,6 +182,8 @@ class PlatoonManager:
             history_span = self._current_history_span()
         base_gap = max(0.0, self.desired_gap_m * index)
         min_gap = max(0.0, self.min_follow_gap_m * index)
+        if history_span < max(0.0, self.start_gap_history_m):
+            return max(0.0, self.start_gap_follow_m)
         available = max(0.0, history_span - max(0.0, self.gap_warmup_margin_m))
         if available <= 1e-3:
             return min_gap if min_gap > 0.0 else 0.0

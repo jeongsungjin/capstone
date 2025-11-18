@@ -53,6 +53,8 @@
   <!-- 3) Relay global_path_* -> planned_path_* for controller compatibility -->
   <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <!-- Always reset ignore list so stale values from previous runs don't persist -->
+    <param name="ignore_roles" value="" />
     <!-- Avoid relaying planner paths for platoon followers (platoon publishes planned_path directly) -->
     <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_2,ego_vehicle_3" />
   </node>

@@ -61,8 +61,8 @@ class MultiVehicleController:
         self.safety_front_cone_deg = float(rospy.get_param("~safety_front_cone_deg", 100.0))
         self.safety_require_closing = bool(rospy.get_param("~safety_require_closing", True))
         # Deadlock escape tuning
-        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 5.0))
-        self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 1.0))
+        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 2.0))
+        self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 2.0))
         self.safety_deadlock_escape_duration_sec = float(rospy.get_param("~safety_deadlock_escape_duration_sec", 1.0))
         # Opposite-lane ignore within intersection area
         self.enable_opposite_lane_ignore = bool(rospy.get_param("~enable_opposite_lane_ignore", True))
@@ -514,16 +514,16 @@ class MultiVehicleController:
                             steer = cmd.steering_angle
                             speed = cmd.speed
             # Area-limited safety stop for lower-priority vehicles near other vehicles
-            if self.enable_safety_stop:
-                position = state.get("position")
-                orientation = state.get("orientation")
-                my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
-                now_sec = float(rospy.Time.now().to_sec())
-                in_area = self._in_safety_area(position)
-                # dynamic priority entry tracking inside intersection areas
-            if self.intersection_dynamic_priority:
-                now = rospy.Time.now().to_sec()
-                base_area = self._which_intersection_area(position)
+            position = state.get("position")
+            orientation = state.get("orientation")
+            my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
+            now_sec = float(rospy.Time.now().to_sec())
+            in_area = self._in_safety_area(position)
+            # Area-limited safety stop for lower-priority vehicles near other vehicles
+            if self.enable_safety_stop and in_area:
+                if self.intersection_dynamic_priority:
+                    now = rospy.Time.now().to_sec()
+                    base_area = self._which_intersection_area(position)
                 # Assign order on first entry to base (tight) area only
                 if base_area is not None:
                     if role not in self.intersection_orders.get(base_area, {}):
@@ -558,7 +558,7 @@ class MultiVehicleController:
                 if escape_until is not None and now_sec < escape_until:
                     # In escape window: allow creeping
                     speed = min(speed, self.safety_deadlock_escape_speed)
-                elif in_area and has_higher_front:
+                elif has_higher_front:
                     # Apply safety stop with deadlock timer
                     since = state.get("safety_stop_since")
                     if since is None:
