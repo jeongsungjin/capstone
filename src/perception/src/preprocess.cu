@@ -113,7 +113,7 @@ void launchPreprocessKernelBatched(
         throw std::runtime_error("Stacked GpuMat shape mismatch: expected (height*batch, width, 3).");
     }
 
-    dim3 block(16, 16, 1);
+    dim3 block(32, 8, 1);
     dim3 grid;
     grid.x = (width + block.x - 1) / block.x;
     grid.y = (height + block.y - 1) / block.y;
