@@ -114,6 +114,9 @@ class BevIdTeleporter:
 		self.id_last_seen: Dict[int, float] = {}
 		self.role_tracking_ok: Dict[str, bool] = {}
 		self.tracking_publishers: Dict[str, rospy.Publisher] = {}
+		# Periodic republish of tracking_ok so monitoring tools see fresh messages
+		self.tracking_status_rate_hz: float = float(rospy.get_param("~tracking_status_rate_hz", 20.0))
+		self._tracking_status_timer = None
 
 		self._refresh_role_to_actor()
 
@@ -132,6 +135,14 @@ class BevIdTeleporter:
 			",".join(self.role_names),
 			self.max_vehicle_count,
 		)
+		# Start periodic republish timer
+		if self.tracking_status_rate_hz > 0.0:
+			self._tracking_status_timer = rospy.Timer(
+				rospy.Duration(1.0 / max(0.1, self.tracking_status_rate_hz)),
+				self._tracking_status_tick,
+				oneshot=False,
+				reset=True,
+			)
 
 	def _refresh_role_to_actor(self) -> None:
 		actors = self.world.get_actors().filter("vehicle.*")
@@ -322,6 +333,16 @@ class BevIdTeleporter:
 			pub.publish(Bool(data=ok))
 		except Exception:
 			pass
+
+	def _tracking_status_tick(self, _evt) -> None:
+		# Periodically republish latest known tracking_ok for each role
+		for role, ok in list(self.role_tracking_ok.items()):
+			try:
+				pub = self.tracking_publishers.get(role)
+				if pub is not None:
+					pub.publish(Bool(data=ok))
+			except Exception:
+				continue
 
 	def _pick_height(self, x: float, y: float) -> float:
 		if not self.snap_to_waypoint_height or self.carla_map is None:
