@@ -88,6 +88,10 @@ class BevIdTeleporter:
 		self.yaw_in_degrees: bool = bool(rospy.get_param("~yaw_in_degrees", False))
 		self.enable_yaw_flip: bool = bool(rospy.get_param("~enable_yaw_flip", True))
 		self.yaw_flip_threshold_deg: float = float(rospy.get_param("~yaw_flip_threshold_deg", 150.0))
+		self.enable_yaw_filter: bool = bool(rospy.get_param("~enable_yaw_filter", True))
+		self.yaw_filter_alpha: float = float(rospy.get_param("~yaw_filter_alpha", 0.2))
+		self.yaw_filter_jump_deg: float = float(rospy.get_param("~yaw_filter_jump_deg", 60.0))
+		self.yaw_filter_timeout_sec: float = float(rospy.get_param("~yaw_filter_timeout_sec", 2.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -95,7 +99,7 @@ class BevIdTeleporter:
 		self.z_offset: float = float(rospy.get_param("~z_offset", 0.0))
 		# Teleport safety
 		self.max_teleport_distance_m: float = float(rospy.get_param("~max_teleport_distance_m", 20.0))
-		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 120.0))
+		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 150.0))
 		self.teleport_stability_warmup_sec: float = float(rospy.get_param("~teleport_stability_warmup_sec", 0.2))
 
 		# Connect to CARLA
@@ -114,6 +118,8 @@ class BevIdTeleporter:
 		self.id_last_seen: Dict[int, float] = {}
 		self.role_tracking_ok: Dict[str, bool] = {}
 		self.tracking_publishers: Dict[str, rospy.Publisher] = {}
+		self._filtered_yaws: Dict[int, float] = {}
+		self._filtered_yaw_stamp: Dict[int, float] = {}
 		# Periodic republish of tracking_ok so monitoring tools see fresh messages
 		self.tracking_status_rate_hz: float = float(rospy.get_param("~tracking_status_rate_hz", 20.0))
 		self._tracking_status_timer = None
@@ -393,6 +399,35 @@ class BevIdTeleporter:
 			return flipped
 		return yaw_rad
 
+	def _filter_yaw(self, det_id: int, yaw_rad: float) -> float:
+		if not self.enable_yaw_filter:
+			return yaw_rad
+		now = float(rospy.Time.now().to_sec())
+		prev = self._filtered_yaws.get(det_id)
+		if prev is None:
+			self._filtered_yaws[det_id] = yaw_rad
+			self._filtered_yaw_stamp[det_id] = now
+			return yaw_rad
+		delta = normalize_angle(yaw_rad - prev)
+		if self.yaw_filter_jump_deg > 0.0 and abs(math.degrees(delta)) > self.yaw_filter_jump_deg:
+			filtered = prev
+		else:
+			alpha = max(0.0, min(1.0, self.yaw_filter_alpha))
+			filtered = normalize_angle(prev + alpha * delta)
+		self._filtered_yaws[det_id] = filtered
+		self._filtered_yaw_stamp[det_id] = now
+		return filtered
+
+	def _cleanup_filtered_yaws(self) -> None:
+		if not self.enable_yaw_filter or self.yaw_filter_timeout_sec <= 0.0:
+			return
+		now = float(rospy.Time.now().to_sec())
+		timeout = max(0.0, self.yaw_filter_timeout_sec)
+		for det_id, stamp in list(self._filtered_yaw_stamp.items()):
+			if (now - stamp) >= timeout:
+				self._filtered_yaws.pop(det_id, None)
+				self._filtered_yaw_stamp.pop(det_id, None)
+
 	def _bev_cb(self, msg: BEVInfo) -> None:
 		# Validate array lengths
 		n = int(msg.detCounts)
@@ -410,7 +445,9 @@ class BevIdTeleporter:
 			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
 			yaw_rad = self._input_yaw_to_rad(raw_yaw)
 			yaw_rad = self._maybe_flip_yaw(float(cxs[idx]), float(cys[idx]), yaw_rad)
+			yaw_rad = self._filter_yaw(int(ids[idx]), yaw_rad)
 			det_yaws_rad.append(yaw_rad)
+		self._cleanup_filtered_yaws()
 
 		if self.enable_matching:
 			# Hungarian-based robust assignment
