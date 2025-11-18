@@ -4,7 +4,7 @@
   <arg name="enable_platooning" default="false" />
 
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_pipeline" default="true" />
 
   <!-- Inference (UDP) args -->
   <arg name="udp_ip" default="0.0.0.0" />
@@ -17,7 +17,7 @@
   <arg name="max_items" default="64" />
 
   <!-- 1) UDP inference receiver (publishes BEVInfo on /bev_info) -->
-  <node if="$(arg enable_bev_pipeline)" pkg="carla_multi_vehicle_planner" type="inference_recv.py" name="inference_receiver" output="screen">
+  <!-- <node if="$(arg enable_bev_pipeline)" pkg="carla_multi_vehicle_planner" type="inference_recv.py" name="inference_receiver" output="screen">
     <param name="udp_ip" value="$(arg udp_ip)" />
     <param name="udp_ports" value="$(arg udp_ports)" />
     <param name="topic" value="$(arg bev_topic)" />
@@ -26,7 +26,7 @@
     <param name="y_offset_m" value="$(arg y_offset_m)" />
     <param name="yaw_add_deg" value="$(arg yaw_add_deg)" />
     <param name="max_items" value="$(arg max_items)" />
-  </node>
+  </node> -->
 
   <!-- 2) Teleporter: BEVInfo -> CARLA vehicle teleport (keep existing options via its own launch) -->
   <include if="$(arg enable_bev_pipeline)" file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter.launch">
