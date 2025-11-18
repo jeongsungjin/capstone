@@ -21,21 +21,19 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 	}
 
 	for(int i = 0; i < 4; i++){
-		auto pub = this->create_publisher<sensor_msgs::msg::CompressedImage>(
-			"viz_result/cam" + std::to_string(i+1) + "/compressed", 
+		auto pub = this->create_publisher<sensor_msgs::msg::Image>(
+			"viz_result/cam" + std::to_string(i+1), 
 			rclcpp::SensorDataQoS()
 		);
 		viz_result_pubs_.emplace_back(pub);
 	}
 	
-	test_pub_ = this->create_publisher<std_msgs::msg::Int32>("test_int", 10);
-
 	model_ = std::make_unique<Model>(pkg_path_, batch_size_);
 
-	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_1/image_raw/compressed");
-	sub_b_ = std::make_unique<ImgSubscriber>(this, "/ipcam_2/image_raw/compressed");
-	sub_c_ = std::make_unique<ImgSubscriber>(this, "/ipcam_3/image_raw/compressed");
-	sub_d_ = std::make_unique<ImgSubscriber>(this, "/ipcam_4/image_raw/compressed");
+	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_3/image_raw");
+	sub_b_ = std::make_unique<ImgSubscriber>(this, "/ipcam_4/image_raw");
+	sub_c_ = std::make_unique<ImgSubscriber>(this, "/ipcam_5/image_raw");
+	sub_d_ = std::make_unique<ImgSubscriber>(this, "/ipcam_6/image_raw");
 
 	// increase queue size to buffer more messages and set a maximum allowed interval
 	sync_ = std::make_shared<Synchronizer>(SyncPolicy(10), *sub_a_, *sub_b_, *sub_c_, *sub_d_);
@@ -115,9 +113,6 @@ void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a,
 	model_->inference();
 	model_->postprocess();
 
-	test_pub_->publish(std_msgs::msg::Int32());
-
-    // publishBEVInfo();
     publishVizResult(images);
 }
 
@@ -141,8 +136,8 @@ void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>
 			cv::polylines(out_msg.image, polys, true, cv::Scalar(0, 255, 0), 2);
 		}
 
-		auto msg = out_msg.toCompressedImageMsg();
-		viz_result_pubs_[b]->publish(*msg);
+		auto img_msg = out_msg.toImageMsg();
+		viz_result_pubs_[b]->publish(*img_msg);
 	}
 }
 

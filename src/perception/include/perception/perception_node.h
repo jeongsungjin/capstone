@@ -2,7 +2,7 @@
 #define PERCEPTION_NODE_H
 
 #include <rclcpp/rclcpp.hpp>
-#include <sensor_msgs/msg/compressed_image.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
@@ -22,7 +22,7 @@ public:
     void publishBEVInfo();
 
 private:
-    using ImageMsg = sensor_msgs::msg::CompressedImage;
+    using ImageMsg = sensor_msgs::msg::Image;
     using ImgSubscriber = message_filters::Subscriber<ImageMsg>;
     using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
     using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
@@ -38,8 +38,7 @@ private:
     // model
     std::unique_ptr<Model> model_;
 
-    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr test_pub_;
-    std::vector<rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> viz_result_pubs_;
+    std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> viz_result_pubs_;
 
     int batch_size_;
     std::string pkg_path_;
