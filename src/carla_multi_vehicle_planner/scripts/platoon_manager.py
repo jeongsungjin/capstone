@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 
+import bisect
 import math
 import sys
-from typing import Dict, Tuple, Optional
+from collections import deque
+from typing import Deque, Dict, Tuple, Optional, List
 
 import rospy
 from ackermann_msgs.msg import AckermannDrive
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
 from nav_msgs.msg import Odometry
@@ -41,8 +44,16 @@ class PlatoonManager:
         self.rel_speed_deadband = float(rospy.get_param("~rel_speed_deadband", 0.2))
         self.path_switch_max_dist_m = float(rospy.get_param("~path_switch_max_dist_m", 8.0))
         self.accel_limit_mps2 = float(rospy.get_param("~accel_limit_mps2", 1.2))
-        self.path_publish_min_dt = float(rospy.get_param("~path_publish_min_dt", 0.6))
-        self.path_publish_min_index_advance = int(rospy.get_param("~path_publish_min_index_advance", 6))
+        history_default = max(60.0, self.desired_gap_m * (len(self.follower_roles) + 3))
+        self.leader_track_history_m = float(rospy.get_param("~leader_track_history_m", history_default))
+        self.leader_track_sample_ds = float(rospy.get_param("~leader_track_sample_ds", 0.5))
+        self.leader_track_min_sample_ds = float(rospy.get_param("~leader_track_min_sample_ds", 0.2))
+        self.follow_path_preview_m = float(rospy.get_param("~follow_path_preview_m", 15.0))
+        self.follow_path_backfill_m = float(rospy.get_param("~follow_path_backfill_m", 1.0))
+        self.follow_path_step_m = float(rospy.get_param("~follow_path_step_m", 0.8))
+        self.follow_path_min_points = int(rospy.get_param("~follow_path_min_points", 3))
+        self.min_follow_gap_m = float(rospy.get_param("~min_follow_gap_m", 2.0))
+        self.gap_warmup_margin_m = float(rospy.get_param("~gap_warmup_margin_m", 1.0))
         # (simplified) no rolling tail / no grace switching
 
         self.client = carla.Client("localhost", 2000)
@@ -60,7 +71,6 @@ class PlatoonManager:
         self.override_pubs: Dict[str, rospy.Publisher] = {r: rospy.Publisher(f"/carla/{r}/vehicle_control_cmd_override", AckermannDrive, queue_size=1) for r in self.follower_roles}
 
         # Subscriptions
-        rospy.Subscriber(f"/global_path_{self.leader_role}", Path, self._path_cb, queue_size=1)
         rospy.Subscriber(f"/carla/{self.leader_role}/vehicle_control_cmd", AckermannDrive, self._cmd_cb, callback_args=self.leader_role, queue_size=1)
         # Odometry for leader and followers
         rospy.Subscriber(f"/carla/{self.leader_role}/odometry", Odometry, self._odom_cb, callback_args=self.leader_role, queue_size=10)
@@ -73,14 +83,14 @@ class PlatoonManager:
         rospy.Timer(rospy.Duration(0.1), self._tick)
         rospy.Timer(rospy.Duration(1.0), self._refresh_actors, oneshot=True)
         rospy.Timer(rospy.Duration(2.0), self._maybe_teleport_followers, oneshot=True)
-        self._leader_path: Optional[Path] = None
-        self._leader_path_updated_at: float = 0.0
         self._cmd_cache: Dict[str, AckermannDrive] = {}
         self._last_speed_cmd: Dict[str, float] = {}
         self._last_cmd_time: Dict[str, float] = {}
-        self._last_path_idx: Dict[str, int] = {}
-        self._last_path_pub_time: Dict[str, float] = {}
-        self._path_initialized: Dict[str, bool] = {r: False for r in self.follower_roles}
+        self._leader_track: Deque[Tuple[float, float, float, float]] = deque()
+        self._leader_track_header: Optional[Header] = None
+        self._leader_track_last_s: float = 0.0
+        self._leader_track_last_xy: Optional[Tuple[float, float]] = None
+        self._leader_track_min_gap = min(self.follow_path_preview_m + self.follow_path_backfill_m, self.leader_track_history_m)
         # no last-valid hold in simplified version
 
     # ----------------- CARLA helpers -----------------
@@ -128,26 +138,165 @@ class PlatoonManager:
             except Exception:
                 pass
 
-    # ----------------- ROS callbacks -----------------
-    def _path_cb(self, msg: Path) -> None:
-        # Simplified: cache leader path and immediately seed followers
-        self._leader_path = msg
-        self._leader_path_updated_at = rospy.Time.now().to_sec()
-        # Immediately seed followers with trimmed leader path
-        for role, pub in self.path_pubs.items():
-            if role not in self._path_initialized:
-                self._path_initialized[role] = False
-            odom = self.odom.get(role)
-            if odom is None:
+    def _append_leader_track(self, odom: Odometry) -> None:
+        pos = odom.pose.pose.position
+        yaw = self._yaw_from_quat(odom.pose.pose.orientation)
+        if self._leader_track_header is None:
+            frame_id = odom.header.frame_id if odom.header and odom.header.frame_id else "map"
+            self._leader_track_header = Header(frame_id=frame_id)
+        if not self._leader_track:
+            self._leader_track.append((0.0, float(pos.x), float(pos.y), float(yaw)))
+            self._leader_track_last_xy = (float(pos.x), float(pos.y))
+            self._leader_track_last_s = 0.0
+            return
+        if self._leader_track_last_xy is None:
+            self._leader_track_last_xy = (float(pos.x), float(pos.y))
+        dx = float(pos.x) - self._leader_track_last_xy[0]
+        dy = float(pos.y) - self._leader_track_last_xy[1]
+        dist = math.hypot(dx, dy)
+        if dist < max(1e-3, self.leader_track_sample_ds):
+            return
+        last_s = self._leader_track[-1][0]
+        s_val = last_s + dist
+        self._leader_track.append((s_val, float(pos.x), float(pos.y), float(yaw)))
+        self._leader_track_last_xy = (float(pos.x), float(pos.y))
+        self._leader_track_last_s = s_val
+        self._trim_leader_track(s_val)
+
+    def _trim_leader_track(self, current_s: float) -> None:
+        min_s = current_s - max(0.0, self.leader_track_history_m)
+        while self._leader_track and self._leader_track[0][0] < min_s:
+            self._leader_track.popleft()
+
+    def _current_history_span(self) -> float:
+        if len(self._leader_track) < 2:
+            return 0.0
+        return self._leader_track[-1][0] - self._leader_track[0][0]
+
+    def _active_gap_for_index(self, index: float, history_span: Optional[float] = None) -> float:
+        if index <= 0.0:
+            return 0.0
+        if history_span is None:
+            history_span = self._current_history_span()
+        base_gap = max(0.0, self.desired_gap_m * index)
+        min_gap = max(0.0, self.min_follow_gap_m * index)
+        available = max(0.0, history_span - max(0.0, self.gap_warmup_margin_m))
+        if available <= 1e-3:
+            return min_gap if min_gap > 0.0 else 0.0
+        return max(min_gap, min(base_gap, available))
+
+    def _publish_follower_paths(self) -> None:
+        if len(self._leader_track) < 2:
+            return
+        latest_s = self._leader_track[-1][0]
+        earliest_s = self._leader_track[0][0]
+        available = latest_s - earliest_s
+        min_required = max(
+            0.5,
+            self.follow_path_step_m * max(1, self.follow_path_min_points - 1),
+        )
+        if available < min_required:
+            return
+        history_span = available
+        for idx, role in enumerate(self.follower_roles, start=1):
+            pub = self.path_pubs.get(role)
+            if pub is None:
                 continue
-            follower_path = self._trim_path_from_projection(self._leader_path, odom)
-            if follower_path is not None and len(follower_path.poses) >= 1:
-                pub.publish(follower_path)
-                idx = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
-                now = rospy.Time.now().to_sec()
-                self._last_path_idx[role] = idx
-                self._last_path_pub_time[role] = now
-                self._path_initialized[role] = True
+            gap = self._active_gap_for_index(float(idx), history_span)
+            path_msg = self._build_follower_path(gap)
+            if path_msg is None or not path_msg.poses:
+                continue
+            pub.publish(path_msg)
+
+    def _build_follower_path(self, gap_m: float) -> Optional[Path]:
+        if len(self._leader_track) < 2:
+            return None
+        track_list = list(self._leader_track)
+        earliest_s = track_list[0][0]
+        latest_s = track_list[-1][0]
+        history_span = latest_s - earliest_s
+        effective_gap = min(
+            gap_m,
+            max(0.0, history_span - max(0.2, self.follow_path_step_m)),
+        )
+        target_s = latest_s - effective_gap
+        target_s = max(target_s, earliest_s + 1e-3)
+        start_s = max(earliest_s, target_s - max(0.0, self.follow_path_backfill_m))
+        end_s = min(latest_s, target_s + max(0.0, self.follow_path_preview_m))
+        if end_s - start_s < 0.5:
+            return None
+        samples = self._sample_track_segment(track_list, start_s, end_s, max(0.1, self.follow_path_step_m))
+        if len(samples) < max(2, self.follow_path_min_points):
+            return None
+        header = Header(stamp=rospy.Time.now())
+        if self._leader_track_header is not None and self._leader_track_header.frame_id:
+            header.frame_id = self._leader_track_header.frame_id
+        else:
+            header.frame_id = "map"
+        path = Path(header=header)
+        for x, y, yaw in samples:
+            pose = PoseStamped()
+            pose.header = header
+            pose.pose.position.x = x
+            pose.pose.position.y = y
+            pose.pose.orientation.w = math.cos(yaw * 0.5)
+            pose.pose.orientation.z = math.sin(yaw * 0.5)
+            path.poses.append(pose)
+        return path
+
+    def _sample_track_segment(
+        self,
+        track: List[Tuple[float, float, float, float]],
+        start_s: float,
+        end_s: float,
+        step: float,
+    ) -> List[Tuple[float, float, float]]:
+        if not track:
+            return []
+        step = max(0.05, step)
+        samples: List[Tuple[float, float, float]] = []
+        s = start_s
+        while s <= end_s + 1e-6:
+            point = self._interpolate_track(track, s)
+            if point is not None:
+                samples.append(point)
+            s += step
+        # ensure final point at end_s
+        if samples:
+            last = samples[-1]
+            if abs(end_s - last[0]) > 1e-3:
+                final_point = self._interpolate_track(track, end_s)
+                if final_point is not None:
+                    samples.append(final_point)
+        return [(x, y, yaw) for (_s, x, y, yaw) in samples]
+
+    def _interpolate_track(
+        self,
+        track: List[Tuple[float, float, float, float]],
+        target_s: float,
+    ) -> Optional[Tuple[float, float, float, float]]:
+        if not track:
+            return None
+        if target_s <= track[0][0]:
+            return track[0]
+        if target_s >= track[-1][0]:
+            return track[-1]
+        s_values = [item[0] for item in track]
+        idx = bisect.bisect_left(s_values, target_s)
+        if idx <= 0:
+            return track[0]
+        if idx >= len(track):
+            return track[-1]
+        s1, x1, y1, yaw1 = track[idx - 1]
+        s2, x2, y2, yaw2 = track[idx]
+        span = s2 - s1
+        if span <= 1e-6:
+            return track[idx]
+        ratio = (target_s - s1) / span
+        x = x1 + (x2 - x1) * ratio
+        y = y1 + (y2 - y1) * ratio
+        yaw = self._interp_angle(yaw1, yaw2, ratio)
+        return (target_s, x, y, yaw)
 
     def _cmd_cb(self, msg: AckermannDrive, role: str) -> None:
         self._cmd_cache[role] = msg
@@ -156,6 +305,8 @@ class PlatoonManager:
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         self.odom[role] = msg
+        if role == self.leader_role:
+            self._append_leader_track(msg)
 
     # ----------------- Spacing control -----------------
     def _tick(self, _evt) -> None:
@@ -164,33 +315,7 @@ class PlatoonManager:
         lead_odom = self.odom.get(self.leader_role)
         if lead_odom is None:
             return
-        # Publish follower-specific planned paths aligned to each follower's projection on leader path
-        if self._leader_path is not None and self._leader_path.poses:
-            for role, pub in self.path_pubs.items():
-                odom = self.odom.get(role)
-                if odom is None:
-                    continue
-                # If not initialized yet (e.g., odom arrived after path), seed once without distance gating
-                if not self._path_initialized.get(role, False):
-                    follower_path = self._trim_path_from_projection(self._leader_path, odom)
-                    if follower_path is not None and follower_path.poses:
-                        pub.publish(follower_path)
-                        idx0 = self._project_index_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
-                        t0 = rospy.Time.now().to_sec()
-                        self._last_path_idx[role] = idx0
-                        self._last_path_pub_time[role] = t0
-                        self._path_initialized[role] = True
-                        continue
-                idx, dist = self._project_on_path(self._leader_path, odom.pose.pose.position.x, odom.pose.pose.position.y)
-                now = rospy.Time.now().to_sec()
-                last_idx = int(self._last_path_idx.get(role, -9999))
-                last_t = float(self._last_path_pub_time.get(role, 0.0))
-                if ((idx - last_idx) >= max(1, self.path_publish_min_index_advance)) or ((now - last_t) >= self.path_publish_min_dt):
-                    follower_path = self._trim_path_from_projection(self._leader_path, odom)
-                    if follower_path is not None and follower_path.poses:
-                        pub.publish(follower_path)
-                        self._last_path_idx[role] = idx
-                        self._last_path_pub_time[role] = now
+        self._publish_follower_paths()
         # Leader forward unit vector from odometry orientation yaw
         # Predecessor chain: leader -> follower_1 -> follower_2 -> ...
         chain = [self.leader_role] + self.follower_roles
@@ -205,7 +330,8 @@ class PlatoonManager:
             pyaw = self._yaw_from_quat(pred_odom.pose.pose.orientation)
             fwd = (math.cos(pyaw), math.sin(pyaw))
             gap, rel_speed = self._gap_and_rel_speed(pred_odom, foll_odom, fwd)
-            err = gap - self.desired_gap_m
+            desired_gap = self._active_gap_for_index(1.0)
+            err = gap - desired_gap
             # Deadband to reduce chattering
             if abs(err) < max(0.0, self.gap_deadband_m):
                 err = 0.0
@@ -254,76 +380,26 @@ class PlatoonManager:
             self._last_cmd_time[role] = now
 
     @staticmethod
-    def _project_index_on_path(path: Path, px: float, py: float) -> int:
-        best_dist_sq = float("inf")
-        best_index = 0
-        for idx in range(len(path.poses) - 1):
-            x1 = path.poses[idx].pose.position.x
-            y1 = path.poses[idx].pose.position.y
-            x2 = path.poses[idx + 1].pose.position.x
-            y2 = path.poses[idx + 1].pose.position.y
-            dx = x2 - x1
-            dy = y2 - y1
-            seg_len_sq = dx * dx + dy * dy
-            if seg_len_sq < 1e-6:
-                continue
-            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
-            t = max(0.0, min(1.0, t))
-            proj_x = x1 + dx * t
-            proj_y = y1 + dy * t
-            d2 = (proj_x - px) * (proj_x - px) + (proj_y - py) * (proj_y - py)
-            if d2 < best_dist_sq:
-                best_dist_sq = d2
-                best_index = idx
-        return best_index
-
-    @staticmethod
-    def _project_on_path(path: Path, px: float, py: float) -> Tuple[int, float]:
-        n = len(path.poses)
-        if n == 0:
-            return 0, float("inf")
-        if n == 1:
-            x = path.poses[0].pose.position.x
-            y = path.poses[0].pose.position.y
-            return 0, math.hypot(px - x, py - y)
-        best_dist_sq = float("inf")
-        best_index = 0
-        for idx in range(n - 1):
-            x1 = path.poses[idx].pose.position.x
-            y1 = path.poses[idx].pose.position.y
-            x2 = path.poses[idx + 1].pose.position.x
-            y2 = path.poses[idx + 1].pose.position.y
-            dx = x2 - x1
-            dy = y2 - y1
-            seg_len_sq = dx * dx + dy * dy
-            if seg_len_sq < 1e-6:
-                continue
-            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
-            t = max(0.0, min(1.0, t))
-            proj_x = x1 + dx * t
-            proj_y = y1 + dy * t
-            d2 = (proj_x - px) * (proj_x - px) + (proj_y - py) * (proj_y - py)
-            if d2 < best_dist_sq:
-                best_dist_sq = d2
-                best_index = idx
-        return best_index, math.sqrt(best_dist_sq)
-
-    def _trim_path_from_projection(self, leader_path: Path, odom: Odometry) -> Optional[Path]:
-        if leader_path is None or not leader_path.poses:
-            return None
-        px = odom.pose.pose.position.x
-        py = odom.pose.pose.position.y
-        start_idx = self._project_index_on_path(leader_path, px, py)
-        trimmed = Path()
-        trimmed.header = Header(stamp=rospy.Time.now(), frame_id=leader_path.header.frame_id or "map")
-        trimmed.poses = leader_path.poses[start_idx:]
-        if not trimmed.poses:
-            trimmed.poses = leader_path.poses[-1:]
-        return trimmed
-
-    @staticmethod
     def _yaw_from_quat(q) -> float:
         return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+
+    @staticmethod
+    def _angle_diff_rad(a: float, b: float) -> float:
+        diff = a - b
+        while diff > math.pi:
+            diff -= 2.0 * math.pi
+        while diff < -math.pi:
+            diff += 2.0 * math.pi
+        return abs(diff)
+
+    @staticmethod
+    def _interp_angle(a: float, b: float, ratio: float) -> float:
+        diff = b - a
+        while diff > math.pi:
+            diff -= 2.0 * math.pi
+        while diff < -math.pi:
+            diff += 2.0 * math.pi
+        return a + diff * ratio
 
     @staticmethod
     def _gap_and_rel_speed(lead: Odometry, foll: Odometry, fwd: Tuple[float, float]) -> Tuple[float, float]:

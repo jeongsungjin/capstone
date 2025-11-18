@@ -125,6 +125,10 @@ class MultiVehicleController:
         self.platoon_leader = str(rospy.get_param("~platoon_leader", "ego_vehicle_1"))
         followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
         self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
+        if self.platoon_enable:
+            self._platoon_roles = {self.platoon_leader, *self.platoon_followers}
+        else:
+            self._platoon_roles = set()
 
         # Dynamic lookahead distance based on path curvature (optional)
         self.dynamic_lookahead_enable = bool(rospy.get_param("~dynamic_lookahead_enable", True))
@@ -148,7 +152,8 @@ class MultiVehicleController:
                 "deadlock_escape_until": None,
                 "tracking_hold": False,
             }
-            path_topic = f"/global_path_{role}"
+            # Consume controller-compatible planned paths (global planner output relayed or platoon-trimmed)
+            path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
             control_topic = f"/carla/{role}/vehicle_control_cmd"
             pose_topic = f"/{role}/pose"
@@ -285,6 +290,13 @@ class MultiVehicleController:
             my_order = self.intersection_orders.get(my_area, {}).get(my_role)
         for other_role, other_state in self.states.items():
             if other_role == my_role:
+                continue
+            if (
+                self.platoon_enable
+                and self._platoon_roles
+                and (my_role in self._platoon_roles)
+                and (other_role in self._platoon_roles)
+            ):
                 continue
             other_pos = other_state.get("position")
             if other_pos is None:
