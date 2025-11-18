@@ -4,7 +4,7 @@
   <arg name="enable_platooning" default="false" />
 
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
-  <arg name="enable_bev_pipeline" default="true" />
+  <arg name="enable_bev_pipeline" default="false" />
 
   <!-- Inference (UDP) args -->
   <arg name="udp_ip" default="0.0.0.0" />
@@ -60,6 +60,15 @@
          <arg name="udp_port" value="9001" />
     -->
   </include>
+
+  <!-- 3.6) Send enable_platooning mode to CARLA via UDP on start -->
+  <node pkg="carla_multi_vehicle_planner" type="ui_mode_sender.py" name="ui_mode_sender" output="screen">
+    <param name="enable_platooning" value="$(arg enable_platooning)" />
+    <param name="udp_host" value="127.0.0.1" />
+    <param name="udp_port" value="9002" />
+    <param name="repeat_count" value="3" />
+    <param name="repeat_delay" value="0.1" />
+  </node>
 
   <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->
   <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
