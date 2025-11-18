@@ -90,11 +90,10 @@ int Model::preprocess(const std::vector<std::shared_ptr<cv::Mat>>& images){
         std::cout << "preprocess: images.size() (" << images.size() << ") != model batch_size_ (" << batch_size_ << ") — using " << effective_batch << std::endl;
     }
 
-    // LSTM hidden, cell state 전달
     __copyLSTMOutputsToInputs();
-    buffers_->copyInputToDeviceAsync(stream_);
+    
     first_inference_ = false;
-
+    
     // 입력 원본 크기는 첫 장 기준 기록 (시각화 스케일링 용)
     input_width_ = images[0]->cols;
     input_height_ = images[0]->rows;
@@ -141,23 +140,23 @@ void Model::postprocess(){
 }
 
 void Model::__copyLSTMOutputsToInputs(){
-    void* hiddenIn = buffers_->getHostBuffer(HIDDEN_IN);
-    auto hiddenTensorSize = buffers_->size(HIDDEN_IN);
-    
-    void* cellIn = buffers_->getHostBuffer(CELL_IN);
-    auto cellTensorSize = buffers_->size(CELL_IN);
-    
-    if(!first_inference_){
-        void* hiddenOut = buffers_->getHostBuffer(HIDDEN_OUT);
-        std::memcpy(hiddenIn, hiddenOut, hiddenTensorSize);
-        
-        void* cellOut = buffers_->getHostBuffer(CELL_OUT);
-        std::memcpy(cellIn, cellOut, cellTensorSize);
-    }
+    // Use device->device copies to avoid host roundtrips
+    void* hiddenIn_dev = buffers_->getDeviceBuffer(HIDDEN_IN);
+    size_t hiddenTensorSize = buffers_->size(HIDDEN_IN);
 
-    else {
-        std::memset(hiddenIn, 0, hiddenTensorSize);        
-        std::memset(cellIn, 0, cellTensorSize);
+    void* cellIn_dev = buffers_->getDeviceBuffer(CELL_IN);
+    size_t cellTensorSize = buffers_->size(CELL_IN);
+
+    if (!first_inference_) {
+        void* hiddenOut_dev = buffers_->getDeviceBuffer(HIDDEN_OUT);
+        CHECK(cudaMemcpyAsync(hiddenIn_dev, hiddenOut_dev, hiddenTensorSize, cudaMemcpyDeviceToDevice, stream_));
+
+        void* cellOut_dev = buffers_->getDeviceBuffer(CELL_OUT);
+        CHECK(cudaMemcpyAsync(cellIn_dev, cellOut_dev, cellTensorSize, cudaMemcpyDeviceToDevice, stream_));
+    } else {
+        // initialize device buffers to zero
+        CHECK(cudaMemsetAsync(hiddenIn_dev, 0, hiddenTensorSize, stream_));
+        CHECK(cudaMemsetAsync(cellIn_dev, 0, cellTensorSize, stream_));
     }
 }
 
