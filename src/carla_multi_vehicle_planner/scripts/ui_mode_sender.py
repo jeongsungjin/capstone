@@ -4,6 +4,7 @@ import socket
 import time
 
 import rospy
+from std_msgs.msg import String as RosString
 
 
 def main():
@@ -35,8 +36,23 @@ def main():
         except Exception:
             pass
 
-    # Exit after sending
-    rospy.loginfo("ui_mode_sender: done")
+    # Subscribe to finished events and forward via UDP
+    def _finished_cb(msg: RosString):
+        udp_msg = "finished"
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.sendto(udp_msg.encode("utf-8"), (udp_host, udp_port))
+                rospy.loginfo("ui_mode_sender: sent '%s' to %s:%d (role=%s)",
+                              udp_msg, udp_host, udp_port, msg.data.strip())
+            finally:
+                s.close()
+        except Exception as exc:
+            rospy.logwarn("ui_mode_sender: failed to send finished: %s", exc)
+
+    rospy.Subscriber("/override_goal_finished", RosString, _finished_cb, queue_size=10)
+    rospy.loginfo("ui_mode_sender: listening for /override_goal_finished → UDP %s:%d", udp_host, udp_port)
+    rospy.spin()
 
 
 if __name__ == "__main__":
