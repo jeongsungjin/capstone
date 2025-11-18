@@ -7,7 +7,10 @@
 int main(int argc, char** argv) {
     rclcpp::init(argc, argv);
     
-    auto node = std::make_shared<IPCameraStreamer>();
+    auto options = rclcpp::NodeOptions{};
+    // enable intra-process comms for zero-copy when running in the same container
+    options.use_intra_process_comms(true);
+    auto node = std::make_shared<IPCameraStreamer>(options);
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
