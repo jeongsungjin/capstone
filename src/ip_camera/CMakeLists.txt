@@ -53,6 +53,7 @@ install(TARGETS ipcamera_node
 
 install(DIRECTORY 
   include
+  include/ip_camera
   DESTINATION include
 )
 ###############################################################
@@ -98,7 +99,7 @@ install(DIRECTORY
 )
 
 # 컴포넌트가 launch 파일 등에서 사용될 수 있도록 export (패키지 의존성)
-ament_export_dependencies(rclcpp rclcpp_components sensor_msgs cv_bridge, OpenCV)
+ament_export_dependencies(rclcpp rclcpp_components sensor_msgs cv_bridge OpenCV)
 ###############################################################
 
 install(DIRECTORY
@@ -111,5 +112,7 @@ install(PROGRAMS
   scripts/image_hz_monitor.py
   DESTINATION lib/${PROJECT_NAME}
 )
+
+ament_export_include_directories("include")
 
 ament_package()
