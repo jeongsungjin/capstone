@@ -8,6 +8,7 @@
 #include <vector>
 
 #include <rclcpp_components/register_node_macro.hpp>
+#include <cerrno>
 
 using namespace std::chrono_literals;
 
@@ -15,13 +16,16 @@ IPCameraStreamer::IPCameraStreamer(const rclcpp::NodeOptions& options)
     : rclcpp::Node("ip_camera_streamer", options) 
 {
     initConfig();
+    this->declare_parameter<std::string>("topic_name_prefix", "/ipcam_");
+    this->get_parameter("topic_name_prefix", camera_config_.topic_name_prefix);
 
-    auto publisher_options = rclcpp::PublisherOptions{};
-    publisher_options.qos_overriding_options =
-        rclcpp::QosOverridingOptions::with_default_policies();
-    
-    image_transport_pub_ = image_transport::create_publisher(
-      *this, "image_raw", rclcpp::SystemDefaultsQoS{}, publisher_options);
+    this->declare_parameter<int>("camera_id", 1);
+    this->get_parameter("camera_id", camera_config_.camera_id);
+
+    // create a simple rclcpp image publisher for now
+    image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+        camera_config_.topic_name_prefix + std::to_string(camera_config_.camera_id) + "/image_raw", 
+        rclcpp::QoS(1));
 
     cv::setNumThreads(1);
 
@@ -36,23 +40,22 @@ void IPCameraStreamer::initConfig() {
     this->declare_parameter<std::string>("password", "admin");
     this->declare_parameter<std::string>("topic_name", "image_raw");
     this->declare_parameter<std::string>("frame_id", "ipcam");
-    this->declare_parameter<int>("camera_id", 1);
     this->declare_parameter<std::string>("transport", "tcp");
     this->declare_parameter<int>("width", 1280);
     this->declare_parameter<int>("height", 720);
-    this->declare_parameter<std::string>("topic_name_prefix", "/ipcam_");
+    this->declare_parameter<double>("publish_rate", 30.0);
 
     this->get_parameter("port", camera_config_.port);
     this->get_parameter("username", camera_config_.username);
     this->get_parameter("password", camera_config_.password);
-    this->get_parameter("topic_name_prefix", camera_config_.topic_name_prefix);
     this->get_parameter("width", camera_config_.width);
     this->get_parameter("height", camera_config_.height);
     this->get_parameter("transport", camera_config_.transport);
     
     this->get_parameter("ip", camera_config_.ip);
     this->get_parameter("frame_id", camera_config_.frame_id);
-    this->get_parameter("camera_id", camera_config_.camera_id);
+
+    this->get_parameter("publish_rate", publish_rate_);
 
     RCLCPP_INFO(
         this->get_logger(), 
@@ -69,7 +72,7 @@ void IPCameraStreamer::initConfig() {
         << "-probesize 5000000 -analyzeduration 10000000 "
         << "-fflags nobuffer -flags low_delay -i " << stream_url_ << " "
         << "-vf scale=" << camera_config_.width << ":" << camera_config_.height << " " 
-        << "-pix_fmt bgr24 -f rawvideo -fps_mode cfr -r 30 "
+        << "-pix_fmt bgr24 -f rawvideo -fps_mode cfr -r " << publish_rate_ << " "
         << "pipe:1 2>/dev/null";
 
     ffmpeg_cmd_ = cmd.str();
@@ -119,7 +122,7 @@ void IPCameraStreamer::cameraThread() {
             unsigned char* write_ptr = img->data.data();
             while(remaining > 0) {
                 size_t readn = fread(write_ptr, 1, remaining, proc);
-                if (r == 0) {
+                if (readn == 0) {
                     if (feof(proc)) {
                         RCLCPP_WARN(this->get_logger(), "[ip_camera] Camera %d stream EOF; will reconnect", camera_config_.camera_id);
                         break;
@@ -148,7 +151,7 @@ void IPCameraStreamer::cameraThread() {
             auto stamp = this->now();
             img->header.stamp = stamp;
             img->header.frame_id = camera_config_.frame_id;
-            image_transport_pub_.publish(std::move(img));
+            image_pub_->publish(std::move(img));
         }
 
         pclose(proc);

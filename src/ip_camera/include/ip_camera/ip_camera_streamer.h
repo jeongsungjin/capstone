@@ -6,7 +6,7 @@
 #include <sensor_msgs/msg/compressed_image.hpp>
 
 #include <cv_bridge/cv_bridge.hpp>
-#include <image_transport/image_transport.hpp>
+#include <memory>
 
 #include <opencv2/opencv.hpp>
 #include <string>
@@ -44,7 +44,9 @@ private:
     std::string stream_url_;
     std::string ffmpeg_cmd_;
     
-    image_transport::Publisher image_transport_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+
+    double publish_rate_{30.0};
 
     std::thread worker_;
     std::atomic<bool> running_{false};
