@@ -28,4 +28,5 @@ catkin_install_python(PROGRAMS
   scripts/platoon_manager.py
   scripts/bev_id_teleporter.py
   scripts/rviz_click_teleporter.py
+  scripts/platoon_monitor.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
