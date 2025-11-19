@@ -58,7 +58,7 @@ class ClickReplanPathVisualizer:
         self.colors = [
             carla.Color(r=255, g=255, b=0),      # 1: yellow
             carla.Color(r=0, g=255, b=0),      # 2: green
-            carla.Color(r=0, g=0, b=255),       # 3: red
+            carla.Color(r=255, g=0, b=0),       # 3: red
             carla.Color(r=128, g=0, b=128),    # 4: purple
             carla.Color(r=255, g=192, b=203),    # 5: pink
             carla.Color(r=255, g=255, b=255),    # 6: white
