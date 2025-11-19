@@ -7,6 +7,7 @@
   <arg name="enable_manual_goal" default="true" />
   <!-- BEV 파이프라인이 없을 때 컨트롤러 tracking hold를 끌 수 있도록 노출 -->
   <arg name="enable_bev_tracking_hold" default="false" />
+  <arg name="enable_bev_pipeline" default="false" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -88,7 +89,7 @@
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="4.0" />
     <!-- Safety stop defaults; tune as needed -->
-    <param name="enable_safety_stop" value="false" />
+    <param name="enable_safety_stop" value="true" />
     <param name="safety_x_min" value="-20.0" />
     <param name="safety_x_max" value="20.0" />
     <param name="safety_y_min" value="-32.0" />
@@ -133,6 +134,20 @@
     <param name="kp_gap" value="0.6" />
     <param name="kd_gap" value="0.6" />
     <param name="max_speed" value="10.0" />
+  </node>
+
+  <!-- 4.6) Monitoring dashboard -->
+  <node if="$(arg enable_rviz)"
+        pkg="carla_multi_vehicle_planner"
+        type="platoon_monitor.py"
+        name="platoon_monitor"
+        output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="enable_platooning" value="$(arg enable_platooning)" />
+    <param name="platoon_leader" value="ego_vehicle_1" />
+    <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
+    <param name="enable_bev_pipeline" value="$(arg enable_bev_pipeline)" />
+    <param name="enable_bev_tracking_hold" value="$(arg enable_bev_tracking_hold)" />
   </node>
 
   <!-- Optional RViz -->

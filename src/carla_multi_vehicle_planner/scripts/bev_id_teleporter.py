@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Tuple
 import rospy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
+from geometry_msgs.msg import PoseStamped
 
 # Ensure CARLA API is on sys.path
 try:
@@ -43,6 +44,11 @@ def quaternion_to_yaw(q) -> float:
 	z = getattr(q, "z", 0.0)
 	w = getattr(q, "w", 1.0)
 	return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def yaw_to_quaternion(yaw: float) -> Tuple[float, float, float, float]:
+	half = yaw * 0.5
+	return (0.0, 0.0, math.sin(half), math.cos(half))
 
 
 class BevIdTeleporter:
@@ -100,7 +106,7 @@ class BevIdTeleporter:
 		# Teleport safety
 		self.max_teleport_distance_m: float = float(rospy.get_param("~max_teleport_distance_m", 20.0))
 		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 150.0))
-		self.teleport_stability_warmup_sec: float = float(rospy.get_param("~teleport_stability_warmup_sec", 0.2))
+		self.teleport_stability_warmup_sec: float = float(rospy.get_param("~teleport_stability_warmup_sec", 0.5))
 
 		# Connect to CARLA
 		self.client = carla.Client(self.host, self.port)
@@ -118,6 +124,7 @@ class BevIdTeleporter:
 		self.id_last_seen: Dict[int, float] = {}
 		self.role_tracking_ok: Dict[str, bool] = {}
 		self.tracking_publishers: Dict[str, rospy.Publisher] = {}
+		self.bev_pose_publishers: Dict[str, rospy.Publisher] = {}
 		self._filtered_yaws: Dict[int, float] = {}
 		self._filtered_yaw_stamp: Dict[int, float] = {}
 		# Periodic republish of tracking_ok so monitoring tools see fresh messages
@@ -134,6 +141,8 @@ class BevIdTeleporter:
 			self.tracking_publishers[role] = rospy.Publisher(topic, Bool, queue_size=1, latch=True)
 			self.role_tracking_ok[role] = False
 			self._set_tracking_status(role, False, force=True)
+			pose_topic = f"/bev_tracking_pose/{role}"
+			self.bev_pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1, latch=True)
 		self.sub = rospy.Subscriber(self.topic_name, BEVInfo, self._bev_cb, queue_size=1)
 		rospy.loginfo(
 			"bev_id_teleporter ready: topic=%s, roles=%s (max=%d)",
@@ -176,6 +185,9 @@ class BevIdTeleporter:
 					self.tracking_publishers[role] = rospy.Publisher(topic, Bool, queue_size=1, latch=True)
 					self.role_tracking_ok[role] = False
 					self._set_tracking_status(role, False, force=True)
+				if role not in self.bev_pose_publishers:
+					pose_topic = f"/bev_tracking_pose/{role}"
+					self.bev_pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1, latch=True)
 
 	def _resolve_actor_for_role(self, role: str) -> Optional[carla.Actor]:
 		with self._lock:
@@ -340,6 +352,26 @@ class BevIdTeleporter:
 		except Exception:
 			pass
 
+	def _publish_tracking_pose(self, role: str, x: float, y: float, yaw_rad: float) -> None:
+		pub = self.bev_pose_publishers.get(role)
+		if pub is None:
+			return
+		msg = PoseStamped()
+		msg.header.stamp = rospy.Time.now()
+		msg.header.frame_id = "map"
+		msg.pose.position.x = x
+		msg.pose.position.y = y
+		msg.pose.position.z = self._pick_height(x, y)
+		qx, qy, qz, qw = yaw_to_quaternion(yaw_rad)
+		msg.pose.orientation.x = qx
+		msg.pose.orientation.y = qy
+		msg.pose.orientation.z = qz
+		msg.pose.orientation.w = qw
+		try:
+			pub.publish(msg)
+		except Exception:
+			pass
+
 	def _tracking_status_tick(self, _evt) -> None:
 		# Periodically republish latest known tracking_ok for each role
 		for role, ok in list(self.role_tracking_ok.items()):
@@ -440,6 +472,7 @@ class BevIdTeleporter:
 			return
 
 		tracking_ok_map = {role: False for role in self.role_names}
+		latest_detection: Dict[str, Tuple[float, float, float]] = {}
 		det_yaws_rad: List[float] = []
 		for idx in range(len(ids)):
 			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
@@ -508,6 +541,7 @@ class BevIdTeleporter:
 					actor.set_transform(tf)
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
+						latest_detection[role] = (x, y, yaw_rad)
 				except Exception as exc:
 					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
 		else:
@@ -537,11 +571,16 @@ class BevIdTeleporter:
 					actor.set_transform(tf)
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
+						latest_detection[role] = (x, y, yaw_rad)
 				except Exception as exc:
 					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
 
 		for role, ok in tracking_ok_map.items():
 			self._set_tracking_status(role, ok)
+			if ok:
+				data = latest_detection.get(role)
+				if data:
+					self._publish_tracking_pose(role, data[0], data[1], data[2])
 
 
 if __name__ == "__main__":

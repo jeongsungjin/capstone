@@ -49,6 +49,7 @@
     <arg name="enable_manual_goal" default="false" />
     <!-- When BEV pipeline disabled, also disable controller's tracking hold -->
     <arg name="enable_bev_tracking_hold" value="$(arg enable_bev_pipeline)" />
+    <arg name="enable_bev_pipeline" value="$(arg enable_bev_pipeline)" />
 
   </include>
 
