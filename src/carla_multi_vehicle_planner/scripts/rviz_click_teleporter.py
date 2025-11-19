@@ -34,6 +34,7 @@ class RvizClickTeleporter:
         self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
         self.default_z: float = float(rospy.get_param("~default_z", 0.5))
         self.z_offset: float = float(rospy.get_param("~z_offset", 0.0))
+        self.disable_collision_check: bool = bool(rospy.get_param("~disable_collision_check", True))
 
         # CARLA client/world/map
         self.client = carla.Client(self.carla_host, self.carla_port)
@@ -103,6 +104,34 @@ class RvizClickTeleporter:
                     pass
         return z, yaw_deg
 
+    def _apply_transform(self, actor: carla.Actor, transform: carla.Transform, role: str) -> bool:
+        disabled = False
+        if self.disable_collision_check and hasattr(actor, "set_simulate_physics"):
+            try:
+                actor.set_simulate_physics(False)
+                disabled = True
+            except Exception as exc:
+                rospy.logwarn_throttle(5.0, "rviz_click_teleporter: failed to disable physics for %s: %s", role, exc)
+        try:
+            actor.set_transform(transform)
+            try:
+                if hasattr(actor, "set_target_velocity"):
+                    actor.set_target_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+                if hasattr(actor, "set_target_angular_velocity"):
+                    actor.set_target_angular_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+            except Exception:
+                pass
+            return True
+        except Exception as exc:
+            rospy.logwarn("rviz_click_teleporter: teleport failed for %s: %s", role, exc)
+            return False
+        finally:
+            if disabled and hasattr(actor, "set_simulate_physics"):
+                try:
+                    actor.set_simulate_physics(True)
+                except Exception as exc:
+                    rospy.logwarn_throttle(5.0, "rviz_click_teleporter: failed to re-enable physics for %s: %s", role, exc)
+
     # --------------- Callbacks ---------------
     def _selection_cb(self, msg: String) -> None:
         role = msg.data.strip()
@@ -139,12 +168,9 @@ class RvizClickTeleporter:
             location=carla.Location(x=x, y=y, z=z),
             rotation=carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg),
         )
-        try:
-            actor.set_transform(tf)
-            rospy.loginfo("rviz_click_teleporter: teleported %s to (%.1f, %.1f, %.1f) yaw=%.1f°", role, x, y, z, yaw_deg)
-        except Exception as exc:
-            rospy.logwarn("rviz_click_teleporter: teleport failed for %s: %s", role, exc)
+        if not self._apply_transform(actor, tf, role):
             return
+        rospy.loginfo("rviz_click_teleporter: teleported %s to (%.1f, %.1f, %.1f) yaw=%.1f°", role, x, y, z, yaw_deg)
 
         # Force replan from new position by notifying planner
         try:

@@ -98,6 +98,9 @@ class BevIdTeleporter:
 		self.yaw_filter_alpha: float = float(rospy.get_param("~yaw_filter_alpha", 0.2))
 		self.yaw_filter_jump_deg: float = float(rospy.get_param("~yaw_filter_jump_deg", 60.0))
 		self.yaw_filter_timeout_sec: float = float(rospy.get_param("~yaw_filter_timeout_sec", 2.0))
+		self.enable_waypoint_heading_guard: bool = bool(rospy.get_param("~enable_waypoint_heading_guard", False))
+		self.waypoint_heading_window_deg: float = float(rospy.get_param("~waypoint_heading_window_deg", 35.0))
+		self.disable_collision_check: bool = bool(rospy.get_param("~disable_collision_check", True))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -372,6 +375,45 @@ class BevIdTeleporter:
 		except Exception:
 			pass
 
+	def _apply_transform(
+		self,
+		actor: carla.Actor,
+		transform: carla.Transform,
+		role: Optional[str] = None,
+		det_id: Optional[int] = None,
+	) -> bool:
+		if actor is None:
+			return False
+		disabled = False
+		if self.disable_collision_check and hasattr(actor, "set_simulate_physics"):
+			try:
+				actor.set_simulate_physics(False)
+				disabled = True
+			except Exception as exc:
+				rospy.logwarn_throttle(5.0, "bev_id_teleporter: failed to disable physics for %s: %s", role or actor.id, exc)
+		try:
+			actor.set_transform(transform)
+			try:
+				if hasattr(actor, "set_target_velocity"):
+					actor.set_target_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+				if hasattr(actor, "set_target_angular_velocity"):
+					actor.set_target_angular_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+			except Exception:
+				pass
+			return True
+		except Exception as exc:
+			if role is not None:
+				rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(det_id) if det_id is not None else "?", exc)
+			else:
+				rospy.logwarn("Teleport failed: %s", exc)
+			return False
+		finally:
+			if disabled and hasattr(actor, "set_simulate_physics"):
+				try:
+					actor.set_simulate_physics(True)
+				except Exception as exc:
+					rospy.logwarn_throttle(5.0, "bev_id_teleporter: failed to re-enable physics for %s: %s", role or actor.id, exc)
+
 	def _tracking_status_tick(self, _evt) -> None:
 		# Periodically republish latest known tracking_ok for each role
 		for role, ok in list(self.role_tracking_ok.items()):
@@ -402,9 +444,9 @@ class BevIdTeleporter:
 			return math.radians(yaw_val)
 		return yaw_val
 
-	def _maybe_flip_yaw(self, x: float, y: float, yaw_rad: float) -> float:
-		if not self.enable_yaw_flip or self.carla_map is None:
-			return yaw_rad
+	def _get_waypoint_heading(self, x: float, y: float) -> Optional[Tuple[float, float]]:
+		if self.carla_map is None:
+			return None
 		try:
 			wp = self.carla_map.get_waypoint(
 				carla.Location(x=float(x), y=float(y), z=0.5),
@@ -412,10 +454,19 @@ class BevIdTeleporter:
 				lane_type=carla.LaneType.Driving,
 			)
 		except Exception:
-			wp = None
+			return None
 		if wp is None:
+			return None
+		yaw_deg = float(wp.transform.rotation.yaw)
+		return math.radians(yaw_deg), yaw_deg
+
+	def _maybe_flip_yaw(self, x: float, y: float, yaw_rad: float) -> float:
+		if not self.enable_yaw_flip:
 			return yaw_rad
-		lane_yaw_rad = math.radians(wp.transform.rotation.yaw)
+		wp_heading = self._get_waypoint_heading(x, y)
+		if wp_heading is None:
+			return yaw_rad
+		lane_yaw_rad, lane_yaw_deg = wp_heading
 		delta = abs(normalize_angle(yaw_rad - lane_yaw_rad))
 		thresh = math.radians(max(0.0, min(180.0, self.yaw_flip_threshold_deg)))
 		if delta > thresh:
@@ -426,10 +477,45 @@ class BevIdTeleporter:
 				float(x),
 				float(y),
 				math.degrees(yaw_rad),
-				wp.transform.rotation.yaw,
+				lane_yaw_deg,
 			)
 			return flipped
 		return yaw_rad
+
+	def _apply_waypoint_heading_guard(self, x: float, y: float, yaw_rad: float) -> float:
+		if not self.enable_waypoint_heading_guard:
+			return yaw_rad
+		wp_heading = self._get_waypoint_heading(x, y)
+		if wp_heading is None:
+			return yaw_rad
+		lane_yaw_rad, lane_yaw_deg = wp_heading
+		window_deg = max(0.0, min(180.0, self.waypoint_heading_window_deg))
+		if window_deg <= 0.0:
+			if abs(normalize_angle(yaw_rad - lane_yaw_rad)) > math.radians(1.0):
+				rospy.loginfo_throttle(
+					1.0,
+					"Waypoint yaw snap at (%.1f, %.1f): det %.1f° -> lane %.1f°",
+					float(x),
+					float(y),
+					math.degrees(yaw_rad),
+					lane_yaw_deg,
+				)
+			return lane_yaw_rad
+		limit = math.radians(window_deg)
+		delta = normalize_angle(yaw_rad - lane_yaw_rad)
+		if abs(delta) <= limit:
+			return yaw_rad
+		clamped = lane_yaw_rad + (limit if delta > 0.0 else -limit)
+		rospy.loginfo_throttle(
+			1.0,
+			"Waypoint yaw clamp at (%.1f, %.1f): det %.1f° -> %.1f° (lane %.1f°)",
+			float(x),
+			float(y),
+			math.degrees(yaw_rad),
+			math.degrees(clamped),
+			lane_yaw_deg,
+		)
+		return normalize_angle(clamped)
 
 	def _filter_yaw(self, det_id: int, yaw_rad: float) -> float:
 		if not self.enable_yaw_filter:
@@ -477,8 +563,11 @@ class BevIdTeleporter:
 		for idx in range(len(ids)):
 			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
 			yaw_rad = self._input_yaw_to_rad(raw_yaw)
-			yaw_rad = self._maybe_flip_yaw(float(cxs[idx]), float(cys[idx]), yaw_rad)
+			x = float(cxs[idx])
+			y = float(cys[idx])
+			yaw_rad = self._maybe_flip_yaw(x, y, yaw_rad)
 			yaw_rad = self._filter_yaw(int(ids[idx]), yaw_rad)
+			yaw_rad = self._apply_waypoint_heading_guard(x, y, yaw_rad)
 			det_yaws_rad.append(yaw_rad)
 		self._cleanup_filtered_yaws()
 
@@ -537,13 +626,10 @@ class BevIdTeleporter:
 				location = carla.Location(x=x, y=y, z=z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
-				try:
-					actor.set_transform(tf)
+				if self._apply_transform(actor, tf, role=role, det_id=vid):
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
 						latest_detection[role] = (x, y, yaw_rad)
-				except Exception as exc:
-					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
 		else:
 			# Fallback to simple first-come mapping
 			assignments = self._assign_roles_for_ids(ids)
@@ -567,13 +653,10 @@ class BevIdTeleporter:
 				location = carla.Location(x=x, y=y, z=z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
-				try:
-					actor.set_transform(tf)
+				if self._apply_transform(actor, tf, role=role, det_id=vid):
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
 						latest_detection[role] = (x, y, yaw_rad)
-				except Exception as exc:
-					rospy.logwarn("Teleport failed for %s (id=%s): %s", role, str(vid), exc)
 
 		for role, ok in tracking_ok_map.items():
 			self._set_tracking_status(role, ok)

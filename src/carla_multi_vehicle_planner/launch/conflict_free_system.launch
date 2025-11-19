@@ -79,6 +79,7 @@
     <param name="snap_to_waypoint_height" value="true" />
     <param name="default_z" value="0.5" />
     <param name="z_offset" value="0.0" />
+    <param name="disable_collision_check" value="true" />
   </node>
 
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
@@ -87,7 +88,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
-    <param name="target_speed" value="6.0" />
+    <param name="target_speed" value="4.0" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
     <param name="safety_x_min" value="-20.0" />

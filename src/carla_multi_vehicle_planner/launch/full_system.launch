@@ -5,6 +5,9 @@
 
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
   <arg name="enable_bev_pipeline" default="true" />
+  <!-- Waypoint-based yaw guarding -->
+  <arg name="use_waypoint_heading_guard" default="false" />
+  <arg name="waypoint_heading_window_deg" default="15.0" />
 
   <!-- Inference (UDP) args -->
   <arg name="udp_ip" default="0.0.0.0" />
@@ -31,6 +34,8 @@
   <!-- 2) Teleporter: BEVInfo -> CARLA vehicle teleport (keep existing options via its own launch) -->
   <include if="$(arg enable_bev_pipeline)" file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter.launch">
     <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
+    <arg name="enable_waypoint_heading_guard" value="$(arg use_waypoint_heading_guard)" />
+    <arg name="waypoint_heading_window_deg" value="$(arg waypoint_heading_window_deg)" />
     <!-- Pass-through optional overrides:
          <arg name="topic" value="/bev_info" />
          <arg name="yaw_in_degrees" value="false" />
