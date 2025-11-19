@@ -7,7 +7,7 @@
     transport: udp
     width: 1280
     height: 720
-    publish_rate: 60.0
+    publish_rate: 30.0
     use_compression: true
     jpeg_quality: 90
 
