@@ -4,7 +4,7 @@
 
   <!-- Per-vehicle network args (override as needed). Up to 6 vehicles supported -->
   <arg name="vehicle_1_ip" default="10.15.129.7" /> <!--초록-->
-  <arg name="vehicle_2_ip" default="10.15.129.51" /> <!-- 노랑 -->
+  <arg name="vehicle_2_ip" default="10.15.129.5" /> <!-- 노랑 -->
   <arg name="vehicle_3_ip" default="10.15.129.4" /> <!-- 주황 -->
   <arg name="vehicle_4_ip" default="127.0.0.1" />
   <arg name="vehicle_5_ip" default="127.0.0.1" />
@@ -42,7 +42,7 @@
     <param name="vehicles/ego_vehicle_1/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
-    <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.00" />
+    <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.1" />
     <param name="vehicles/ego_vehicle_1/speed_scale" value="0.93" />
     <param name="vehicles/ego_vehicle_1/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_1/force_min_speed_on_zero" value="true" />

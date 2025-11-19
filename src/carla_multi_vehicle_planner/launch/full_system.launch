@@ -4,7 +4,7 @@
   <arg name="enable_platooning" default="false" />
 
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_pipeline" default="true" />
 
   <!-- Inference (UDP) args -->
   <arg name="udp_ip" default="0.0.0.0" />
