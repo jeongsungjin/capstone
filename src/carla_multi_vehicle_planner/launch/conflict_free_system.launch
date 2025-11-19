@@ -7,14 +7,14 @@
   <arg name="enable_manual_goal" default="true" />
   <!-- BEV 파이프라인이 없을 때 컨트롤러 tracking hold를 끌 수 있도록 노출 -->
   <arg name="enable_bev_tracking_hold" default="false" />
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_pipeline" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
-    <param name="target_speed" value="5.0" />
+    <param name="target_speed" value="5.5" />
     <param name="spawn_delay" value="1.0" />
     <!-- Optional: spawn-time platoon alignment -->
     <param name="platoon_enable" value="$(arg enable_platooning)" />
@@ -79,6 +79,7 @@
     <param name="snap_to_waypoint_height" value="true" />
     <param name="default_z" value="0.5" />
     <param name="z_offset" value="0.0" />
+    <param name="disable_collision_check" value="true" />
   </node>
 
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
