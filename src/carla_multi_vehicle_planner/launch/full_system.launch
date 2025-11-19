@@ -71,9 +71,9 @@
   </node>
 
   <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->
-  <!-- <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
+  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-  </include> -->
+  </include>
 </launch>
 
 
