@@ -61,8 +61,8 @@ class MultiVehicleController:
         self.safety_front_cone_deg = float(rospy.get_param("~safety_front_cone_deg", 100.0))
         self.safety_require_closing = bool(rospy.get_param("~safety_require_closing", True))
         # Deadlock escape tuning
-        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 5.0))
-        self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 1.0))
+        self.safety_deadlock_timeout_sec = float(rospy.get_param("~safety_deadlock_timeout_sec", 2.0))
+        self.safety_deadlock_escape_speed = float(rospy.get_param("~safety_deadlock_escape_speed", 2.0))
         self.safety_deadlock_escape_duration_sec = float(rospy.get_param("~safety_deadlock_escape_duration_sec", 1.0))
         # Opposite-lane ignore within intersection area
         self.enable_opposite_lane_ignore = bool(rospy.get_param("~enable_opposite_lane_ignore", True))
@@ -82,7 +82,7 @@ class MultiVehicleController:
         self.intersection2_y_max = float(rospy.get_param("~intersection2_y_max", self.intersection_y_max))
 
         # Intersection stability (hysteresis + grace-time) to avoid flickering entry-order
-        self.intersection_hysteresis_margin = float(rospy.get_param("~intersection_hysteresis_margin", 2.0))
+        self.intersection_hysteresis_margin = float(rospy.get_param("~intersection_hysteresis_margin", 5.0))
         self.intersection_exit_grace_sec = float(rospy.get_param("~intersection_exit_grace_sec", 1.5))
 
         self.client = carla.Client("localhost", 2000)
@@ -125,11 +125,26 @@ class MultiVehicleController:
         self.platoon_leader = str(rospy.get_param("~platoon_leader", "ego_vehicle_1"))
         followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
         self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
+        if self.platoon_enable:
+            self._platoon_roles = {self.platoon_leader, *self.platoon_followers}
+        else:
+            self._platoon_roles = set()
 
         # Dynamic lookahead distance based on path curvature (optional)
         self.dynamic_lookahead_enable = bool(rospy.get_param("~dynamic_lookahead_enable", True))
-        self.lookahead_min = float(rospy.get_param("~lookahead_min", 2.0))
-        self.lookahead_max = float(rospy.get_param("~lookahead_max", self.lookahead_distance))
+        default_ld_min = max(0.5, self.lookahead_distance * 0.5)
+        self.lookahead_min = float(rospy.get_param("~lookahead_min", default_ld_min))
+        self.lookahead_max = float(rospy.get_param("~lookahead_max", max(self.lookahead_distance, self.lookahead_min)))
+        if self.lookahead_min < 0.05:
+            rospy.logwarn("multi_vehicle_controller: lookahead_min too small (%.3f); clamping to 0.05", self.lookahead_min)
+            self.lookahead_min = 0.05
+        if self.lookahead_max < self.lookahead_min:
+            rospy.logwarn(
+                "multi_vehicle_controller: lookahead_max (%.3f) < lookahead_min (%.3f); clamping max to min",
+                self.lookahead_max,
+                self.lookahead_min,
+            )
+            self.lookahead_max = self.lookahead_min
         self.lookahead_kappa_gain = float(rospy.get_param("~lookahead_kappa_gain",0.0))
 
         for index in range(self.num_vehicles):
@@ -148,7 +163,8 @@ class MultiVehicleController:
                 "deadlock_escape_until": None,
                 "tracking_hold": False,
             }
-            path_topic = f"/global_path_{role}"
+            # Consume controller-compatible planned paths (global planner output relayed or platoon-trimmed)
+            path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
             control_topic = f"/carla/{role}/vehicle_control_cmd"
             pose_topic = f"/{role}/pose"
@@ -285,6 +301,13 @@ class MultiVehicleController:
             my_order = self.intersection_orders.get(my_area, {}).get(my_role)
         for other_role, other_state in self.states.items():
             if other_role == my_role:
+                continue
+            if (
+                self.platoon_enable
+                and self._platoon_roles
+                and (my_role in self._platoon_roles)
+                and (other_role in self._platoon_roles)
+            ):
                 continue
             other_pos = other_state.get("position")
             if other_pos is None:
@@ -502,16 +525,16 @@ class MultiVehicleController:
                             steer = cmd.steering_angle
                             speed = cmd.speed
             # Area-limited safety stop for lower-priority vehicles near other vehicles
-            if self.enable_safety_stop:
-                position = state.get("position")
-                orientation = state.get("orientation")
-                my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
-                now_sec = float(rospy.Time.now().to_sec())
-                in_area = self._in_safety_area(position)
-                # dynamic priority entry tracking inside intersection areas
-            if self.intersection_dynamic_priority:
-                now = rospy.Time.now().to_sec()
-                base_area = self._which_intersection_area(position)
+            position = state.get("position")
+            orientation = state.get("orientation")
+            my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
+            now_sec = float(rospy.Time.now().to_sec())
+            in_area = self._in_safety_area(position)
+            # Area-limited safety stop for lower-priority vehicles near other vehicles
+            if self.enable_safety_stop and in_area:
+                if self.intersection_dynamic_priority:
+                    now = rospy.Time.now().to_sec()
+                    base_area = self._which_intersection_area(position)
                 # Assign order on first entry to base (tight) area only
                 if base_area is not None:
                     if role not in self.intersection_orders.get(base_area, {}):
@@ -546,7 +569,7 @@ class MultiVehicleController:
                 if escape_until is not None and now_sec < escape_until:
                     # In escape window: allow creeping
                     speed = min(speed, self.safety_deadlock_escape_speed)
-                elif in_area and has_higher_front:
+                elif has_higher_front:
                     # Apply safety stop with deadlock timer
                     since = state.get("safety_stop_since")
                     if since is None:

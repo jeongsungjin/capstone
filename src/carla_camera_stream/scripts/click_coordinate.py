@@ -9,7 +9,7 @@ from geometry_msgs.msg import Pose, Quaternion, PoseStamped
 from nav_msgs.msg import OccupancyGrid
 
 # CARLA Python API 경로 설정
-default_build_path = "/home/jamie/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
+default_build_path = "/home/ctrl/carla/PythonAPI/carla/build/lib.linux-x86_64-cpython-38"
 CARLA_BUILD_PATH = os.environ.get("CARLA_BUILD_PATH", default_build_path)
 
 if CARLA_BUILD_PATH and CARLA_BUILD_PATH not in sys.path:

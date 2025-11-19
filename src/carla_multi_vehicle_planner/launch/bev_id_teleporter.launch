@@ -17,7 +17,7 @@
   <arg name="hold_sec" default="0.5" />
   <arg name="ttl_sec" default="3.0" />
   <arg name="max_teleport_distance_m" default="20.0" />
-  <arg name="teleport_yaw_gate_deg" default="80.0" />
+  <arg name="teleport_yaw_gate_deg" default="160.0" />
   <arg name="teleport_stability_warmup_sec" default="0.2" />
   <arg name="enable_yaw_flip" default="true" />
   <arg name="yaw_flip_threshold_deg" default="150.0" />
