@@ -63,6 +63,7 @@ class InferenceReceiverNode:
         xs: List[float] = []
         ys: List[float] = []
         yaws: List[float] = []
+        colors: List[str] = []
 
         for it in items[: max(0, self.max_items)]:
             try:
@@ -83,10 +84,23 @@ class InferenceReceiverNode:
             # while yaw_rad < -math.pi:
             #     yaw_rad += 2.0 * math.pi
 
+            color_val = it.get("color")
+            if color_val is None:
+                color_val = it.get("color_name")
+            if color_val is None:
+                color_val = it.get("color_id")
+            if color_val is None:
+                color_val = ""
+            try:
+                color_str = str(color_val)
+            except Exception:
+                color_str = ""
+
             ids.append(vid)
             xs.append(x)
             ys.append(y)
             yaws.append(yaw_rad)
+            colors.append(color_str)
 
         msg = BEVInfo()
         msg.detCounts = len(ids)
@@ -94,6 +108,7 @@ class InferenceReceiverNode:
         msg.center_xs = xs
         msg.center_ys = ys
         msg.yaws = yaws
+        msg.colors = colors
         return msg
 
     def spin(self) -> None:
