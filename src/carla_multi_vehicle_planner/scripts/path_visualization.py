@@ -56,12 +56,12 @@ class ClickReplanPathVisualizer:
 
         # Color palette (RGB) – match bev_visualizer/networkx settings
         self.colors = [
-            carla.Color(r=0, g=255, b=0),      # 1: green
-            carla.Color(r=0, g=0, b=255),      # 2: red
-            carla.Color(r=255, g=0, b=0),       # 3: blue
-            carla.Color(r=255, g=255, b=0),    # 4: yellow
-            carla.Color(r=255, g=0, b=255),    # 5: magenta
-            carla.Color(r=0, g=255, b=255),    # 6: cyan
+            carla.Color(r=255, g=255, b=0),      # 1: yellow
+            carla.Color(r=0, g=255, b=0),      # 2: green
+            carla.Color(r=0, g=0, b=255),       # 3: red
+            carla.Color(r=128, g=0, b=128),    # 4: purple
+            carla.Color(r=255, g=192, b=203),    # 5: pink
+            carla.Color(r=255, g=255, b=255),    # 6: white
         ]
 
         # Subs
