@@ -8,7 +8,7 @@
 using namespace std::chrono_literals;
 
 PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
-	: Node("perception_node", options), batch_size_(4)
+	: Node("perception_node", options), batch_size_(6)
 {
 	this->declare_parameter<std::string>("pkg_path", "");
 	this->get_parameter("pkg_path", pkg_path_);
@@ -20,7 +20,7 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 		}
 	}
 
-	for(int i = 0; i < 4; i++){
+	for(int i = 0; i < batch_size_; i++){
 		auto pub = this->create_publisher<sensor_msgs::msg::Image>(
 			"viz_result/cam" + std::to_string(i+1), 
 			rclcpp::SensorDataQoS()
@@ -30,28 +30,32 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 	
 	model_ = std::make_unique<Model>(pkg_path_, batch_size_);
 
-	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_3/image_raw");
-	sub_b_ = std::make_unique<ImgSubscriber>(this, "/ipcam_4/image_raw");
-	sub_c_ = std::make_unique<ImgSubscriber>(this, "/ipcam_5/image_raw");
-	sub_d_ = std::make_unique<ImgSubscriber>(this, "/ipcam_6/image_raw");
+	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_1/image_raw");
+	sub_b_ = std::make_unique<ImgSubscriber>(this, "/ipcam_2/image_raw");
+	sub_c_ = std::make_unique<ImgSubscriber>(this, "/ipcam_3/image_raw");
+	sub_d_ = std::make_unique<ImgSubscriber>(this, "/ipcam_4/image_raw");
+	sub_e_ = std::make_unique<ImgSubscriber>(this, "/ipcam_5/image_raw");
+	sub_f_ = std::make_unique<ImgSubscriber>(this, "/ipcam_6/image_raw");
 
 	// increase queue size to buffer more messages and set a maximum allowed interval
-	sync_ = std::make_shared<Synchronizer>(SyncPolicy(10), *sub_a_, *sub_b_, *sub_c_, *sub_d_);
+	sync_ = std::make_shared<Synchronizer>(SyncPolicy(10), *sub_a_, *sub_b_, *sub_c_, *sub_d_, *sub_e_, *sub_f_);
 	// Wait at most 50 ms for matching messages — tune this (20-200ms) depending on jitter
 	sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(0.05));
-	sync_->registerCallback(std::bind(&PerceptionNode::syncCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4));
+	sync_->registerCallback(std::bind(
+		&PerceptionNode::syncCallback, this, 
+		std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, 
+		std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
 
-	RCLCPP_INFO(this->get_logger(), "PerceptionNode started; listening 4 image topics and feeding model (batch=%d)", batch_size_);
+	RCLCPP_INFO(this->get_logger(), "PerceptionNode started; listening 6 image topics and feeding model (batch=%d)", batch_size_);
 
 	// init sync rate monitor
 	sync_count_.store(0);
 	sync_start_ = std::chrono::steady_clock::now();
 }
 
-void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a,
-								  const ImageMsg::ConstSharedPtr& b,
-								  const ImageMsg::ConstSharedPtr& c,
-								  const ImageMsg::ConstSharedPtr& d)
+void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a, const ImageMsg::ConstSharedPtr& b,
+								  const ImageMsg::ConstSharedPtr& c, const ImageMsg::ConstSharedPtr& d,
+								  const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f)
 {
 	// increment sync counter and possibly log rate once per second
 	sync_count_.fetch_add(1, std::memory_order_relaxed);
@@ -70,12 +74,16 @@ void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a,
 		rclcpp::Time tb(b->header.stamp);
 		rclcpp::Time tc(c->header.stamp);
 		rclcpp::Time td(d->header.stamp);
+		rclcpp::Time te(e->header.stamp);
+		rclcpp::Time tf(f->header.stamp);
 		auto na = static_cast<int64_t>(ta.nanoseconds());
 		auto nb = static_cast<int64_t>(tb.nanoseconds());
 		auto nc = static_cast<int64_t>(tc.nanoseconds());
 		auto nd = static_cast<int64_t>(td.nanoseconds());
-		int64_t tmin = std::min({na, nb, nc, nd});
-		int64_t tmax = std::max({na, nb, nc, nd});
+		auto ne = static_cast<int64_t>(te.nanoseconds());
+		auto nf = static_cast<int64_t>(tf.nanoseconds());
+		int64_t tmin = std::min({na, nb, nc, nd, ne, nf});
+		int64_t tmax = std::max({na, nb, nc, nd, ne, nf});
 		double delta_ms = static_cast<double>(tmax - tmin) / 1e6;
 		// warn if timestamps among the 4 images differ significantly
 		const double WARN_THRESHOLD_MS = 20.0; // tuneable
@@ -87,18 +95,22 @@ void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a,
 	}
 
 	std::vector<std::shared_ptr<cv::Mat>> images;
-	images.reserve(4);
+	images.reserve(6);
 
 	try {
 		auto ca = cv_bridge::toCvCopy(a, "bgr8");
 		auto cb = cv_bridge::toCvCopy(b, "bgr8");
 		auto cc = cv_bridge::toCvCopy(c, "bgr8");
 		auto cd = cv_bridge::toCvCopy(d, "bgr8");
+		auto ce = cv_bridge::toCvCopy(e, "bgr8");
+		auto cf = cv_bridge::toCvCopy(f, "bgr8");
 
 		images.emplace_back(std::make_shared<cv::Mat>(ca->image));
 		images.emplace_back(std::make_shared<cv::Mat>(cb->image));
 		images.emplace_back(std::make_shared<cv::Mat>(cc->image));
 		images.emplace_back(std::make_shared<cv::Mat>(cd->image));
+		images.emplace_back(std::make_shared<cv::Mat>(ce->image));
+		images.emplace_back(std::make_shared<cv::Mat>(cf->image));
 	} catch (const cv_bridge::Exception& e) {
 		RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
 		return;

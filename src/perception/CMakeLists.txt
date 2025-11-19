@@ -38,8 +38,8 @@ link_directories(/usr/lib/x86_64-linux-gnu)
 include_directories(/usr/include/x86_64-linux-gnu)
 
 # xtensor
-link_directories(/home/airkon2/anaconda3/envs/xtensor/include)
-include_directories(/home/airkon2/anaconda3/envs/xtensor/include)
+link_directories(/home/ctrl/miniconda3/envs/xtensor/include)
+include_directories(/home/ctrl/miniconda3/envs/xtensor/include)
 
 find_package(ament_index_cpp REQUIRED)
 

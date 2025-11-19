@@ -24,15 +24,14 @@ public:
 private:
     using ImageMsg = sensor_msgs::msg::Image;
     using ImgSubscriber = message_filters::Subscriber<ImageMsg>;
-    using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
+    using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
     using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
 
-    void syncCallback(const ImageMsg::ConstSharedPtr& a,
-                      const ImageMsg::ConstSharedPtr& b,
-                      const ImageMsg::ConstSharedPtr& c,
-                      const ImageMsg::ConstSharedPtr& d);
+    void syncCallback(const ImageMsg::ConstSharedPtr& a, const ImageMsg::ConstSharedPtr& b,
+                      const ImageMsg::ConstSharedPtr& c, const ImageMsg::ConstSharedPtr& d,
+                      const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f);
 
-    std::unique_ptr<ImgSubscriber> sub_a_, sub_b_, sub_c_, sub_d_;
+    std::unique_ptr<ImgSubscriber> sub_a_, sub_b_, sub_c_, sub_d_, sub_e_, sub_f_;
     std::shared_ptr<Synchronizer> sync_;
 
     // model

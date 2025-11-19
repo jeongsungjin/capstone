@@ -10,7 +10,7 @@ def generate_launch_description():
     ip_camera_pkg_name = 'ip_camera'
 
     offset = 1
-    batch_size = 4
+    batch_size = 6
 
     __composable_node_descriptions = []
     ip_camera_nodes = [
@@ -21,8 +21,10 @@ def generate_launch_description():
             parameters=[
                 PathJoinSubstitution([
                     FindPackageShare(ip_camera_pkg_name), 'config', 'ipcam.yaml']),
-            ]
-            ,
+            ],
+            remappings=[
+                (f'/ipcam_{i}/image_raw', f'/ipcam_{i - offset + 1}/image_raw')
+            ],
             extra_arguments=[{'use_intra_process_comms': True}]
         ) for i in range(offset, offset + batch_size)
     ]
