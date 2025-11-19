@@ -6,7 +6,7 @@
   <!-- 수동 RViz 목표 재계획 기능 온/오프 -->
   <arg name="enable_manual_goal" default="true" />
   <!-- BEV 파이프라인이 없을 때 컨트롤러 tracking hold를 끌 수 있도록 노출 -->
-  <arg name="enable_bev_tracking_hold" default="true" />
+  <arg name="enable_bev_tracking_hold" default="false" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -85,7 +85,7 @@
   <!-- 4) Controller -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="lookahead_distance" value="4.0" />
+    <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="4.0" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="false" />

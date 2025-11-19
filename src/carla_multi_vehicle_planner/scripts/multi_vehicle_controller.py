@@ -82,7 +82,7 @@ class MultiVehicleController:
         self.intersection2_y_max = float(rospy.get_param("~intersection2_y_max", self.intersection_y_max))
 
         # Intersection stability (hysteresis + grace-time) to avoid flickering entry-order
-        self.intersection_hysteresis_margin = float(rospy.get_param("~intersection_hysteresis_margin", 2.0))
+        self.intersection_hysteresis_margin = float(rospy.get_param("~intersection_hysteresis_margin", 5.0))
         self.intersection_exit_grace_sec = float(rospy.get_param("~intersection_exit_grace_sec", 1.5))
 
         self.client = carla.Client("localhost", 2000)
@@ -132,8 +132,19 @@ class MultiVehicleController:
 
         # Dynamic lookahead distance based on path curvature (optional)
         self.dynamic_lookahead_enable = bool(rospy.get_param("~dynamic_lookahead_enable", True))
-        self.lookahead_min = float(rospy.get_param("~lookahead_min", 2.0))
-        self.lookahead_max = float(rospy.get_param("~lookahead_max", self.lookahead_distance))
+        default_ld_min = max(0.5, self.lookahead_distance * 0.5)
+        self.lookahead_min = float(rospy.get_param("~lookahead_min", default_ld_min))
+        self.lookahead_max = float(rospy.get_param("~lookahead_max", max(self.lookahead_distance, self.lookahead_min)))
+        if self.lookahead_min < 0.05:
+            rospy.logwarn("multi_vehicle_controller: lookahead_min too small (%.3f); clamping to 0.05", self.lookahead_min)
+            self.lookahead_min = 0.05
+        if self.lookahead_max < self.lookahead_min:
+            rospy.logwarn(
+                "multi_vehicle_controller: lookahead_max (%.3f) < lookahead_min (%.3f); clamping max to min",
+                self.lookahead_max,
+                self.lookahead_min,
+            )
+            self.lookahead_max = self.lookahead_min
         self.lookahead_kappa_gain = float(rospy.get_param("~lookahead_kappa_gain",0.0))
 
         for index in range(self.num_vehicles):
