@@ -149,6 +149,9 @@ class MultiAgentConflictFreePlanner:
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
 
+        # Finished event publisher (override goal reached)
+        self.finished_pub = rospy.Publisher("/override_goal_finished", String, queue_size=10)
+
         # Kickoff
         rospy.sleep(1.0)
         self._refresh_vehicles()
@@ -384,6 +387,11 @@ class MultiAgentConflictFreePlanner:
         if dist <= threshold:
             rospy.loginfo("%s: override goal reached; clearing override", role)
             self.override_goal[role] = None
+            # Notify listeners that this role has finished its override goal
+            try:
+                self.finished_pub.publish(String(data=role))
+            except Exception as exc:
+                rospy.logwarn("%s: failed to publish finished event: %s", role, exc)
             # Keep existing path; next cycle will replan as needed
             return True
         return False
