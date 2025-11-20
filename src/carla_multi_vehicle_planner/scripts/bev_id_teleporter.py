@@ -2,7 +2,7 @@
 
 import math
 import threading
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import rospy
 from nav_msgs.msg import Odometry
@@ -24,6 +24,19 @@ except Exception as exc:
 	rospy.logfatal("Failed to import CARLA Python API: %s", exc)
 
 from capstone_msgs.msg import BEVInfo
+
+COLOR_ALIASES = {
+	"green": {"green", "초록", "초록색", "녹색"},
+	"orange": {"orange", "주황", "주황색"},
+	"purple": {"purple", "보라", "보라색", "vio렛", "violet"},
+	"yellow": {"yellow", "노랑", "노란색"},
+	"red": {"red", "빨강", "빨간색"},
+	"pink": {"pink", "분홍", "분홍색"},
+	"white": {"white", "흰색"},
+	"blue": {"blue", "파랑", "파란색"},
+}
+
+COLOR_LOOKUP = {alias: canonical for canonical, aliases in COLOR_ALIASES.items() for alias in aliases}
 
 
 def deg(rad: float) -> float:
@@ -110,6 +123,31 @@ class BevIdTeleporter:
 		self.max_teleport_distance_m: float = float(rospy.get_param("~max_teleport_distance_m", 20.0))
 		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 150.0))
 		self.teleport_stability_warmup_sec: float = float(rospy.get_param("~teleport_stability_warmup_sec", 0.5))
+		# Color-aware matching
+		self.enable_color_matching: bool = bool(rospy.get_param("~enable_color_matching", True))
+		self.color_gate_on_mismatch: bool = bool(rospy.get_param("~color_gate_on_mismatch", False))
+		self.color_match_bonus: float = float(rospy.get_param("~color_match_bonus", 4.0))
+		self.color_mismatch_penalty: float = float(rospy.get_param("~color_mismatch_penalty", 15.0))
+		self.color_missing_penalty: float = float(rospy.get_param("~color_missing_penalty", 2.0))
+		self.role_color_map: Dict[str, str] = self._parse_role_color_map(rospy.get_param("~role_color_map", {}))
+		if self.enable_color_matching and self.role_color_map:
+			rospy.loginfo("Color hints loaded: %s", self.role_color_map)
+		# Initial alignment (relaxed gating) parameters
+		self.enable_initial_alignment: bool = bool(rospy.get_param("~enable_initial_alignment", True))
+		self.initial_alignment_timeout_sec: float = float(rospy.get_param("~initial_alignment_timeout_sec", 5.0))
+		self.initial_alignment_avg_duration_sec: float = float(rospy.get_param("~initial_alignment_avg_duration_sec", 1.0))
+		self.initial_alignment_dist_gate_m: float = float(rospy.get_param("~initial_alignment_dist_gate_m", 0.0))
+		self.initial_alignment_yaw_gate_deg: float = float(rospy.get_param("~initial_alignment_yaw_gate_deg", 0.0))
+		self.initial_alignment_max_teleport_m: float = float(rospy.get_param("~initial_alignment_max_teleport_m", 0.0))
+		self.initial_alignment_teleport_yaw_gate_deg: float = float(rospy.get_param("~initial_alignment_teleport_yaw_gate_deg", 0.0))
+		self.initial_alignment_skip_warmup: bool = bool(rospy.get_param("~initial_alignment_skip_warmup", True))
+		self._initial_alignment_start_sec: float = float(rospy.Time.now().to_sec())
+		self._initial_alignment_done_roles: Set[str] = set()
+		self._initial_alignment_complete: bool = not self.enable_initial_alignment
+		self._initial_alignment_samples: Dict[str, Dict[str, float]] = {}
+		self._initial_alignment_avg_results: Dict[str, Dict[str, float]] = {}
+		self._initial_alignment_avg_ready: bool = self.initial_alignment_avg_duration_sec <= 0.0
+		self._initial_alignment_seed_performed: bool = not self.enable_initial_alignment
 
 		# Connect to CARLA
 		self.client = carla.Client(self.host, self.port)
@@ -161,6 +199,204 @@ class BevIdTeleporter:
 				oneshot=False,
 				reset=True,
 			)
+
+	def _normalize_color(self, value: Any) -> str:
+		if value is None:
+			return ""
+		try:
+			text = str(value)
+		except Exception:
+			return ""
+		text = text.strip().lower()
+		if not text:
+			return ""
+		return COLOR_LOOKUP.get(text, text)
+
+	def _parse_role_color_map(self, param: Any) -> Dict[str, str]:
+		result: Dict[str, str] = {}
+		items = None
+		if isinstance(param, dict):
+			items = param.items()
+		elif isinstance(param, (list, tuple)):
+			items = []
+			for entry in param:
+				if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+					items.append((entry[0], entry[1]))
+		elif isinstance(param, str):
+			chunks = [chunk.strip() for chunk in param.split(",") if chunk.strip()]
+			items = []
+			for chunk in chunks:
+				if ":" not in chunk:
+					continue
+				key, value = chunk.split(":", 1)
+				items.append((key.strip(), value.strip()))
+		if items is None:
+			return result
+		for key, value in items:
+			if not isinstance(key, str):
+				continue
+			color = self._normalize_color(value)
+			if color:
+				result[key.strip()] = color
+		return result
+
+	def _apply_color_hint(self, role: str, det_color: str, base_cost: float, big: float) -> float:
+		expected = self.role_color_map.get(role)
+		if not expected:
+			return base_cost
+		color = det_color or ""
+		if not color:
+			return base_cost + max(0.0, self.color_missing_penalty)
+		if color == expected:
+			bonus = max(0.0, self.color_match_bonus)
+			return max(0.0, base_cost - bonus)
+		if self.color_gate_on_mismatch:
+			return big
+		return base_cost + max(0.0, self.color_mismatch_penalty)
+
+	def _pick_role_by_color_hint(self, available_roles: List[str], det_color: Optional[str]) -> str:
+		if not available_roles:
+			return ""
+		color = self._normalize_color(det_color)
+		if color:
+			for role in available_roles:
+				if self.role_color_map.get(role) == color:
+					return role
+		return available_roles[0]
+
+	def _initial_alignment_active(self) -> bool:
+		if not self.enable_initial_alignment or self._initial_alignment_complete:
+			return False
+		if len(self._initial_alignment_done_roles) >= len(self.role_names):
+			self._finalize_initial_alignment("all roles initialized")
+			return False
+		now = float(rospy.Time.now().to_sec())
+		if self.initial_alignment_timeout_sec > 0.0 and (now - self._initial_alignment_start_sec) >= self.initial_alignment_timeout_sec:
+			self._finalize_initial_alignment(
+				"timeout after %.1fs (%d/%d roles aligned)"
+				% (
+					now - self._initial_alignment_start_sec,
+					len(self._initial_alignment_done_roles),
+					len(self.role_names),
+				)
+			)
+			return False
+		return True
+
+	def _mark_initial_alignment_done(self, role: str) -> None:
+		if not self.enable_initial_alignment or self._initial_alignment_complete:
+			return
+		self._initial_alignment_done_roles.add(role)
+		if len(self._initial_alignment_done_roles) >= len(self.role_names):
+			self._finalize_initial_alignment("all roles initialized")
+
+	def _finalize_initial_alignment(self, reason: str) -> None:
+		if self._initial_alignment_complete:
+			return
+		self._initial_alignment_complete = True
+		rospy.loginfo("Initial alignment complete: %s", reason)
+
+	def _accumulate_initial_alignment_samples(
+		self,
+		ids: List[int],
+		cxs: List[float],
+		cys: List[float],
+		yaws: List[float],
+		colors: List[str],
+	) -> None:
+		if not self.enable_initial_alignment or self._initial_alignment_seed_performed:
+			return
+		for idx, color in enumerate(colors):
+			if not color:
+				continue
+			if idx >= len(cxs) or idx >= len(cys) or idx >= len(yaws) or idx >= len(ids):
+				continue
+			sample = self._initial_alignment_samples.setdefault(
+				color,
+				{"count": 0.0, "sum_x": 0.0, "sum_y": 0.0, "sum_sin": 0.0, "sum_cos": 0.0, "last_id": None},
+			)
+			sample["count"] += 1.0
+			sample["sum_x"] += float(cxs[idx])
+			sample["sum_y"] += float(cys[idx])
+			sample["sum_sin"] += math.sin(float(yaws[idx]))
+			sample["sum_cos"] += math.cos(float(yaws[idx]))
+			sample["last_id"] = int(ids[idx])
+
+	def _prepare_initial_alignment_avg_results(self) -> None:
+		self._initial_alignment_avg_results = {}
+		for color, sample in self._initial_alignment_samples.items():
+			count = sample.get("count", 0.0)
+			if count <= 0.0:
+				continue
+			sum_sin = sample.get("sum_sin", 0.0)
+			sum_cos = sample.get("sum_cos", 0.0)
+			yaw = math.atan2(sum_sin, sum_cos) if (sum_sin != 0.0 or sum_cos != 0.0) else 0.0
+			self._initial_alignment_avg_results[color] = {
+				"x": sample.get("sum_x", 0.0) / count,
+				"y": sample.get("sum_y", 0.0) / count,
+				"yaw": yaw,
+				"id": sample.get("last_id"),
+			}
+		self._initial_alignment_avg_ready = True
+		rospy.loginfo(
+			"Initial alignment averaging ready with %d colored samples",
+			len(self._initial_alignment_avg_results),
+		)
+
+	def _apply_initial_alignment_seed(self) -> bool:
+		if not self.enable_initial_alignment or self._initial_alignment_seed_performed:
+			return False
+		if not self.role_color_map:
+			rospy.logwarn_throttle(5.0, "Initial alignment seed skipped: role_color_map empty")
+			return False
+		if not self._initial_alignment_avg_results:
+			return False
+		seeded = 0
+		for role in self.role_names:
+			color = self.role_color_map.get(role)
+			if not color:
+				continue
+			sample = self._initial_alignment_avg_results.get(color)
+			if sample is None:
+				continue
+			if self._teleport_role_to_sample(role, sample):
+				seeded += 1
+		if seeded > 0:
+			self._initial_alignment_seed_performed = True
+			self._initial_alignment_samples.clear()
+			rospy.loginfo(
+				"Initial alignment seeding applied for %d roles (averaged %.1fs)",
+				seeded,
+				self.initial_alignment_avg_duration_sec,
+			)
+			return True
+		return False
+
+	def _teleport_role_to_sample(self, role: str, sample: Dict[str, float]) -> bool:
+		actor = self._resolve_actor_for_role(role)
+		if actor is None:
+			return False
+		x = float(sample.get("x", 0.0))
+		y = float(sample.get("y", 0.0))
+		yaw_rad = float(sample.get("yaw", 0.0))
+		yaw_deg = math.degrees(yaw_rad)
+		z = self._pick_height(x, y)
+		location = carla.Location(x=x, y=y, z=z)
+		rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
+		tf = carla.Transform(location=location, rotation=rotation)
+		det_id = sample.get("id")
+		if self._apply_transform(actor, tf, role=role, det_id=det_id):
+			if det_id is not None:
+				try:
+					det_int = int(det_id)
+					self.role_to_id[role] = det_int
+					self.id_to_role[det_int] = role
+				except Exception:
+					pass
+			self.role_last_switch[role] = float(rospy.Time.now().to_sec())
+			self._mark_initial_alignment_done(role)
+			return True
+		return False
 
 	def _refresh_role_to_actor(self) -> None:
 		actors = self.world.get_actors().filter("vehicle.*")
@@ -232,7 +468,17 @@ class BevIdTeleporter:
 		except Exception:
 			return None
 
-	def _compute_cost_matrix(self, roles: List[str], ids: List[int], xs: List[float], ys: List[float], yaws: List[float]) -> List[List[float]]:
+	def _compute_cost_matrix(
+		self,
+		roles: List[str],
+		ids: List[int],
+		xs: List[float],
+		ys: List[float],
+		yaws: List[float],
+		colors: List[str],
+		dist_gate_m: float,
+		yaw_gate_deg: float,
+	) -> List[List[float]]:
 		big = 1e6
 		costs: List[List[float]] = []
 		for role in roles:
@@ -249,10 +495,14 @@ class BevIdTeleporter:
 				yaw_det = yaws[idx]
 				ang = abs(normalize_angle(yaw_det - ryaw))
 				ang_deg = abs(math.degrees(ang))
-				if (self.dist_gate_m > 0.0 and dist > self.dist_gate_m) or (self.yaw_gate_deg > 0.0 and ang_deg > self.yaw_gate_deg):
+				if (dist_gate_m > 0.0 and dist > dist_gate_m) or (yaw_gate_deg > 0.0 and ang_deg > yaw_gate_deg):
 					row.append(big)
 				else:
-					row.append(self.w_pos * dist + self.w_yaw * ang)
+					cost = self.w_pos * dist + self.w_yaw * ang
+					if self.enable_color_matching and self.role_color_map:
+						det_color = colors[idx] if idx < len(colors) else ""
+						cost = self._apply_color_hint(role, det_color, cost, big)
+					row.append(min(cost, big))
 			costs.append(row)
 		return costs
 
@@ -328,19 +578,29 @@ class BevIdTeleporter:
 				self.role_to_id[role] = new_id
 				self.id_to_role[new_id] = role
 				self.role_last_switch[role] = now
-	def _assign_roles_for_ids(self, ids: List[int]) -> List[Tuple[int, str]]:
+	def _assign_roles_for_ids(self, ids: List[int], colors: Optional[List[str]] = None) -> List[Tuple[int, str]]:
 		assigned: List[Tuple[int, str]] = []
 		with self._lock:
 			# Build list of available roles not currently used by any id
 			used_roles = set(self.id_to_role.values())
 			available_roles = [r for r in self.role_names if r not in used_roles]
+			color_by_id: Dict[int, str] = {}
+			if colors is not None:
+				for idx, vid in enumerate(ids):
+					if idx < len(colors):
+						color_by_id[vid] = colors[idx]
 
 			for vid in ids:
 				role = self.id_to_role.get(vid)
 				if role is None:
 					if not available_roles:
 						continue  # No free roles left
-					role = available_roles.pop(0)
+					if self.enable_color_matching and self.role_color_map and color_by_id:
+						role = self._pick_role_by_color_hint(available_roles, color_by_id.get(vid))
+						if role in available_roles:
+							available_roles.remove(role)
+					else:
+						role = available_roles.pop(0)
 					self.id_to_role[vid] = role
 				assigned.append((vid, role))
 		return assigned
@@ -553,9 +813,45 @@ class BevIdTeleporter:
 		cxs = list(msg.center_xs[:n])
 		cys = list(msg.center_ys[:n])
 		yaws = list(msg.yaws[:n]) if len(msg.yaws) >= n else [0.0] * n
+		raw_colors = list(getattr(msg, "colors", []))
+		color_list = [raw_colors[idx] if idx < len(raw_colors) else "" for idx in range(n)]
+		det_colors = [self._normalize_color(color_list[idx]) if idx < len(color_list) else "" for idx in range(n)]
 
 		if not ids:
 			return
+
+		initial_alignment_active = self._initial_alignment_active()
+		dist_gate_m = self.dist_gate_m
+		yaw_gate_deg = self.yaw_gate_deg
+		if initial_alignment_active:
+			if self.initial_alignment_dist_gate_m < 0.0:
+				pass
+			elif self.initial_alignment_dist_gate_m == 0.0:
+				dist_gate_m = 0.0
+			else:
+				dist_gate_m = self.initial_alignment_dist_gate_m
+			if self.initial_alignment_yaw_gate_deg < 0.0:
+				pass
+			elif self.initial_alignment_yaw_gate_deg == 0.0:
+				yaw_gate_deg = 0.0
+			else:
+				yaw_gate_deg = self.initial_alignment_yaw_gate_deg
+		max_teleport_distance = self.max_teleport_distance_m
+		teleport_yaw_gate_deg = self.teleport_yaw_gate_deg
+		if initial_alignment_active:
+			if self.initial_alignment_max_teleport_m < 0.0:
+				pass
+			elif self.initial_alignment_max_teleport_m == 0.0:
+				max_teleport_distance = 0.0
+			else:
+				max_teleport_distance = self.initial_alignment_max_teleport_m
+			if self.initial_alignment_teleport_yaw_gate_deg < 0.0:
+				pass
+			elif self.initial_alignment_teleport_yaw_gate_deg == 0.0:
+				teleport_yaw_gate_deg = 0.0
+			else:
+				teleport_yaw_gate_deg = self.initial_alignment_teleport_yaw_gate_deg
+		skip_warmup = initial_alignment_active and self.initial_alignment_skip_warmup
 
 		tracking_ok_map = {role: False for role in self.role_names}
 		latest_detection: Dict[str, Tuple[float, float, float]] = {}
@@ -571,11 +867,25 @@ class BevIdTeleporter:
 			det_yaws_rad.append(yaw_rad)
 		self._cleanup_filtered_yaws()
 
+		now_sec = float(rospy.Time.now().to_sec())
+		if (
+			initial_alignment_active
+			and not self._initial_alignment_seed_performed
+			and self.initial_alignment_avg_duration_sec > 0.0
+		):
+			self._accumulate_initial_alignment_samples(ids, cxs, cys, det_yaws_rad, det_colors)
+			if not self._initial_alignment_avg_ready and (now_sec - self._initial_alignment_start_sec) >= self.initial_alignment_avg_duration_sec:
+				self._prepare_initial_alignment_avg_results()
+			if not self._initial_alignment_avg_ready:
+				return
+			if self._apply_initial_alignment_seed():
+				return
+
 		if self.enable_matching:
 			# Hungarian-based robust assignment
 			roles = list(self.role_names)[: self.max_vehicle_count]
 			if roles and ids:
-				costs = self._compute_cost_matrix(roles, ids, cxs, cys, det_yaws_rad)
+				costs = self._compute_cost_matrix(roles, ids, cxs, cys, det_yaws_rad, det_colors, dist_gate_m, yaw_gate_deg)
 				assignment = self._hungarian_assign(costs)
 				self._update_mappings_with_assignment(roles, ids, assignment, cxs, cys, det_yaws_rad)
 			# Teleport using current stable mapping for ids present in this frame
@@ -606,18 +916,19 @@ class BevIdTeleporter:
 					curr_y = y
 					curr_yaw_deg = yaw_deg
 				dist = math.hypot(x - curr_x, y - curr_y)
-				if self.max_teleport_distance_m > 0.0 and dist > self.max_teleport_distance_m:
-					rospy.logwarn_throttle(1.0, "Teleport skip for %s: jump %.1fm > %.1fm", role, dist, self.max_teleport_distance_m)
+				if max_teleport_distance > 0.0 and dist > max_teleport_distance:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: jump %.1fm > %.1fm", role, dist, max_teleport_distance)
 					continue
 				# Optional yaw gate at teleport stage
 				dyaw = abs((yaw_deg - curr_yaw_deg + 180.0) % 360.0 - 180.0)
-				if self.teleport_yaw_gate_deg > 0.0 and dyaw > self.teleport_yaw_gate_deg:
-					rospy.logwarn_throttle(1.0, "Teleport skip for %s: yaw delta %.1f° > %.1f°", role, dyaw, self.teleport_yaw_gate_deg)
+				if teleport_yaw_gate_deg > 0.0 and dyaw > teleport_yaw_gate_deg:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: yaw delta %.1f° > %.1f°", role, dyaw, teleport_yaw_gate_deg)
 					continue
 				# Stability warmup after mapping switches
 				now_sec = float(rospy.Time.now().to_sec())
 				last_sw = self.role_last_switch.get(role, now_sec)
-				if (now_sec - last_sw) < max(0.0, self.teleport_stability_warmup_sec):
+				warmup_horizon = 0.0 if skip_warmup else max(0.0, self.teleport_stability_warmup_sec)
+				if (now_sec - last_sw) < warmup_horizon:
 					rospy.loginfo_throttle(1.0, "Teleport hold for %s: stabilizing mapping (%.2fs)", role, now_sec - last_sw)
 					continue
 				if role in tracking_ok_map:
@@ -630,9 +941,11 @@ class BevIdTeleporter:
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
 						latest_detection[role] = (x, y, yaw_rad)
+						if initial_alignment_active:
+							self._mark_initial_alignment_done(role)
 		else:
 			# Fallback to simple first-come mapping
-			assignments = self._assign_roles_for_ids(ids)
+			assignments = self._assign_roles_for_ids(ids, det_colors)
 			if not assignments:
 				return
 			for (vid, role) in assignments:
@@ -647,6 +960,29 @@ class BevIdTeleporter:
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
+				try:
+					curr_tf = actor.get_transform()
+					curr_x = float(curr_tf.location.x)
+					curr_y = float(curr_tf.location.y)
+					curr_yaw_deg = float(curr_tf.rotation.yaw)
+				except Exception:
+					curr_x = x
+					curr_y = y
+					curr_yaw_deg = yaw_deg
+				dist = math.hypot(x - curr_x, y - curr_y)
+				if max_teleport_distance > 0.0 and dist > max_teleport_distance:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: jump %.1fm > %.1fm", role, dist, max_teleport_distance)
+					continue
+				dyaw = abs((yaw_deg - curr_yaw_deg + 180.0) % 360.0 - 180.0)
+				if teleport_yaw_gate_deg > 0.0 and dyaw > teleport_yaw_gate_deg:
+					rospy.logwarn_throttle(1.0, "Teleport skip for %s: yaw delta %.1f° > %.1f°", role, dyaw, teleport_yaw_gate_deg)
+					continue
+				now_sec = float(rospy.Time.now().to_sec())
+				last_sw = self.role_last_switch.get(role, now_sec)
+				warmup_horizon = 0.0 if skip_warmup else max(0.0, self.teleport_stability_warmup_sec)
+				if (now_sec - last_sw) < warmup_horizon:
+					rospy.loginfo_throttle(1.0, "Teleport hold for %s: stabilizing mapping (%.2fs)", role, now_sec - last_sw)
+					continue
 				if role in tracking_ok_map:
 					tracking_ok_map[role] = False
 				z = self._pick_height(x, y)
@@ -657,6 +993,8 @@ class BevIdTeleporter:
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
 						latest_detection[role] = (x, y, yaw_rad)
+						if initial_alignment_active:
+							self._mark_initial_alignment_done(role)
 
 		for role, ok in tracking_ok_map.items():
 			self._set_tracking_status(role, ok)

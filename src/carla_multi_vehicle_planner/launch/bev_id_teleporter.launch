@@ -8,6 +8,24 @@
   <arg name="z_offset" default="0.0" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <!-- Optional color hints per vehicle (used for Hungarian matching assistance) -->
+  <arg name="vehicle_1_color" default="green" />
+  <arg name="vehicle_2_color" default="pink" />
+  <arg name="vehicle_3_color" default="purple" />
+  <arg name="vehicle_4_color" default="" />
+  <arg name="vehicle_5_color" default="" />
+  <arg name="vehicle_6_color" default="" />
+  <!-- Initial alignment tuning -->
+  <arg name="enable_initial_alignment" default="true" />
+  <arg name="initial_alignment_timeout_sec" default="6.0" />
+  <!-- Dist/yaw gate: <0 inherit normal, 0 disables (no gate), >0 overrides -->
+  <arg name="initial_alignment_dist_gate_m" default="0.0" />
+  <arg name="initial_alignment_yaw_gate_deg" default="0.0" />
+  <!-- Teleport limits: <0 inherit, 0 disables limit -->
+  <arg name="initial_alignment_max_teleport_m" default="0.0" />
+  <arg name="initial_alignment_teleport_yaw_gate_deg" default="0.0" />
+  <arg name="initial_alignment_skip_warmup" default="true" />
+  <arg name="initial_alignment_avg_duration_sec" default="1.0" />
   <!-- Matching and safety tuning -->
   <arg name="enable_matching" default="true" />
   <arg name="w_pos" default="1.0" />
@@ -39,6 +57,15 @@
     <param name="z_offset" value="$(arg z_offset)" />
     <param name="carla_host" value="$(arg carla_host)" />
     <param name="carla_port" value="$(arg carla_port)" />
+    <!-- Color hint dictionary -->
+    <rosparam param="role_color_map" subst_value="true">
+      ego_vehicle_1: "$(arg vehicle_1_color)"
+      ego_vehicle_2: "$(arg vehicle_2_color)"
+      ego_vehicle_3: "$(arg vehicle_3_color)"
+      ego_vehicle_4: "$(arg vehicle_4_color)"
+      ego_vehicle_5: "$(arg vehicle_5_color)"
+      ego_vehicle_6: "$(arg vehicle_6_color)"
+    </rosparam>
     <!-- Matching and safety params -->
     <param name="enable_matching" value="$(arg enable_matching)" />
     <param name="w_pos" value="$(arg w_pos)" />
@@ -55,6 +82,15 @@
     <param name="enable_waypoint_heading_guard" value="$(arg enable_waypoint_heading_guard)" />
     <param name="waypoint_heading_window_deg" value="$(arg waypoint_heading_window_deg)" />
     <param name="disable_collision_check" value="$(arg disable_collision_check)" />
+    <!-- Initial alignment params -->
+    <param name="enable_initial_alignment" value="$(arg enable_initial_alignment)" />
+    <param name="initial_alignment_timeout_sec" value="$(arg initial_alignment_timeout_sec)" />
+    <param name="initial_alignment_dist_gate_m" value="$(arg initial_alignment_dist_gate_m)" />
+    <param name="initial_alignment_yaw_gate_deg" value="$(arg initial_alignment_yaw_gate_deg)" />
+    <param name="initial_alignment_max_teleport_m" value="$(arg initial_alignment_max_teleport_m)" />
+    <param name="initial_alignment_teleport_yaw_gate_deg" value="$(arg initial_alignment_teleport_yaw_gate_deg)" />
+    <param name="initial_alignment_skip_warmup" value="$(arg initial_alignment_skip_warmup)" />
+    <param name="initial_alignment_avg_duration_sec" value="$(arg initial_alignment_avg_duration_sec)" />
   </node>
 </launch>
 
