@@ -28,6 +28,11 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 		viz_result_pubs_.emplace_back(pub);
 	}
 	
+	detection_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+		"detection_info", 
+		rclcpp::QoS(10)
+	);
+
 	model_ = std::make_unique<Model>(pkg_path_, batch_size_);
 
 	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_1/image_raw");
@@ -123,7 +128,9 @@ void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a, const Image
 	}
 
 	model_->inference();
-	model_->postprocess();
+	model_->postprocess(detection_msg_);
+
+	detection_pub_->publish(detection_msg_);
 
     publishVizResult(images);
 }

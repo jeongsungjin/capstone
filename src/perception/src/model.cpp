@@ -133,10 +133,48 @@ void Model::inference(){
     CHECK(cudaStreamSynchronize(stream_));
 }
 
-void Model::postprocess(){
+void Model::postprocess(std_msgs::msg::Float32MultiArray& detection_msg){
     Timer timer("postprocess");
 
-    __decodePredictions();
+    std::vector<int> volumes;  
+    int total_volume = 0;
+
+    for (int l = 0; l < strides_.size(); l++) {
+        int v_reg = samplesCommon::volume(engine_->getTensorShape(name_iter[l][REG]));
+        int v_obj = samplesCommon::volume(engine_->getTensorShape(name_iter[l][OBJ]));
+        int v_cls = samplesCommon::volume(engine_->getTensorShape(name_iter[l][CLS]));
+
+        volumes.push_back(v_reg);
+        volumes.push_back(v_obj);
+        volumes.push_back(v_cls);
+
+        total_volume += v_reg + v_obj + v_cls;
+    }
+
+    std::cout << "total_volume: " << total_volume << std::endl;
+
+    int idx = 0, offset = 0;
+    std::vector<float>(total_volume).swap(detection_msg.data);
+
+    for (int l = 0; l < strides_.size(); l++) {
+        float* ptr_reg = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][REG]));
+        float* ptr_obj = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][OBJ]));
+        float* ptr_cls = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][CLS]));
+
+        // REG
+        memcpy(detection_msg.data.data() + offset, ptr_reg, volumes[idx] * sizeof(float));
+        offset += volumes[idx++];
+        
+        // OBJ
+        memcpy(detection_msg.data.data() + offset, ptr_obj, volumes[idx] * sizeof(float));
+        offset += volumes[idx++];
+
+        // CLS
+        memcpy(detection_msg.data.data() + offset, ptr_cls, volumes[idx] * sizeof(float));
+        offset += volumes[idx++];
+    }
+
+    // __decodePredictions();
 }
 
 void Model::__copyLSTMOutputsToInputs(){
@@ -167,7 +205,9 @@ xt::xarray<float> Model::__toXTensor(const char* tensor_name) {
 
     float* h_ptr = reinterpret_cast<float *>(buffers_->getHostBuffer(tensor_name));
     
+
     auto shape = engine_->getTensorShape(tensor_name);
+    
     std::vector<size_t> v_shape;
     for(int i = 0; i < shape.nbDims; i++){
         v_shape.emplace_back(shape.d[i]);

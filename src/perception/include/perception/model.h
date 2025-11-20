@@ -22,6 +22,8 @@ using namespace nvinfer1;
 
 #include <xtensor/xarray.hpp>
 
+#include <std_msgs/msg/float32_multi_array.hpp>
+
 extern int W;
 extern int H;
 
@@ -66,7 +68,7 @@ public:
 
     int preprocess(const std::vector<std::shared_ptr<cv::Mat>>& images);
     void inference();
-    void postprocess();
+    void postprocess(std_msgs::msg::Float32MultiArray& detection_msg);
 
     const std::vector<DetectionInfo>& getDetections() {
         return detections_info_;

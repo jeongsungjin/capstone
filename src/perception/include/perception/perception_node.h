@@ -12,6 +12,9 @@
 #include <atomic>
 #include <chrono>
 
+#include <std_msgs/msg/float32_multi_array.hpp>
+#include <sensor_msgs/msg/compressed_image.hpp>
+
 #include "perception/model.h"
 
 class PerceptionNode : public rclcpp::Node {
@@ -20,13 +23,14 @@ public:
 
     void publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs);
     void publishBEVInfo();
-
-private:
+    
+    private:
     using ImageMsg = sensor_msgs::msg::Image;
     using ImgSubscriber = message_filters::Subscriber<ImageMsg>;
     using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
     using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
-
+    void publishCompressedBatch(const std::vector<std::shared_ptr<cv::Mat>>& imgs, const ImageMsg::ConstSharedPtr& ref_stamp);
+    
     void syncCallback(const ImageMsg::ConstSharedPtr& a, const ImageMsg::ConstSharedPtr& b,
                       const ImageMsg::ConstSharedPtr& c, const ImageMsg::ConstSharedPtr& d,
                       const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f);
@@ -38,7 +42,13 @@ private:
     std::unique_ptr<Model> model_;
 
     std::vector<rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr> viz_result_pubs_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr detection_pub_;
+    std::vector<rclcpp::Publisher<sensor_msgs::msg::CompressedImage>::SharedPtr> compressed_pubs_;
 
+    int jpeg_quality_ = 90;
+
+    std_msgs::msg::Float32MultiArray detection_msg_;
+    
     int batch_size_;
     std::string pkg_path_;
 
