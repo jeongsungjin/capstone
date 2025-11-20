@@ -37,6 +37,7 @@ private:
     void initConfig();
     void cameraThread();
     FILE* createCameraStream();
+    void createUndistortMap();
 
 private:
     CameraConfig camera_config_;
@@ -47,6 +48,11 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
 
     double publish_rate_{30.0};
+
+    cv::Mat K_, newK_, dist_;
+    cv::Mat map1_, map2_;
+
+    cv::Mat dst_mat_;
 
     std::thread worker_;
     std::atomic<bool> running_{false};

@@ -78,7 +78,6 @@ private:
     void __copyLSTMOutputsToInputs();
     xt::xarray<float> __toXTensor(const char* tensor_name);
     void __decodePredictions(float conf_th=0.15, float nms_iou=0.2, int topk=50);
-    void __tinyFilterOnDets();
 
 private:
     // TensorRT 객체
