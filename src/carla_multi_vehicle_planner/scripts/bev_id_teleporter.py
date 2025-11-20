@@ -670,20 +670,27 @@ class BevIdTeleporter:
 		actor = self._resolve_actor_for_role(role)
 		if actor is None:
 			return False
+		
 		x = float(sample.get("x", 0.0))
 		y = float(sample.get("y", 0.0))
+
 		yaw_rad = float(sample.get("yaw", 0.0))
 		yaw_deg = math.degrees(yaw_rad)
+
 		if self.yaw_blend_enabled:
 			yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
+
 		pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 		x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
+
 		yaw_rad_applied = math.radians(yaw_deg)
 		z = self._pick_height(x, y)
+
 		location = carla.Location(x=x, y=y, z=z)
 		rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 		tf = carla.Transform(location=location, rotation=rotation)
 		det_id = sample.get("id")
+
 		if self._apply_transform(actor, tf, role=role, det_id=det_id):
 			self._kf_force_state(role, x, y, yaw_rad_applied, float(rospy.Time.now().to_sec()))
 			if det_id is not None:
@@ -693,6 +700,7 @@ class BevIdTeleporter:
 					self.id_to_role[det_int] = role
 				except Exception:
 					pass
+
 			self.role_last_switch[role] = float(rospy.Time.now().to_sec())
 			self._mark_initial_alignment_done(role)
 			self._set_role_initialized(role)
@@ -782,6 +790,7 @@ class BevIdTeleporter:
 	) -> List[List[float]]:
 		big = 1e6
 		costs: List[List[float]] = []
+
 		for role in roles:
 			pred = self._get_role_prediction(role)
 			row: List[float] = []
@@ -805,6 +814,7 @@ class BevIdTeleporter:
 						cost = self._apply_color_hint(role, det_color, cost, big)
 					row.append(min(cost, big))
 			costs.append(row)
+
 		return costs
 
 	def _hungarian_assign(self, costs: List[List[float]]) -> List[Tuple[int, int]]:
@@ -813,14 +823,17 @@ class BevIdTeleporter:
 			return []
 		num_rows = len(costs)
 		num_cols = len(costs[0])
+
 		if self._lsa is not None:
 			import numpy as np  # type: ignore
 			cmat = np.array(costs, dtype=float)
 			row_ind, col_ind = self._lsa(cmat)
 			return [(int(r), int(c)) for r, c in zip(row_ind, col_ind) if c < num_cols and r < num_rows and np.isfinite(cmat[r, c])]
+		
 		# Greedy fallback
 		assigned_cols = set()
 		assignment: List[Tuple[int, int]] = []
+
 		for r in range(num_rows):
 			best_c = None
 			best_v = float("inf")
@@ -834,6 +847,7 @@ class BevIdTeleporter:
 			if best_c is not None and best_v < 1e6:
 				assigned_cols.add(best_c)
 				assignment.append((r, best_c))
+
 		return assignment
 
 	def _update_mappings_with_assignment(self, roles: List[str], ids: List[int], assignment: List[Tuple[int, int]], xs: List[float], ys: List[float], yaws: List[float]) -> None:
@@ -879,6 +893,7 @@ class BevIdTeleporter:
 				self.role_to_id[role] = new_id
 				self.id_to_role[new_id] = role
 				self.role_last_switch[role] = now
+
 	def _assign_roles_for_ids(self, ids: List[int], colors: Optional[List[str]] = None) -> List[Tuple[int, str]]:
 		assigned: List[Tuple[int, str]] = []
 		with self._lock:
@@ -1124,6 +1139,7 @@ class BevIdTeleporter:
 		initial_alignment_active = self._initial_alignment_active()
 		dist_gate_m = self.dist_gate_m
 		yaw_gate_deg = self.yaw_gate_deg
+
 		if initial_alignment_active:
 			if self.initial_alignment_dist_gate_m < 0.0:
 				pass
@@ -1137,8 +1153,10 @@ class BevIdTeleporter:
 				yaw_gate_deg = 0.0
 			else:
 				yaw_gate_deg = self.initial_alignment_yaw_gate_deg
+
 		max_teleport_distance = self.max_teleport_distance_m
 		teleport_yaw_gate_deg = self.teleport_yaw_gate_deg
+
 		if initial_alignment_active:
 			if self.initial_alignment_max_teleport_m < 0.0:
 				pass
@@ -1152,12 +1170,14 @@ class BevIdTeleporter:
 				teleport_yaw_gate_deg = 0.0
 			else:
 				teleport_yaw_gate_deg = self.initial_alignment_teleport_yaw_gate_deg
+
 		skip_warmup = initial_alignment_active and self.initial_alignment_skip_warmup
 
 		tracking_ok_map = {role: False for role in self.role_names}
 		latest_detection: Dict[str, Tuple[float, float, float]] = {}
 		det_yaws_rad: List[float] = []
 		yaw_corrections_active = self._yaw_corrections_active()
+
 		for idx in range(len(ids)):
 			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
 			yaw_rad = self._input_yaw_to_rad(raw_yaw)
@@ -1168,6 +1188,7 @@ class BevIdTeleporter:
 				yaw_rad = self._filter_yaw(int(ids[idx]), yaw_rad)
 				yaw_rad = self._apply_waypoint_heading_guard(x, y, yaw_rad)
 			det_yaws_rad.append(yaw_rad)
+
 		if yaw_corrections_active:
 			self._cleanup_filtered_yaws()
 		else:
@@ -1176,6 +1197,7 @@ class BevIdTeleporter:
 				self._filtered_yaw_stamp.clear()
 
 		now_sec = float(rospy.Time.now().to_sec())
+		
 		if (
 			initial_alignment_active
 			and not self._initial_alignment_seed_performed
