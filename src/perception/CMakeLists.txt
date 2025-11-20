@@ -11,6 +11,7 @@ find_package(ament_cmake REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(OpenCV 4.10 REQUIRED)
 
+find_package(capstone_interface_pkg REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
@@ -76,6 +77,7 @@ ament_target_dependencies(perception_component
   message_filters
   cv_bridge
   ament_index_cpp
+  capstone_interface_pkg
 )
 
 target_link_libraries(perception_component
