@@ -49,7 +49,7 @@
     <param name="vehicles/ego_vehicle_1/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
-    <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.1" />
+    <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.00" />
     <param name="vehicles/ego_vehicle_1/speed_scale" value="0.93" />
     <param name="vehicles/ego_vehicle_1/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_1/force_min_speed_on_zero" value="true" />

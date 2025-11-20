@@ -114,6 +114,9 @@ class BevIdTeleporter:
 		self.enable_waypoint_heading_guard: bool = bool(rospy.get_param("~enable_waypoint_heading_guard", False))
 		self.waypoint_heading_window_deg: float = float(rospy.get_param("~waypoint_heading_window_deg", 35.0))
 		self.disable_collision_check: bool = bool(rospy.get_param("~disable_collision_check", True))
+		self.snap_to_spawn_heading: bool = bool(rospy.get_param("~snap_to_spawn_heading", True))
+		self.spawn_heading_max_distance_m: float = float(rospy.get_param("~spawn_heading_max_distance_m", 8.0))
+		self.snap_to_spawn_pose_initial: bool = bool(rospy.get_param("~snap_to_spawn_pose_initial", True))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -154,6 +157,11 @@ class BevIdTeleporter:
 		self.client.set_timeout(5.0)
 		self.world = self.client.get_world()
 		self.carla_map = self.world.get_map()
+		self._spawn_points: List[carla.Transform] = []
+		try:
+			self._spawn_points = list(self.carla_map.get_spawn_points())
+		except Exception:
+			self._spawn_points = []
 
 		# State
 		self._lock = threading.Lock()
@@ -296,6 +304,48 @@ class BevIdTeleporter:
 		self._initial_alignment_complete = True
 		rospy.loginfo("Initial alignment complete: %s", reason)
 
+	def _nearest_spawn_transform(self, x: float, y: float) -> Tuple[Optional[carla.Transform], float]:
+		best_tf: Optional[carla.Transform] = None
+		best_dist: float = float("inf")
+		if not self._spawn_points:
+			return None, best_dist
+		for tf in self._spawn_points:
+			dx = tf.location.x - float(x)
+			dy = tf.location.y - float(y)
+			dist = math.hypot(dx, dy)
+			if dist < best_dist:
+				best_dist = dist
+				best_tf = tf
+		return best_tf, best_dist
+
+	def _apply_spawn_snap(self, role: str, x: float, y: float, yaw_deg: float, pose_snap: bool) -> Tuple[float, float, float]:
+		tf, dist = self._nearest_spawn_transform(x, y)
+		if (
+			tf is None
+			or (self.spawn_heading_max_distance_m > 0.0 and dist > self.spawn_heading_max_distance_m)
+		):
+			return x, y, yaw_deg
+		if self.snap_to_spawn_heading or pose_snap:
+			yaw_deg = float(tf.rotation.yaw)
+		changed = False
+		if self.snap_to_spawn_heading or pose_snap:
+			if abs(float(tf.rotation.yaw) - yaw_deg) > 1e-3:
+				yaw_deg = float(tf.rotation.yaw)
+				changed = True
+		if pose_snap:
+			x = float(tf.location.x)
+			y = float(tf.location.y)
+			changed = True
+		if changed:
+			rospy.loginfo(
+				"bev_id_teleporter: %s snapped to spawn heading%s (dist=%.2fm, yaw=%.1f°)",
+				role,
+				" and pose" if pose_snap else "",
+				dist,
+				yaw_deg,
+			)
+		return x, y, yaw_deg
+
 	def _accumulate_initial_alignment_samples(
 		self,
 		ids: List[int],
@@ -380,6 +430,8 @@ class BevIdTeleporter:
 		y = float(sample.get("y", 0.0))
 		yaw_rad = float(sample.get("yaw", 0.0))
 		yaw_deg = math.degrees(yaw_rad)
+		pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
+		x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 		z = self._pick_height(x, y)
 		location = carla.Location(x=x, y=y, z=z)
 		rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
@@ -902,6 +954,8 @@ class BevIdTeleporter:
 				y = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
 				yaw_deg = math.degrees(yaw_rad)
+				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
+				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
@@ -957,6 +1011,8 @@ class BevIdTeleporter:
 				y = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
 				yaw_deg = math.degrees(yaw_rad)
+				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
+				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue

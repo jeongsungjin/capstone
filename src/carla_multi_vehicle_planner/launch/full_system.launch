@@ -8,6 +8,9 @@
   <!-- Waypoint-based yaw guarding -->
   <arg name="use_waypoint_heading_guard" default="false" />
   <arg name="waypoint_heading_window_deg" default="30.0" />
+  <arg name="snap_to_spawn_heading" default="true" />
+  <arg name="spawn_heading_max_distance_m" default="7.0" />
+  <arg name="snap_to_spawn_pose_initial" default="true" />
   <!-- Vehicle color hints (used for Hungarian matching assist) -->
   <arg name="vehicle_1_color" default="green" />
   <arg name="vehicle_2_color" default="pink" />
@@ -15,6 +18,11 @@
   <arg name="vehicle_4_color" default="" />
   <arg name="vehicle_5_color" default="" />
   <arg name="vehicle_6_color" default="" />
+  <arg name="enable_color_matching" default="true" />
+  <arg name="color_gate_on_mismatch" default="true" />
+  <arg name="color_match_bonus" default="4.0" />
+  <arg name="color_mismatch_penalty" default="15.0" />
+  <arg name="color_missing_penalty" default="2.0" />
   <!-- Initial alignment parameters -->
   <arg name="enable_initial_alignment" default="true" />
   <arg name="initial_alignment_timeout_sec" default="6.0" />
@@ -52,12 +60,20 @@
     <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
     <arg name="enable_waypoint_heading_guard" value="$(arg use_waypoint_heading_guard)" />
     <arg name="waypoint_heading_window_deg" value="$(arg waypoint_heading_window_deg)" />
+    <arg name="snap_to_spawn_heading" value="$(arg snap_to_spawn_heading)" />
+    <arg name="spawn_heading_max_distance_m" value="$(arg spawn_heading_max_distance_m)" />
+    <arg name="snap_to_spawn_pose_initial" value="$(arg snap_to_spawn_pose_initial)" />
     <arg name="vehicle_1_color" value="$(arg vehicle_1_color)" />
     <arg name="vehicle_2_color" value="$(arg vehicle_2_color)" />
     <arg name="vehicle_3_color" value="$(arg vehicle_3_color)" />
     <arg name="vehicle_4_color" value="$(arg vehicle_4_color)" />
     <arg name="vehicle_5_color" value="$(arg vehicle_5_color)" />
     <arg name="vehicle_6_color" value="$(arg vehicle_6_color)" />
+    <arg name="enable_color_matching" value="$(arg enable_color_matching)" />
+    <arg name="color_gate_on_mismatch" value="$(arg color_gate_on_mismatch)" />
+    <arg name="color_match_bonus" value="$(arg color_match_bonus)" />
+    <arg name="color_mismatch_penalty" value="$(arg color_mismatch_penalty)" />
+    <arg name="color_missing_penalty" value="$(arg color_missing_penalty)" />
     <arg name="enable_initial_alignment" value="$(arg enable_initial_alignment)" />
     <arg name="initial_alignment_timeout_sec" value="$(arg initial_alignment_timeout_sec)" />
     <arg name="initial_alignment_dist_gate_m" value="$(arg initial_alignment_dist_gate_m)" />
@@ -107,7 +123,7 @@
   </node>
 
   <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->
-  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
+  <!-- <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
     <arg name="vehicle_1_color" value="$(arg vehicle_1_color)" />
     <arg name="vehicle_2_color" value="$(arg vehicle_2_color)" />
@@ -115,7 +131,7 @@
     <arg name="vehicle_4_color" value="$(arg vehicle_4_color)" />
     <arg name="vehicle_5_color" value="$(arg vehicle_5_color)" />
     <arg name="vehicle_6_color" value="$(arg vehicle_6_color)" />
-  </include>
+  </include> -->
 </launch>
 
 

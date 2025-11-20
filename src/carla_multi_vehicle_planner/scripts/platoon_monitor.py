@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from ackermann_msgs.msg import AckermannDrive
 
 try:
@@ -100,6 +100,7 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
             )
             for role in self.roles
         }
+        self.replan_pub = rospy.Publisher("/force_replan", String, queue_size=1)
         self._shortcuts: List[QtWidgets.QShortcut] = []
         self.manual_stop_interval = float(rospy.get_param("~manual_stop_interval", 0.2))
 
@@ -142,6 +143,9 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
         self.map_view.setMinimumHeight(240)
         layout.addWidget(self.map_view)
         self.map_items: Dict[str, Tuple[QtWidgets.QGraphicsEllipseItem, QtWidgets.QGraphicsSimpleTextItem]] = {}
+        self.replan_button = QtWidgets.QPushButton("Force Replan All", self)
+        self.replan_button.clicked.connect(self._trigger_replan_all)
+        layout.addWidget(self.replan_button)
 
     def _setup_subscribers(self) -> None:
         for role in self.roles:
@@ -210,6 +214,20 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
         except Exception as exc:
             rospy.logwarn("platoon_monitor: failed to load CARLA map background: %s", exc)
             self.draw_map_background = False
+
+    def _trigger_replan_all(self) -> None:
+        if self.replan_pub is None:
+            return
+        count = 0
+        for role in self.roles:
+            msg = String(data=role)
+            try:
+                self.replan_pub.publish(msg)
+                count += 1
+            except Exception as exc:
+                rospy.logwarn("platoon_monitor: failed to publish replan for %s: %s", role, exc)
+        if count:
+            rospy.loginfo("platoon_monitor: force replan requested for %d roles", count)
 
     def _toggle_manual_stop(self, role: str) -> None:
         with self._lock:
