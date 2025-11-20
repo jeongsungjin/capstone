@@ -4,6 +4,8 @@ import math
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import numpy as np
+
 import rospy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
@@ -114,9 +116,30 @@ class BevIdTeleporter:
 		self.enable_waypoint_heading_guard: bool = bool(rospy.get_param("~enable_waypoint_heading_guard", False))
 		self.waypoint_heading_window_deg: float = float(rospy.get_param("~waypoint_heading_window_deg", 35.0))
 		self.disable_collision_check: bool = bool(rospy.get_param("~disable_collision_check", True))
-		self.snap_to_spawn_heading: bool = bool(rospy.get_param("~snap_to_spawn_heading", True))
+		self.snap_to_spawn_heading: bool = bool(rospy.get_param("~snap_to_spawn_heading", False))
 		self.spawn_heading_max_distance_m: float = float(rospy.get_param("~spawn_heading_max_distance_m", 8.0))
 		self.snap_to_spawn_pose_initial: bool = bool(rospy.get_param("~snap_to_spawn_pose_initial", True))
+		self.yaw_blend_enabled: bool = bool(rospy.get_param("~yaw_blend_enabled", True))
+		self.yaw_waypoint_weight: float = float(rospy.get_param("~yaw_waypoint_weight", 0.2))
+		self.yaw_path_weight: float = float(rospy.get_param("~yaw_path_weight", 0.3))
+		self.yaw_stability_alpha: float = float(rospy.get_param("~yaw_stability_alpha", 0.6))
+		self.only_correct_yaw_during_alignment: bool = bool(rospy.get_param("~only_correct_yaw_during_alignment", True))
+		# Kalman filter configuration
+		self.kf_enabled: bool = bool(rospy.get_param("~kf_enabled", True))
+		self.kf_default_dt: float = float(rospy.get_param("~kf_default_dt", 0.05))
+		self.kf_max_dt: float = float(rospy.get_param("~kf_max_dt", 0.2))
+		self.kf_process_noise_pos: float = float(rospy.get_param("~kf_process_noise_pos", 0.5))
+		self.kf_process_noise_vel: float = float(rospy.get_param("~kf_process_noise_vel", 1.0))
+		self.kf_process_noise_yaw_deg: float = float(rospy.get_param("~kf_process_noise_yaw_deg", 12.0))
+		self.kf_process_noise_yaw_rate_deg: float = float(rospy.get_param("~kf_process_noise_yaw_rate_deg", 30.0))
+		self.kf_measurement_noise_pos: float = float(rospy.get_param("~kf_measurement_noise_pos", 0.25))
+		self.kf_measurement_noise_yaw_deg: float = float(rospy.get_param("~kf_measurement_noise_yaw_deg", 6.0))
+		self.kf_init_pos_std: float = float(rospy.get_param("~kf_init_pos_std", 1.0))
+		self.kf_init_vel_std: float = float(rospy.get_param("~kf_init_vel_std", 1.0))
+		self.kf_init_yaw_deg_std: float = float(rospy.get_param("~kf_init_yaw_deg_std", 45.0))
+		self.kf_init_yaw_rate_deg_std: float = float(rospy.get_param("~kf_init_yaw_rate_deg_std", 90.0))
+		self.kf_meas_reject_distance_m: float = float(rospy.get_param("~kf_meas_reject_distance_m", 20.0))
+		self.kf_meas_reject_yaw_deg: float = float(rospy.get_param("~kf_meas_reject_yaw_deg", 999.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -176,6 +199,36 @@ class BevIdTeleporter:
 		self.bev_pose_publishers: Dict[str, rospy.Publisher] = {}
 		self._filtered_yaws: Dict[int, float] = {}
 		self._filtered_yaw_stamp: Dict[int, float] = {}
+		self._roles_initialized: Set[str] = set()
+		self._kf_states: Dict[str, Dict[str, Any]] = {}
+		yaw_init_var = math.radians(self.kf_init_yaw_deg_std) ** 2
+		yaw_rate_init_var = math.radians(self.kf_init_yaw_rate_deg_std) ** 2
+		self._kf_H = np.array(
+			[
+				[1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+				[0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+				[0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+			],
+			dtype=float,
+		)
+		self._kf_I = np.eye(6, dtype=float)
+		self._kf_init_cov = np.diag(
+			[
+				self.kf_init_pos_std ** 2,
+				self.kf_init_pos_std ** 2,
+				self.kf_init_vel_std ** 2,
+				self.kf_init_vel_std ** 2,
+				yaw_init_var,
+				yaw_rate_init_var,
+			]
+		)
+		self._kf_R = np.diag(
+			[
+				self.kf_measurement_noise_pos ** 2,
+				self.kf_measurement_noise_pos ** 2,
+				math.radians(self.kf_measurement_noise_yaw_deg) ** 2,
+			]
+		)
 		# Periodic republish of tracking_ok so monitoring tools see fresh messages
 		self.tracking_status_rate_hz: float = float(rospy.get_param("~tracking_status_rate_hz", 20.0))
 		self._tracking_status_timer = None
@@ -304,6 +357,16 @@ class BevIdTeleporter:
 		self._initial_alignment_complete = True
 		rospy.loginfo("Initial alignment complete: %s", reason)
 
+	def _set_role_initialized(self, role: str) -> None:
+		if role in self._roles_initialized:
+			return
+		self._roles_initialized.add(role)
+
+	def _yaw_corrections_active(self) -> bool:
+		if not self.only_correct_yaw_during_alignment:
+			return True
+		return len(self._roles_initialized) < len(self.role_names)
+
 	def _nearest_spawn_transform(self, x: float, y: float) -> Tuple[Optional[carla.Transform], float]:
 		best_tf: Optional[carla.Transform] = None
 		best_dist: float = float("inf")
@@ -325,12 +388,12 @@ class BevIdTeleporter:
 			or (self.spawn_heading_max_distance_m > 0.0 and dist > self.spawn_heading_max_distance_m)
 		):
 			return x, y, yaw_deg
-		if self.snap_to_spawn_heading or pose_snap:
-			yaw_deg = float(tf.rotation.yaw)
+		heading_snap_allowed = pose_snap or (self.snap_to_spawn_heading and self._yaw_corrections_active())
 		changed = False
-		if self.snap_to_spawn_heading or pose_snap:
-			if abs(float(tf.rotation.yaw) - yaw_deg) > 1e-3:
-				yaw_deg = float(tf.rotation.yaw)
+		if heading_snap_allowed:
+			target_yaw = float(tf.rotation.yaw)
+			if abs(target_yaw - yaw_deg) > 1e-3:
+				yaw_deg = target_yaw
 				changed = True
 		if pose_snap:
 			x = float(tf.location.x)
@@ -345,6 +408,187 @@ class BevIdTeleporter:
 				yaw_deg,
 			)
 		return x, y, yaw_deg
+
+	def _blend_yaw_sources(
+		self,
+		role: str,
+		x: float,
+		y: float,
+		bev_yaw_deg: float,
+	) -> float:
+		if not self.yaw_blend_enabled:
+			return bev_yaw_deg
+		if not self._yaw_corrections_active():
+			return bev_yaw_deg
+		wp_yaw: Optional[float] = None
+		path_yaw = self._get_path_heading(role)
+		if self.carla_map is not None:
+			try:
+				loc = carla.Location(x=float(x), y=float(y), z=0.5)
+				wp = self.carla_map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+				if wp is not None:
+					wp_yaw = float(wp.transform.rotation.yaw)
+			except Exception:
+				wp_yaw = None
+		weights: List[float] = []
+		values: List[float] = []
+		if wp_yaw is not None and self.yaw_waypoint_weight > 0.0:
+			weights.append(self.yaw_waypoint_weight)
+			values.append(wp_yaw)
+		if path_yaw is not None and self.yaw_path_weight > 0.0:
+			weights.append(self.yaw_path_weight)
+			values.append(path_yaw)
+		if not values:
+			return bev_yaw_deg
+		total_w = sum(weights)
+		if total_w <= 1e-6:
+			return bev_yaw_deg
+		target = sum(w * v for w, v in zip(weights, values)) / total_w
+		alpha = max(0.0, min(1.0, self.yaw_stability_alpha))
+		return (1.0 - alpha) * bev_yaw_deg + alpha * target
+
+	def _kf_force_state(self, role: str, x: float, y: float, yaw_rad: float, stamp: float) -> None:
+		if not self.kf_enabled:
+			return
+		state_vec = np.zeros((6, 1), dtype=float)
+		state_vec[0, 0] = float(x)
+		state_vec[1, 0] = float(y)
+		state_vec[4, 0] = normalize_angle(float(yaw_rad))
+		self._kf_states[role] = {
+			"x": state_vec,
+			"P": np.array(self._kf_init_cov, copy=True),
+			"stamp": float(stamp),
+		}
+
+	def _kf_process_noise(self, dt: float) -> np.ndarray:
+		dt = max(1e-3, float(dt))
+		pos_var = (self.kf_process_noise_pos * dt) ** 2
+		vel_var = (self.kf_process_noise_vel) ** 2
+		yaw_var = (math.radians(self.kf_process_noise_yaw_deg) * dt) ** 2
+		yaw_rate_var = math.radians(self.kf_process_noise_yaw_rate_deg) ** 2
+		return np.diag([pos_var, pos_var, vel_var, vel_var, yaw_var, yaw_rate_var])
+
+	def _kf_predict_state(self, role: str, stamp: float) -> None:
+		if not self.kf_enabled:
+			return
+		state = self._kf_states.get(role)
+		if state is None:
+			return
+		last_stamp = state.get("stamp")
+		if last_stamp is None:
+			dt = self.kf_default_dt
+		else:
+			dt = float(stamp) - float(last_stamp)
+			if dt <= 1e-6:
+				dt = self.kf_default_dt
+		if self.kf_max_dt > 0.0:
+			dt = min(self.kf_max_dt, max(dt, 1e-3))
+		else:
+			dt = max(dt, 1e-3)
+		F = np.array(
+			[
+				[1.0, 0.0, dt, 0.0, 0.0, 0.0],
+				[0.0, 1.0, 0.0, dt, 0.0, 0.0],
+				[0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
+				[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+				[0.0, 0.0, 0.0, 0.0, 1.0, dt],
+				[0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+			],
+			dtype=float,
+		)
+		state["x"] = F @ state["x"]
+		state["x"][4, 0] = normalize_angle(float(state["x"][4, 0]))
+		state["P"] = F @ state["P"] @ F.T + self._kf_process_noise(dt)
+		state["P"] = 0.5 * (state["P"] + state["P"].T)
+		state["stamp"] = float(stamp)
+
+	def _kf_should_reject_measurement(self, role: str, meas_x: float, meas_y: float, meas_yaw: float) -> bool:
+		if not self.kf_enabled:
+			return False
+		state = self._kf_states.get(role)
+		if state is None:
+			return False
+		pred_x = float(state["x"][0, 0])
+		pred_y = float(state["x"][1, 0])
+		dist = math.hypot(meas_x - pred_x, meas_y - pred_y)
+		if self.kf_meas_reject_distance_m > 0.0 and dist > self.kf_meas_reject_distance_m:
+			rospy.logwarn_throttle(
+				1.0,
+				"KF measurement reject for %s: dist %.1fm > %.1fm",
+				role,
+				dist,
+				self.kf_meas_reject_distance_m,
+			)
+			return True
+		if self.kf_meas_reject_yaw_deg > 0.0:
+			pred_yaw = float(state["x"][4, 0])
+			dyaw = abs(math.degrees(normalize_angle(meas_yaw - pred_yaw)))
+			if dyaw > self.kf_meas_reject_yaw_deg:
+				rospy.logwarn_throttle(
+					1.0,
+					"KF measurement reject for %s: yaw delta %.1f° > %.1f°",
+					role,
+					dyaw,
+					self.kf_meas_reject_yaw_deg,
+				)
+				return True
+		return False
+
+	def _kf_update_state(self, role: str, meas_x: float, meas_y: float, meas_yaw: float) -> None:
+		if not self.kf_enabled:
+			return
+		state = self._kf_states.get(role)
+		if state is None:
+			return
+		z = np.array([[float(meas_x)], [float(meas_y)], [normalize_angle(float(meas_yaw))]], dtype=float)
+		x_vec = state["x"]
+		innovation = z - self._kf_H @ x_vec
+		innovation[2, 0] = normalize_angle(float(innovation[2, 0]))
+		S = self._kf_H @ state["P"] @ self._kf_H.T + self._kf_R
+		try:
+			S_inv = np.linalg.inv(S)
+		except np.linalg.LinAlgError:
+			rospy.logwarn_throttle(5.0, "KF update skipped for %s due to singular matrix", role)
+			return
+		K = state["P"] @ self._kf_H.T @ S_inv
+		x_vec = x_vec + K @ innovation
+		x_vec[4, 0] = normalize_angle(float(x_vec[4, 0]))
+		P = (self._kf_I - K @ self._kf_H) @ state["P"]
+		state["P"] = 0.5 * (P + P.T)
+		state["x"] = x_vec
+
+	def _kf_fuse_measurement(
+		self,
+		role: str,
+		meas_x: float,
+		meas_y: float,
+		meas_yaw: float,
+		stamp: float,
+	) -> Tuple[float, float, float, bool]:
+		if not self.kf_enabled:
+			return meas_x, meas_y, meas_yaw, False
+		if role not in self._kf_states:
+			self._kf_force_state(role, meas_x, meas_y, meas_yaw, stamp)
+			return meas_x, meas_y, meas_yaw, True
+		self._kf_predict_state(role, stamp)
+		used = False
+		if not self._kf_should_reject_measurement(role, meas_x, meas_y, meas_yaw):
+			self._kf_update_state(role, meas_x, meas_y, meas_yaw)
+			used = True
+		state = self._kf_states.get(role)
+		if state is None:
+			return meas_x, meas_y, meas_yaw, used
+		yaw_est = normalize_angle(float(state["x"][4, 0]))
+		return float(state["x"][0, 0]), float(state["x"][1, 0]), yaw_est, used
+
+	def _get_path_heading(self, role: str) -> Optional[float]:
+		state = self.role_state.get(role)
+		if not state:
+			return None
+		yaw = state.get("yaw")
+		if yaw is None:
+			return None
+		return math.degrees(float(yaw))
 
 	def _accumulate_initial_alignment_samples(
 		self,
@@ -430,14 +674,18 @@ class BevIdTeleporter:
 		y = float(sample.get("y", 0.0))
 		yaw_rad = float(sample.get("yaw", 0.0))
 		yaw_deg = math.degrees(yaw_rad)
+		if self.yaw_blend_enabled:
+			yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
 		pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 		x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
+		yaw_rad_applied = math.radians(yaw_deg)
 		z = self._pick_height(x, y)
 		location = carla.Location(x=x, y=y, z=z)
 		rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 		tf = carla.Transform(location=location, rotation=rotation)
 		det_id = sample.get("id")
 		if self._apply_transform(actor, tf, role=role, det_id=det_id):
+			self._kf_force_state(role, x, y, yaw_rad_applied, float(rospy.Time.now().to_sec()))
 			if det_id is not None:
 				try:
 					det_int = int(det_id)
@@ -447,6 +695,7 @@ class BevIdTeleporter:
 					pass
 			self.role_last_switch[role] = float(rospy.Time.now().to_sec())
 			self._mark_initial_alignment_done(role)
+			self._set_role_initialized(role)
 			return True
 		return False
 
@@ -908,16 +1157,23 @@ class BevIdTeleporter:
 		tracking_ok_map = {role: False for role in self.role_names}
 		latest_detection: Dict[str, Tuple[float, float, float]] = {}
 		det_yaws_rad: List[float] = []
+		yaw_corrections_active = self._yaw_corrections_active()
 		for idx in range(len(ids)):
 			raw_yaw = float(yaws[idx]) if idx < len(yaws) else 0.0
 			yaw_rad = self._input_yaw_to_rad(raw_yaw)
 			x = float(cxs[idx])
 			y = float(cys[idx])
-			yaw_rad = self._maybe_flip_yaw(x, y, yaw_rad)
-			yaw_rad = self._filter_yaw(int(ids[idx]), yaw_rad)
-			yaw_rad = self._apply_waypoint_heading_guard(x, y, yaw_rad)
+			if yaw_corrections_active:
+				yaw_rad = self._maybe_flip_yaw(x, y, yaw_rad)
+				yaw_rad = self._filter_yaw(int(ids[idx]), yaw_rad)
+				yaw_rad = self._apply_waypoint_heading_guard(x, y, yaw_rad)
 			det_yaws_rad.append(yaw_rad)
-		self._cleanup_filtered_yaws()
+		if yaw_corrections_active:
+			self._cleanup_filtered_yaws()
+		else:
+			if self._filtered_yaws:
+				self._filtered_yaws.clear()
+				self._filtered_yaw_stamp.clear()
 
 		now_sec = float(rospy.Time.now().to_sec())
 		if (
@@ -953,7 +1209,10 @@ class BevIdTeleporter:
 				x = float(cxs[idx])
 				y = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				yaw_deg = math.degrees(yaw_rad)
+				_, _, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x, y, yaw_rad, now_sec)
+				yaw_deg = math.degrees(fused_yaw_rad)
+				if self.yaw_blend_enabled:
+					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
 				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 				actor = self._resolve_actor_for_role(role)
@@ -994,9 +1253,11 @@ class BevIdTeleporter:
 				if self._apply_transform(actor, tf, role=role, det_id=vid):
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
-						latest_detection[role] = (x, y, yaw_rad)
+						latest_detection[role] = (x, y, fused_yaw_rad)
 						if initial_alignment_active:
 							self._mark_initial_alignment_done(role)
+						self._set_role_initialized(role)
+						self._set_role_initialized(role)
 		else:
 			# Fallback to simple first-come mapping
 			assignments = self._assign_roles_for_ids(ids, det_colors)
@@ -1010,7 +1271,10 @@ class BevIdTeleporter:
 				x = float(cxs[idx])
 				y = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				yaw_deg = math.degrees(yaw_rad)
+				_, _, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x, y, yaw_rad, now_sec)
+				yaw_deg = math.degrees(fused_yaw_rad)
+				if self.yaw_blend_enabled:
+					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
 				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 				actor = self._resolve_actor_for_role(role)
@@ -1048,7 +1312,7 @@ class BevIdTeleporter:
 				if self._apply_transform(actor, tf, role=role, det_id=vid):
 					if role in tracking_ok_map:
 						tracking_ok_map[role] = True
-						latest_detection[role] = (x, y, yaw_rad)
+						latest_detection[role] = (x, y, fused_yaw_rad)
 						if initial_alignment_active:
 							self._mark_initial_alignment_done(role)
 
