@@ -11,6 +11,9 @@
   <arg name="snap_to_spawn_heading" default="true" />
   <arg name="spawn_heading_max_distance_m" default="7.0" />
   <arg name="snap_to_spawn_pose_initial" default="true" />
+
+  <!-- 초기 Carla 자세 정렬 설정 파라미터. true일 때, 초기 Carla 자세 정렬을 위해 초기 웨이포인트 사용. -->
+  <!-- 초기 정렬에 웨이포인트만 사용하고싶다면, yaw_waypoint_weight를 1.0, yaw_path_weight를 0.0으로 설정. -->
   <arg name="yaw_blend_enabled" default="true" />
   <arg name="yaw_waypoint_weight" default="0.2" />
   <arg name="yaw_path_weight" default="0.3" />

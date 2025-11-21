@@ -15,7 +15,7 @@
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
     <param name="target_speed" value="5.5" />
-    <param name="spawn_delay" value="1.0" />
+    <param name="spawn_delay" value="1.5" />
     <!-- Optional: spawn-time platoon alignment -->
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
