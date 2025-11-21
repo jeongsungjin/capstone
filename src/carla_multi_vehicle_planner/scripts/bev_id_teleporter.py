@@ -127,19 +127,19 @@ class BevIdTeleporter:
 		# Kalman filter configuration
 		self.kf_enabled: bool = bool(rospy.get_param("~kf_enabled", True))
 		self.kf_default_dt: float = float(rospy.get_param("~kf_default_dt", 0.05))
-		self.kf_max_dt: float = float(rospy.get_param("~kf_max_dt", 0.2))
+		self.kf_max_dt: float = float(rospy.get_param("~kf_max_dt", 0.3))
 		self.kf_process_noise_pos: float = float(rospy.get_param("~kf_process_noise_pos", 0.5))
 		self.kf_process_noise_vel: float = float(rospy.get_param("~kf_process_noise_vel", 1.0))
-		self.kf_process_noise_yaw_deg: float = float(rospy.get_param("~kf_process_noise_yaw_deg", 12.0))
+		self.kf_process_noise_yaw_deg: float = float(rospy.get_param("~kf_process_noise_yaw_deg", 30.0))
 		self.kf_process_noise_yaw_rate_deg: float = float(rospy.get_param("~kf_process_noise_yaw_rate_deg", 30.0))
 		self.kf_measurement_noise_pos: float = float(rospy.get_param("~kf_measurement_noise_pos", 0.25))
-		self.kf_measurement_noise_yaw_deg: float = float(rospy.get_param("~kf_measurement_noise_yaw_deg", 6.0))
+		self.kf_measurement_noise_yaw_deg: float = float(rospy.get_param("~kf_measurement_noise_yaw_deg", 30.0))
 		self.kf_init_pos_std: float = float(rospy.get_param("~kf_init_pos_std", 1.0))
 		self.kf_init_vel_std: float = float(rospy.get_param("~kf_init_vel_std", 1.0))
 		self.kf_init_yaw_deg_std: float = float(rospy.get_param("~kf_init_yaw_deg_std", 45.0))
 		self.kf_init_yaw_rate_deg_std: float = float(rospy.get_param("~kf_init_yaw_rate_deg_std", 90.0))
 		self.kf_meas_reject_distance_m: float = float(rospy.get_param("~kf_meas_reject_distance_m", 20.0))
-		self.kf_meas_reject_yaw_deg: float = float(rospy.get_param("~kf_meas_reject_yaw_deg", 999.0))
+		self.kf_meas_reject_yaw_deg: float = float(rospy.get_param("~kf_meas_reject_yaw_deg", 40.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))

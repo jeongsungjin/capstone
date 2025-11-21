@@ -35,7 +35,7 @@ class PlatoonManager:
         self.follower_roles = [s.strip() for s in str(rospy.get_param("~follower_roles", "ego_vehicle_2,ego_vehicle_3")).split(",") if s.strip()]
         self.desired_gap_m = float(rospy.get_param("~desired_gap_m", 6.0))
         self.teleport_on_start = bool(rospy.get_param("~teleport_on_start", True))
-        self.max_speed = float(rospy.get_param("~max_speed", 6.0))
+        self.max_speed = float(rospy.get_param("~max_speed", 3.0))
         self.kp_gap = float(rospy.get_param("~kp_gap", 0.4))
         self.kd_gap = float(rospy.get_param("~kd_gap", 0.6))
         self.kp_gap_close = float(rospy.get_param("~kp_gap_close", 0.7))
