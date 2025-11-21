@@ -4,7 +4,7 @@ import socket
 import select
 import json
 import math
-from typing import List, Tuple
+from typing import List
 
 import rospy
 from capstone_msgs.msg import BEVInfo
@@ -33,6 +33,7 @@ class InferenceReceiverNode:
         self.yaw_add_deg = float(rospy.get_param("~yaw_add_deg", 0.0))
         self.max_items = int(rospy.get_param("~max_items", 64))
         self.topic = str(rospy.get_param("~topic", "/bev_info"))
+        self.frame_id = str(rospy.get_param("~frame_id", "map"))
 
         # UDP sockets (multi-port)
         self.socks: List[socket.socket] = []
@@ -51,6 +52,8 @@ class InferenceReceiverNode:
         rospy.loginfo("[UDP] Listening on %s ports %s -> publishing %s", self.udp_ip, ",".join(str(p) for p in self.udp_ports), self.topic)
         rospy.on_shutdown(self._on_shutdown)
 
+        self.frame_seq: int = 0
+
     def _on_shutdown(self) -> None:
         for s in self.socks:
             try:
@@ -58,7 +61,21 @@ class InferenceReceiverNode:
             except Exception:
                 pass
 
-    def _to_bevinfo(self, items: List[dict]) -> BEVInfo:
+    def _extract_stamp(self, payload: dict) -> rospy.Time:
+        ts_fields = ["timestamp", "stamp", "ts", "time"]
+        for key in ts_fields:
+            if key not in payload:
+                continue
+            raw = payload.get(key)
+            if raw is None:
+                continue
+            try:
+                return rospy.Time.from_sec(float(raw))
+            except (TypeError, ValueError):
+                continue
+        return rospy.Time.now()
+
+    def _to_bevinfo(self, items: List[dict], stamp: rospy.Time, frame_seq: int) -> BEVInfo:
         ids: List[int] = []
         xs: List[float] = []
         ys: List[float] = []
@@ -103,6 +120,10 @@ class InferenceReceiverNode:
             colors.append(color_str)
 
         msg = BEVInfo()
+        msg.header.stamp = stamp
+        msg.header.seq = frame_seq
+        msg.header.frame_id = self.frame_id
+        msg.frame_seq = frame_seq
         msg.detCounts = len(ids)
         msg.ids = ids
         msg.center_xs = xs
@@ -138,11 +159,21 @@ class InferenceReceiverNode:
                     continue
 
                 items = payload.get("items", [])
-                bev_msg = self._to_bevinfo(items)
+                stamp = self._extract_stamp(payload)
+                frame_seq = self.frame_seq
+                bev_msg = self._to_bevinfo(items, stamp, frame_seq)
                 self.pub.publish(bev_msg)
 
-                rospy.loginfo_throttle(1.0, "[Frame %d] published detCounts=%d", frame_idx, bev_msg.detCounts)
-                frame_idx += 1
+                now = rospy.Time.now()
+                latency = (now - stamp).to_sec()
+                rospy.loginfo_throttle(
+                    1.0,
+                    "[Frame %d] published detCounts=%d latency=%.3fs",
+                    frame_seq,
+                    bev_msg.detCounts,
+                    latency,
+                )
+                self.frame_seq += 1
             rate.sleep()
 
 

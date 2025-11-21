@@ -116,13 +116,13 @@
   </include>
 
   <!-- 3.5) UI: camera, shutdown, UDP goal bridge, path visualization -->
-  <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
-    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  <!-- <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" /> -->
     <!-- Optionally override:
          <arg name="udp_ip" value="0.0.0.0" />
          <arg name="udp_port" value="9001" />
     -->
-  </include>
+  <!-- </include> -->
 
   <!-- 3.6) Send enable_platooning mode to CARLA via UDP on start -->
   <node pkg="carla_multi_vehicle_planner" type="ui_mode_sender.py" name="ui_mode_sender" output="screen">

@@ -9,9 +9,9 @@ project(capstone_msgs)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   message_generation
-## Generate added messages and services with any dependencies listed here
   message_runtime
   roscpp
+  std_msgs
 )
 
 ## Generate messages in the 'msg' folder
@@ -37,7 +37,7 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES capstone_msgs
-#  CATKIN_DEPENDS message_generation message_runtime roscpp
+  CATKIN_DEPENDS message_runtime roscpp std_msgs
 #  DEPENDS system_lib
 )
 

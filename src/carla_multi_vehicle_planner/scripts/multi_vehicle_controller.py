@@ -700,10 +700,10 @@ class MultiVehicleController:
         steer = max(-self.max_steer, min(self.max_steer, steer))
 
         speed = self.target_speed
-        if abs(steer) > 0.2:
-            speed *= 0.7
-        if Ld < effective_lookahead:
-            speed *= max(0.0, Ld / max(1e-6, effective_lookahead))
+        # if abs(steer) > 0.2:
+        #     speed *= 0.7
+        # if Ld < effective_lookahead:
+        #     speed *= max(0.0, Ld / max(1e-6, effective_lookahead))
 
         return steer, speed
 

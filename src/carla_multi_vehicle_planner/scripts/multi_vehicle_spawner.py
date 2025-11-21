@@ -35,7 +35,7 @@ DEFAULT_MODEL_MAP: List[str] = [
     "vehicle.vehicle.redxycar",  # ego_vehicle_3
     "vehicle.vehicle.yellowxycar",  # ego_vehicle_4
     "vehicle.vehicle.pinkxycar",    # ego_vehicle_5
-    "vehicle.vehicle.whitexycar",   # ego_vehicle_6
+    "vehicle.vehicle.blackxycar",   # ego_vehicle_6
 ]
 
 # DEFAULT_MODEL_MAP: List[str] = [

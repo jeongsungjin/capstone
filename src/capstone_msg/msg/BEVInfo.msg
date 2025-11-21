@@ -1,3 +1,5 @@
+std_msgs/Header header
+uint32 frame_seq
 int32 detCounts
 int32[] ids
 float32[] center_xs
