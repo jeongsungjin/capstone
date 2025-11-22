@@ -10,6 +10,7 @@ import rospy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped
+from ackermann_msgs.msg import AckermannDrive
 
 # Ensure CARLA API is on sys.path
 try:
@@ -140,6 +141,24 @@ class BevIdTeleporter:
 		self.kf_init_yaw_rate_deg_std: float = float(rospy.get_param("~kf_init_yaw_rate_deg_std", 90.0))
 		self.kf_meas_reject_distance_m: float = float(rospy.get_param("~kf_meas_reject_distance_m", 20.0))
 		self.kf_meas_reject_yaw_deg: float = float(rospy.get_param("~kf_meas_reject_yaw_deg", 40.0))
+		# Control input for Kalman filter prediction (optional)
+		self.kf_use_control_input: bool = bool(rospy.get_param("~kf_use_control_input", True))
+		self.kf_control_timeout_sec: float = float(rospy.get_param("~kf_control_timeout_sec", 0.5))
+		self.kf_wheelbase_m: float = float(rospy.get_param("~kf_wheelbase_m", 2.7))  # Vehicle wheelbase for bicycle model
+		# Motion-based yaw estimation (when Kalman filter is off)
+		motion_yaw_enabled_param = rospy.get_param("~motion_yaw_enabled", None)
+		# If not explicitly set, enable when KF is disabled
+		if motion_yaw_enabled_param is None:
+			self.motion_yaw_enabled: bool = not self.kf_enabled
+		else:
+			self.motion_yaw_enabled: bool = bool(motion_yaw_enabled_param)
+		# Tuned for 10-20Hz perception (0.05-0.1s) at 2m/s vehicle speed
+		# min_distance: 0.1-0.2m per frame at 2m/s → 0.15m threshold
+		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.15))
+		# timeout: allow 3-7 frame misses (0.3-0.7s at 10-20Hz) → 0.7s
+		self.motion_yaw_max_timeout_sec: float = float(rospy.get_param("~motion_yaw_max_timeout_sec", 0.7))
+		# max_jump: reasonable for 2m/s speed changes → 35deg
+		self.motion_yaw_max_jump_deg: float = float(rospy.get_param("~motion_yaw_max_jump_deg", 35.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
@@ -201,6 +220,10 @@ class BevIdTeleporter:
 		self._filtered_yaw_stamp: Dict[int, float] = {}
 		self._roles_initialized: Set[str] = set()
 		self._kf_states: Dict[str, Dict[str, Any]] = {}
+		# Previous position for motion-based yaw estimation (role -> (x, y, timestamp, yaw))
+		self._prev_position: Dict[str, Tuple[float, float, float, float]] = {}
+		# Control commands for Kalman filter prediction (role -> (speed, steering_angle, timestamp))
+		self._kf_control_cmds: Dict[str, Tuple[float, float, float]] = {}
 		yaw_init_var = math.radians(self.kf_init_yaw_deg_std) ** 2
 		yaw_rate_init_var = math.radians(self.kf_init_yaw_rate_deg_std) ** 2
 		self._kf_H = np.array(
@@ -245,6 +268,10 @@ class BevIdTeleporter:
 			self._set_tracking_status(role, False, force=True)
 			pose_topic = f"/bev_tracking_pose/{role}"
 			self.bev_pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1, latch=True)
+			# Subscribe to control commands for Kalman filter prediction (if enabled)
+			if self.kf_use_control_input:
+				control_topic = f"/carla/{role}/vehicle_control_cmd"
+				rospy.Subscriber(control_topic, AckermannDrive, self._control_cmd_cb, callback_args=role, queue_size=1)
 		self.sub = rospy.Subscriber(self.topic_name, BEVInfo, self._bev_cb, queue_size=1)
 		rospy.loginfo(
 			"bev_id_teleporter ready: topic=%s, roles=%s (max=%d)",
@@ -362,6 +389,16 @@ class BevIdTeleporter:
 			return
 		self._roles_initialized.add(role)
 
+	def _control_cmd_cb(self, msg: AckermannDrive, role: str) -> None:
+		"""Callback for vehicle control commands. Stores control input for Kalman filter prediction."""
+		if not self.kf_use_control_input:
+			return
+		with self._lock:
+			timestamp = float(rospy.Time.now().to_sec())
+			speed = float(msg.speed)
+			steering_angle = float(msg.steering_angle)
+			self._kf_control_cmds[role] = (speed, steering_angle, timestamp)
+	
 	def _yaw_corrections_active(self) -> bool:
 		if not self.only_correct_yaw_during_alignment:
 			return True
@@ -497,6 +534,26 @@ class BevIdTeleporter:
 			dtype=float,
 		)
 		state["x"] = F @ state["x"]
+		
+		# Apply control input if available and enabled
+		if self.kf_use_control_input:
+			with self._lock:
+				control_cmd = self._kf_control_cmds.get(role)
+			if control_cmd is not None:
+				cmd_speed, cmd_steering, cmd_timestamp = control_cmd
+				# Check if control command is recent enough
+				if (stamp - cmd_timestamp) <= self.kf_control_timeout_sec:
+					current_yaw = float(state["x"][4, 0])
+					# Update velocity from control command
+					# vx = speed * cos(yaw), vy = speed * sin(yaw)
+					state["x"][2, 0] = float(cmd_speed) * math.cos(current_yaw)
+					state["x"][3, 0] = float(cmd_speed) * math.sin(current_yaw)
+					# Update yaw rate from steering command (bicycle model)
+					# yaw_rate = (v * tan(steering)) / wheelbase
+					if abs(float(cmd_speed)) > 1e-3 and self.kf_wheelbase_m > 1e-3:
+						yaw_rate_cmd = (float(cmd_speed) * math.tan(float(cmd_steering))) / self.kf_wheelbase_m
+						state["x"][5, 0] = yaw_rate_cmd
+		
 		state["x"][4, 0] = normalize_angle(float(state["x"][4, 0]))
 		state["P"] = F @ state["P"] @ F.T + self._kf_process_noise(dt)
 		state["P"] = 0.5 * (state["P"] + state["P"].T)
@@ -581,6 +638,78 @@ class BevIdTeleporter:
 		yaw_est = normalize_angle(float(state["x"][4, 0]))
 		return float(state["x"][0, 0]), float(state["x"][1, 0]), yaw_est, used
 
+	def _compute_yaw_from_motion(
+		self,
+		role: str,
+		x: float,
+		y: float,
+		current_yaw_rad: float,
+		timestamp: float,
+	) -> Optional[float]:
+		"""
+		Compute yaw from previous and current position using arctan2.
+		Returns None if motion-based yaw cannot be computed.
+		"""
+		if not self.motion_yaw_enabled:
+			return None
+		
+		prev_data = self._prev_position.get(role)
+		if prev_data is None:
+			# No previous position, store current position and return None
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
+		
+		# 여기서 prev_data는 (x, y, timestamp, yaw) 형태의 튜플입니다.
+		prev_x, prev_y, prev_timestamp, prev_yaw_rad = prev_data
+		rospy.loginfo("prev_x: %.1f, prev_y: %.1f, prev_timestamp: %.1f, prev_yaw_rad: %.1f", prev_x, prev_y, prev_timestamp, math.degrees(prev_yaw_rad))
+		# Check timeout
+		dt = timestamp - prev_timestamp
+		rospy.loginfo("[Motion Yaw] %s: dt=%.3fs (timeout=%.3fs)", role, dt, self.motion_yaw_max_timeout_sec)
+		if dt > self.motion_yaw_max_timeout_sec:
+			# Previous position too old, update and return None
+			rospy.logwarn("[Motion Yaw] %s: Timeout! Updating prev_position", role)
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
+		
+		# Compute displacement
+		dx = x - prev_x
+		dy = y - prev_y
+		dist = math.hypot(dx, dy)
+		rospy.loginfo("[Motion Yaw] %s: dist=%.3fm (min=%.3fm), dx=%.3f, dy=%.3f", role, dist, self.motion_yaw_min_distance_m, dx, dy)
+		
+		# Check minimum distance
+		if dist < self.motion_yaw_min_distance_m:
+			# Not enough movement, keep previous position timestamp but return None
+			# (don't update position to avoid accumulating small errors)
+			rospy.loginfo("[Motion Yaw] %s: Distance too small (%.3fm < %.3fm), skipping", role, dist, self.motion_yaw_min_distance_m)
+			return None
+		
+		# Compute heading from motion
+
+		motion_yaw_rad = math.atan2(dy, dx)
+		motion_yaw_rad = normalize_angle(motion_yaw_rad)
+		rospy.loginfo("Motion yaw!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!: %.1f°", math.degrees(motion_yaw_rad))
+
+
+		# Check for large yaw jumps (might indicate outlier or teleport)
+		yaw_diff = abs(normalize_angle(motion_yaw_rad - prev_yaw_rad))
+		max_jump_rad = math.radians(self.motion_yaw_max_jump_deg)
+		if yaw_diff > max_jump_rad and yaw_diff < (2.0 * math.pi - max_jump_rad):
+			# Large jump detected, use current yaw from perception
+			rospy.logwarn_throttle(
+				2.0,
+				"Motion yaw jump for %s: %.1f° (using perception yaw)",
+				role,
+				math.degrees(yaw_diff),
+			)
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
+		
+		# Update previous position
+		self._prev_position[role] = (x, y, timestamp, motion_yaw_rad)
+		
+		return motion_yaw_rad
+	
 	def _get_path_heading(self, role: str) -> Optional[float]:
 		state = self.role_state.get(role)
 		if not state:
@@ -916,8 +1045,8 @@ class BevIdTeleporter:
 						if role in available_roles:
 							available_roles.remove(role)
 					else:
-					role = available_roles.pop(0)
-					self.id_to_role[vid] = role
+						role = available_roles.pop(0)
+						self.id_to_role[vid] = role
 				assigned.append((vid, role))
 		return assigned
 
@@ -1209,7 +1338,7 @@ class BevIdTeleporter:
 			if not self._initial_alignment_avg_ready:
 				return
 			if self._apply_initial_alignment_seed():
-			return
+				return
 
 		if self.enable_matching:
 			# Hungarian-based robust assignment
@@ -1228,10 +1357,15 @@ class BevIdTeleporter:
 					idx = ids.index(vid)
 				except ValueError:
 					continue
-				x = float(cxs[idx])
-				y = float(cys[idx])
+				x_raw = float(cxs[idx])
+				y_raw = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				_, _, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x, y, yaw_rad, now_sec)
+				x, y, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x_raw, y_raw, yaw_rad, now_sec)
+				# Motion-based yaw estimation when Kalman filter is off
+				if not self.kf_enabled and self.motion_yaw_enabled:
+					motion_yaw_rad = self._compute_yaw_from_motion(role, x, y, fused_yaw_rad, now_sec)
+					if motion_yaw_rad is not None:
+						fused_yaw_rad = motion_yaw_rad
 				yaw_deg = math.degrees(fused_yaw_rad)
 				if self.yaw_blend_enabled:
 					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
@@ -1290,10 +1424,15 @@ class BevIdTeleporter:
 					idx = ids.index(vid)
 				except ValueError:
 					continue
-				x = float(cxs[idx])
-				y = float(cys[idx])
+				x_raw = float(cxs[idx])
+				y_raw = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				_, _, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x, y, yaw_rad, now_sec)
+				x, y, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x_raw, y_raw, yaw_rad, now_sec)
+				# Motion-based yaw estimation when Kalman filter is off
+				if not self.kf_enabled and self.motion_yaw_enabled:
+					motion_yaw_rad = self._compute_yaw_from_motion(role, x, y, fused_yaw_rad, now_sec)
+					if motion_yaw_rad is not None:
+						fused_yaw_rad = motion_yaw_rad
 				yaw_deg = math.degrees(fused_yaw_rad)
 				if self.yaw_blend_enabled:
 					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)

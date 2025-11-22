@@ -43,6 +43,9 @@ class PlatoonManager:
         self.accel_limit_mps2 = float(rospy.get_param("~accel_limit_mps2", 1.2))
         self.path_connection_max_dist_m = float(rospy.get_param("~path_connection_max_dist_m", 20.0))
         self.path_connection_step_m = float(rospy.get_param("~path_connection_step_m", 2.0))
+        self.path_switch_max_heading_diff_deg = float(rospy.get_param("~path_switch_max_heading_diff_deg", 45.0))
+        self.path_switch_max_position_diff_m = float(rospy.get_param("~path_switch_max_position_diff_m", 15.0))
+        self.path_continuity_check_points = int(rospy.get_param("~path_continuity_check_points", 10))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
@@ -58,6 +61,9 @@ class PlatoonManager:
         # Arc-length profile for path-based gap calculation
         self._path_arc_length_profile: Optional[List[float]] = None
         self._path_points_cache: Optional[List[Tuple[float, float, float]]] = None  # (x, y, yaw)
+        # Store previous paths per vehicle to check continuity
+        self._previous_paths: Dict[str, Path] = {}
+        self._previous_path_points: Dict[str, List[Tuple[float, float, float]]] = {}
 
         # Publishers
         # Publish to leader and all followers except rearmost (rearmost uses its own path)
@@ -180,11 +186,29 @@ class PlatoonManager:
                     rospy.loginfo(f"platoon_manager: published original path to {role}")
                 continue
             
+            # Check path continuity before switching
+            should_switch = self._should_switch_path(role, vehicle_odom, self._path_points_cache)
+            
+            if not should_switch:
+                # Keep previous path if switch is not safe
+                prev_path = self._previous_paths.get(role)
+                if prev_path is not None:
+                    rospy.logwarn(f"platoon_manager: {role} path switch rejected due to discontinuity, keeping previous path")
+                    pub = self.path_pubs.get(role)
+                    if pub is not None:
+                        pub.publish(prev_path)
+                continue
+                # No previous path, use new one anyway
+                rospy.logwarn(f"platoon_manager: {role} no previous path available, using new path despite discontinuity")
+            
             vehicle_path = self._build_follower_path_with_connection(
                 path_points_xy, msg, vehicle_odom, role
             )
             pub = self.path_pubs.get(role)
             if pub is not None and vehicle_path:
+                # Store for next comparison
+                self._previous_paths[role] = vehicle_path
+                self._previous_path_points[role] = self._path_points_cache.copy()
                 pub.publish(vehicle_path)
                 rospy.loginfo(f"platoon_manager: published path with {len(vehicle_path.poses)} points to {role}")
             elif vehicle_path is None:
@@ -343,6 +367,153 @@ class PlatoonManager:
             waypoints.append((x, y, yaw))
         
         return waypoints
+    
+    def _should_switch_path(self, role: str, vehicle_odom: Odometry, new_path_points: List[Tuple[float, float, float]]) -> bool:
+        """
+        Check if it's safe to switch to new path based on continuity.
+        Returns True if switch is safe, False if should keep previous path.
+        """
+        if not self._previous_path_points.get(role):
+            # No previous path, always accept first path
+            return True
+        
+        prev_path_points = self._previous_path_points[role]
+        if not prev_path_points or len(prev_path_points) < 2:
+            return True
+        
+        # Get vehicle current state
+        vx = float(vehicle_odom.pose.pose.position.x)
+        vy = float(vehicle_odom.pose.pose.position.y)
+        vyaw = self._yaw_from_quat(vehicle_odom.pose.pose.orientation)
+        
+        # Project vehicle onto previous path to find current progress
+        prev_proj = self._project_point_to_path_points(vx, vy, prev_path_points)
+        if prev_proj is None:
+            return True  # Can't project, accept new path
+        
+        prev_s, prev_idx, prev_dist = prev_proj
+        
+        # Project vehicle onto new path
+        new_proj = self._project_point_to_path_points(vx, vy, new_path_points)
+        if new_proj is None:
+            return False  # Can't project to new path, keep old
+        
+        new_s, new_idx, new_dist = new_proj
+        
+        # Check 1: Position difference - new path should be reasonably close
+        if new_dist > self.path_switch_max_position_diff_m:
+            rospy.logwarn(f"platoon_manager: {role} new path too far ({new_dist:.2f}m > {self.path_switch_max_position_diff_m}m)")
+            return False
+        
+        # Check 2: Compare path segments ahead of vehicle position
+        # Check next N points in both paths for continuity
+        check_count = min(self.path_continuity_check_points, len(prev_path_points) - prev_idx, len(new_path_points) - new_idx)
+        
+        if check_count < 3:
+            # Not enough points to compare, accept if close enough
+            return new_dist < self.path_switch_max_position_diff_m * 0.5
+        
+        # Compare heading directions at similar distances ahead
+        max_heading_diff_rad = math.radians(self.path_switch_max_heading_diff_deg)
+        similar_count = 0
+        
+        for i in range(1, min(check_count, 5)):  # Check first 5 points ahead
+            if prev_idx + i >= len(prev_path_points) or new_idx + i >= len(new_path_points):
+                break
+            
+            # Get headings at these points
+            prev_x1, prev_y1, prev_yaw1 = prev_path_points[prev_idx + i - 1]
+            prev_x2, prev_y2, prev_yaw2 = prev_path_points[prev_idx + i]
+            prev_seg_yaw = math.atan2(prev_y2 - prev_y1, prev_x2 - prev_x1)
+            
+            new_x1, new_y1, new_yaw1 = new_path_points[new_idx + i - 1]
+            new_x2, new_y2, new_yaw2 = new_path_points[new_idx + i]
+            new_seg_yaw = math.atan2(new_y2 - new_y1, new_x2 - new_x1)
+            
+            # Calculate heading difference
+            heading_diff = abs(new_seg_yaw - prev_seg_yaw)
+            # Normalize to [-pi, pi]
+            while heading_diff > math.pi:
+                heading_diff -= 2.0 * math.pi
+            heading_diff = abs(heading_diff)
+            
+            if heading_diff < max_heading_diff_rad:
+                similar_count += 1
+        
+        # If most segments ahead are similar, safe to switch
+        similarity_ratio = float(similar_count) / float(min(check_count - 1, 4))
+        
+        if similarity_ratio < 0.6:  # Less than 60% similarity
+            rospy.logwarn(f"platoon_manager: {role} path heading mismatch (similarity={similarity_ratio:.2f}), rejecting switch")
+            return False
+        
+        # Check 3: Compare vehicle heading with new path heading at projection point
+        if new_idx < len(new_path_points) - 1:
+            new_x1, new_y1, _ = new_path_points[new_idx]
+            new_x2, new_y2, _ = new_path_points[new_idx + 1]
+            new_path_yaw = math.atan2(new_y2 - new_y1, new_x2 - new_x1)
+            
+            heading_diff = abs(new_path_yaw - vyaw)
+            while heading_diff > math.pi:
+                heading_diff -= 2.0 * math.pi
+            heading_diff = abs(heading_diff)
+            
+            if heading_diff > max_heading_diff_rad:
+                rospy.logwarn(f"platoon_manager: {role} vehicle heading mismatch with new path ({math.degrees(heading_diff):.1f}deg > {self.path_switch_max_heading_diff_deg}deg)")
+                return False
+        
+        return True
+    
+    def _project_point_to_path_points(self, px: float, py: float, path_points: List[Tuple[float, float, float]]) -> Optional[Tuple[float, int, float]]:
+        """
+        Project point onto path points and return (arc_length_estimate, segment_index, distance_to_path).
+        Similar to _project_to_path_arclength but works with path_points directly.
+        """
+        if not path_points or len(path_points) < 2:
+            return None
+        
+        best_dist_sq = float("inf")
+        best_index = None
+        best_t = 0.0
+        
+        cumulative_dist = 0.0
+        segment_distances = []
+        
+        for idx in range(len(path_points) - 1):
+            x1, y1, _ = path_points[idx]
+            x2, y2, _ = path_points[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            
+            if seg_len_sq < 1e-6:
+                segment_distances.append(0.0)
+                continue
+            
+            seg_len = math.sqrt(seg_len_sq)
+            segment_distances.append(seg_len)
+            
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+            
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_index = idx
+                best_t = t
+        
+        if best_index is None:
+            return None
+        
+        # Estimate arc-length
+        arclength = sum(segment_distances[:best_index])
+        if best_index < len(segment_distances):
+            arclength += segment_distances[best_index] * best_t
+        
+        return arclength, best_index, math.sqrt(best_dist_sq)
 
     def _cmd_cb(self, msg: AckermannDrive, role: str) -> None:
         self._cmd_cache[role] = msg
@@ -375,11 +546,26 @@ class PlatoonManager:
             if vehicle_odom is None:
                 continue
             
+            # Check path continuity before switching (same as in _rearmost_path_cb)
+            should_switch = self._should_switch_path(role, vehicle_odom, self._path_points_cache)
+            
+            if not should_switch:
+                # Keep previous path if switch is not safe
+                prev_path = self._previous_paths.get(role)
+                if prev_path is not None:
+                    # Check if previous path is still valid (not reached end)
+                    # If close to end, accept new path anyway
+                    continue
+                # No previous path, use new one anyway
+            
             vehicle_path = self._build_follower_path_with_connection(
                 path_points, self.shared_global_path, vehicle_odom, role
             )
             pub = self.path_pubs.get(role)
             if pub is not None and vehicle_path:
+                # Store for next comparison
+                self._previous_paths[role] = vehicle_path
+                self._previous_path_points[role] = self._path_points_cache.copy()
                 pub.publish(vehicle_path)
 
     # ----------------- Spacing control -----------------
