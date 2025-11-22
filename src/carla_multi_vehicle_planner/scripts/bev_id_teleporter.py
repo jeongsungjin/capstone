@@ -916,7 +916,7 @@ class BevIdTeleporter:
 						if role in available_roles:
 							available_roles.remove(role)
 					else:
-						role = available_roles.pop(0)
+					role = available_roles.pop(0)
 					self.id_to_role[vid] = role
 				assigned.append((vid, role))
 		return assigned
@@ -1209,7 +1209,7 @@ class BevIdTeleporter:
 			if not self._initial_alignment_avg_ready:
 				return
 			if self._apply_initial_alignment_seed():
-				return
+			return
 
 		if self.enable_matching:
 			# Hungarian-based robust assignment

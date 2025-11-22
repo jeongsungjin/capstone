@@ -29,7 +29,7 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="global_route_resolution" value="1.0" />
     <param name="path_sampling" value="0.3" />
-    <param name="min_destination_distance" value="30.0" />
+    <param name="min_destination_distance" value="50.0" />
     <param name="max_destination_distance" value="180.0" />
     <param name="destination_retry_limit" value="120" />
     <param name="start_k_candidates" value="80" />
@@ -41,7 +41,7 @@
     <param name="conflict_key_resolution" value="1.0" />
     <param name="heading_compat_deg" value="75.0" />
     <!-- Replanning only when close to destination -->
-    <param name="replan_remaining_m" value="30.0" />
+    <param name="replan_remaining_m" value="50.0" />
     <param name="replan_interval" value="1.0" />
   </node>
 
@@ -56,8 +56,13 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <!-- Always reset ignore list so stale values from previous runs don't persist -->
     <param name="ignore_roles" value="" />
-    <!-- Avoid relaying planner paths for platoon followers (platoon publishes planned_path directly) -->
-    <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- 
+      Platooning mode: 
+      - Rearmost follower (ego_vehicle_3) uses its own path (relayed by path_relay)
+      - Leader and other followers use rearmost's path (handled by platoon_manager)
+      - So we ignore leader and non-rearmost followers, but relay rearmost follower's path
+    -->
+    <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_1,ego_vehicle_2" />
   </node>
 
   <!-- 3.5) BEV / Marker visualizer: vehicle cubes + colored path markers on map frame -->
@@ -130,7 +135,7 @@
   <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="platoon_manager.py" name="platoon_manager" output="screen">
     <param name="leader_role" value="ego_vehicle_1" />
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
-    <param name="desired_gap_m" value="10.0" />
+    <param name="desired_gap_m" value="8.0" />
     <param name="teleport_on_start" value="true" />
     <param name="kp_gap" value="0.3" />
     <param name="kd_gap" value="0.6" />

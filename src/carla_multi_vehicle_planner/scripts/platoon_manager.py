@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 
-import bisect
 import math
 import sys
-from collections import deque
-from typing import Deque, Dict, Tuple, Optional, List
+from typing import Dict, Tuple, Optional, List
 
 import rospy
 from ackermann_msgs.msg import AckermannDrive
@@ -33,30 +31,18 @@ class PlatoonManager:
         # Parameters
         self.leader_role = str(rospy.get_param("~leader_role", "ego_vehicle_1"))
         self.follower_roles = [s.strip() for s in str(rospy.get_param("~follower_roles", "ego_vehicle_2,ego_vehicle_3")).split(",") if s.strip()]
-        self.desired_gap_m = float(rospy.get_param("~desired_gap_m", 6.0))
+        self.desired_gap_m = float(rospy.get_param("~desired_gap_m", 9.0))
         self.teleport_on_start = bool(rospy.get_param("~teleport_on_start", True))
-        self.max_speed = float(rospy.get_param("~max_speed", 3.0))
+        self.max_speed = float(rospy.get_param("~max_speed", 10.0))
         self.kp_gap = float(rospy.get_param("~kp_gap", 0.4))
         self.kd_gap = float(rospy.get_param("~kd_gap", 0.6))
         self.kp_gap_close = float(rospy.get_param("~kp_gap_close", 0.7))
         self.kd_gap_close = float(rospy.get_param("~kd_gap_close", 0.9))
         self.gap_deadband_m = float(rospy.get_param("~gap_deadband_m", 0.5))
         self.rel_speed_deadband = float(rospy.get_param("~rel_speed_deadband", 0.2))
-        self.path_switch_max_dist_m = float(rospy.get_param("~path_switch_max_dist_m", 8.0))
         self.accel_limit_mps2 = float(rospy.get_param("~accel_limit_mps2", 1.2))
-        history_default = max(60.0, self.desired_gap_m * (len(self.follower_roles) + 3))
-        self.leader_track_history_m = float(rospy.get_param("~leader_track_history_m", history_default))
-        self.leader_track_sample_ds = float(rospy.get_param("~leader_track_sample_ds", 0.5))
-        self.leader_track_min_sample_ds = float(rospy.get_param("~leader_track_min_sample_ds", 0.2))
-        self.follow_path_preview_m = float(rospy.get_param("~follow_path_preview_m", 15.0))
-        self.follow_path_backfill_m = float(rospy.get_param("~follow_path_backfill_m", 1.0))
-        self.follow_path_step_m = float(rospy.get_param("~follow_path_step_m", 0.8))
-        self.follow_path_min_points = int(rospy.get_param("~follow_path_min_points", 3))
-        self.min_follow_gap_m = float(rospy.get_param("~min_follow_gap_m", 2.0))
-        self.gap_warmup_margin_m = float(rospy.get_param("~gap_warmup_margin_m", 1.0))
-        self.start_gap_history_m = float(rospy.get_param("~start_gap_history_m", 5.0))
-        self.start_gap_follow_m = float(rospy.get_param("~start_gap_follow_m", 0.5))
-        # (simplified) no rolling tail / no grace switching
+        self.path_connection_max_dist_m = float(rospy.get_param("~path_connection_max_dist_m", 20.0))
+        self.path_connection_step_m = float(rospy.get_param("~path_connection_step_m", 2.0))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(5.0)
@@ -66,14 +52,26 @@ class PlatoonManager:
         self.actors: Dict[str, carla.Actor] = {}
         self.odom: Dict[str, Odometry] = {}
         self.leader_cmd: Optional[AckermannDrive] = None
+        # Use rearmost follower's path as the shared path
+        self.rearmost_role = self.follower_roles[-1] if self.follower_roles else None
+        self.shared_global_path: Optional[Path] = None
+        # Arc-length profile for path-based gap calculation
+        self._path_arc_length_profile: Optional[List[float]] = None
+        self._path_points_cache: Optional[List[Tuple[float, float, float]]] = None  # (x, y, yaw)
 
         # Publishers
-        # Publish directly to planned_path_* to avoid being overwritten by planner->relay
-        self.path_pubs: Dict[str, rospy.Publisher] = {r: rospy.Publisher(f"/planned_path_{r}", Path, queue_size=1, latch=True) for r in self.follower_roles}
+        # Publish to leader and all followers except rearmost (rearmost uses its own path)
+        all_roles_except_rearmost = [self.leader_role] + [r for r in self.follower_roles if r != self.rearmost_role]
+        self.path_pubs: Dict[str, rospy.Publisher] = {
+            r: rospy.Publisher(f"/planned_path_{r}", Path, queue_size=1, latch=True) 
+            for r in all_roles_except_rearmost
+        }
         self.override_pubs: Dict[str, rospy.Publisher] = {r: rospy.Publisher(f"/carla/{r}/vehicle_control_cmd_override", AckermannDrive, queue_size=1) for r in self.follower_roles}
 
         # Subscriptions
-        #하이하이 이건 부산에서 쓸 멋진 코드야ㅎㅎ#
+        # Subscribe to rearmost follower's global path (this becomes the shared path for all)
+        if self.rearmost_role:
+            rospy.Subscriber(f"/global_path_{self.rearmost_role}", Path, self._rearmost_path_cb, queue_size=1)
         rospy.Subscriber(f"/carla/{self.leader_role}/vehicle_control_cmd", AckermannDrive, self._cmd_cb, callback_args=self.leader_role, queue_size=1)
         # Odometry for leader and followers
         rospy.Subscriber(f"/carla/{self.leader_role}/odometry", Odometry, self._odom_cb, callback_args=self.leader_role, queue_size=10)
@@ -86,15 +84,15 @@ class PlatoonManager:
         rospy.Timer(rospy.Duration(0.1), self._tick)
         rospy.Timer(rospy.Duration(1.0), self._refresh_actors, oneshot=True)
         rospy.Timer(rospy.Duration(2.0), self._maybe_teleport_followers, oneshot=True)
+        rospy.Timer(rospy.Duration(0.5), self._update_all_follower_paths)  # Periodic path update
         self._cmd_cache: Dict[str, AckermannDrive] = {}
         self._last_speed_cmd: Dict[str, float] = {}
         self._last_cmd_time: Dict[str, float] = {}
-        self._leader_track: Deque[Tuple[float, float, float, float]] = deque()
-        self._leader_track_header: Optional[Header] = None
-        self._leader_track_last_s: float = 0.0
-        self._leader_track_last_xy: Optional[Tuple[float, float]] = None
-        self._leader_track_min_gap = min(self.follow_path_preview_m + self.follow_path_backfill_m, self.leader_track_history_m)
-        # no last-valid hold in simplified version
+        
+        # Log initialization
+        rospy.loginfo(f"platoon_manager: initialized with leader={self.leader_role}, followers={self.follower_roles}, rearmost={self.rearmost_role}")
+        rospy.loginfo(f"platoon_manager: publishing paths to {list(self.path_pubs.keys())}")
+        rospy.loginfo(f"platoon_manager: publishing speed overrides to {list(self.override_pubs.keys())}")
 
     # ----------------- CARLA helpers -----------------
     def _refresh_actors(self, _evt=None) -> None:
@@ -141,167 +139,210 @@ class PlatoonManager:
             except Exception:
                 pass
 
-    def _append_leader_track(self, odom: Odometry) -> None:
-        pos = odom.pose.pose.position
-        yaw = self._yaw_from_quat(odom.pose.pose.orientation)
-        if self._leader_track_header is None:
-            frame_id = odom.header.frame_id if odom.header and odom.header.frame_id else "map"
-            self._leader_track_header = Header(frame_id=frame_id)
-        if not self._leader_track:
-            self._leader_track.append((0.0, float(pos.x), float(pos.y), float(yaw)))
-            self._leader_track_last_xy = (float(pos.x), float(pos.y))
-            self._leader_track_last_s = 0.0
+    def _rearmost_path_cb(self, msg: Path) -> None:
+        """Callback when rearmost follower's global path is received. This becomes the shared path for leader and other followers."""
+        self.shared_global_path = msg
+        # Extract path points with yaw
+        if not msg.poses:
+            rospy.logwarn("platoon_manager: received empty path from rearmost follower")
             return
-        if self._leader_track_last_xy is None:
-            self._leader_track_last_xy = (float(pos.x), float(pos.y))
-        dx = float(pos.x) - self._leader_track_last_xy[0]
-        dy = float(pos.y) - self._leader_track_last_xy[1]
-        dist = math.hypot(dx, dy)
-        if dist < max(1e-3, self.leader_track_sample_ds):
-            return
-        last_s = self._leader_track[-1][0]
-        s_val = last_s + dist
-        self._leader_track.append((s_val, float(pos.x), float(pos.y), float(yaw)))
-        self._leader_track_last_xy = (float(pos.x), float(pos.y))
-        self._leader_track_last_s = s_val
-        self._trim_leader_track(s_val)
-
-    def _trim_leader_track(self, current_s: float) -> None:
-        min_s = current_s - max(0.0, self.leader_track_history_m)
-        while self._leader_track and self._leader_track[0][0] < min_s:
-            self._leader_track.popleft()
-
-    def _current_history_span(self) -> float:
-        if len(self._leader_track) < 2:
-            return 0.0
-        return self._leader_track[-1][0] - self._leader_track[0][0]
-
-    def _active_gap_for_index(self, index: float, history_span: Optional[float] = None) -> float:
-        if index <= 0.0:
-            return 0.0
-        if history_span is None:
-            history_span = self._current_history_span()
-        base_gap = max(0.0, self.desired_gap_m * index)
-        min_gap = max(0.0, self.min_follow_gap_m * index)
-        if history_span < max(0.0, self.start_gap_history_m):
-            return max(0.0, self.start_gap_follow_m)
-        available = max(0.0, history_span - max(0.0, self.gap_warmup_margin_m))
-        if available <= 1e-3:
-            return min_gap if min_gap > 0.0 else 0.0
-        return max(min_gap, min(base_gap, available))
-
-    def _publish_follower_paths(self) -> None:
-        if len(self._leader_track) < 2:
-            return
-        latest_s = self._leader_track[-1][0]
-        earliest_s = self._leader_track[0][0]
-        available = latest_s - earliest_s
-        min_required = max(
-            0.5,
-            self.follow_path_step_m * max(1, self.follow_path_min_points - 1),
-        )
-        if available < min_required:
-            return
-        history_span = available
-        for idx, role in enumerate(self.follower_roles, start=1):
+        
+        rospy.loginfo(f"platoon_manager: received path from {self.rearmost_role} with {len(msg.poses)} points")
+        path_points_xy = [(p.pose.position.x, p.pose.position.y) for p in msg.poses]
+        
+        # Build path points with yaw and compute arc-length profile
+        self._path_points_cache = []
+        for p in msg.poses:
+            x = float(p.pose.position.x)
+            y = float(p.pose.position.y)
+            yaw = self._yaw_from_quat(p.pose.orientation)
+            self._path_points_cache.append((x, y, yaw))
+        
+        # Compute arc-length profile for accurate gap calculation
+        self._path_arc_length_profile = self._compute_path_arc_length_profile(self._path_points_cache)
+        rospy.loginfo(f"platoon_manager: computed arc-length profile, total path length: {self._path_arc_length_profile[-1]:.2f}m")
+        
+        # Generate path for leader and all followers (except rearmost) with connection waypoints if needed
+        all_roles_except_rearmost = [self.leader_role] + [r for r in self.follower_roles if r != self.rearmost_role]
+        rospy.loginfo(f"platoon_manager: publishing paths for {all_roles_except_rearmost}")
+        
+        for role in all_roles_except_rearmost:
+            vehicle_odom = self.odom.get(role)
+            if vehicle_odom is None:
+                # If no odometry, publish original path anyway
+                rospy.logwarn(f"platoon_manager: {role} odometry not available, publishing original path")
+                pub = self.path_pubs.get(role)
+                if pub is not None:
+                    path_copy = Path()
+                    path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
+                    path_copy.poses = msg.poses
+                    pub.publish(path_copy)
+                    rospy.loginfo(f"platoon_manager: published original path to {role}")
+                continue
+            
+            vehicle_path = self._build_follower_path_with_connection(
+                path_points_xy, msg, vehicle_odom, role
+            )
             pub = self.path_pubs.get(role)
-            if pub is None:
-                continue
-            gap = self._active_gap_for_index(float(idx), history_span)
-            path_msg = self._build_follower_path(gap)
-            if path_msg is None or not path_msg.poses:
-                continue
-            pub.publish(path_msg)
+            if pub is not None and vehicle_path:
+                pub.publish(vehicle_path)
+                rospy.loginfo(f"platoon_manager: published path with {len(vehicle_path.poses)} points to {role}")
+            elif vehicle_path is None:
+                rospy.logwarn(f"platoon_manager: failed to build path for {role}")
 
-    def _build_follower_path(self, gap_m: float) -> Optional[Path]:
-        if len(self._leader_track) < 2:
+    def _build_follower_path_with_connection(
+        self, path_points: List[Tuple[float, float]], leader_path: Path, foll_odom: Odometry, role: str
+    ) -> Optional[Path]:
+        """Build follower path by projecting follower position onto leader path and adding connection waypoints if needed."""
+        if not path_points or len(path_points) < 2:
             return None
-        track_list = list(self._leader_track)
-        earliest_s = track_list[0][0]
-        latest_s = track_list[-1][0]
-        history_span = latest_s - earliest_s
-        effective_gap = min(
-            gap_m,
-            max(0.0, history_span - max(0.2, self.follow_path_step_m)),
-        )
-        target_s = latest_s - effective_gap
-        target_s = max(target_s, earliest_s + 1e-3)
-        start_s = max(earliest_s, target_s - max(0.0, self.follow_path_backfill_m))
-        end_s = min(latest_s, target_s + max(0.0, self.follow_path_preview_m))
-        if end_s - start_s < 0.5:
+        
+        # Get follower current position
+        fx = float(foll_odom.pose.pose.position.x)
+        fy = float(foll_odom.pose.pose.position.y)
+        
+        # Project follower position onto path
+        proj_result = self._project_to_path(path_points, fx, fy)
+        if proj_result is None:
+            # Cannot project, use original path
+            path_copy = Path()
+            path_copy.header = Header(stamp=rospy.Time.now(), frame_id=leader_path.header.frame_id)
+            path_copy.poses = leader_path.poses
+            return path_copy
+        
+        proj_index, proj_t, proj_dist = proj_result
+        
+        # Check if connection waypoints are needed
+        if proj_dist > self.path_connection_max_dist_m:
+            # Too far from path, don't add connection (will use original path)
+            path_copy = Path()
+            path_copy.header = Header(stamp=rospy.Time.now(), frame_id=leader_path.header.frame_id)
+            path_copy.poses = leader_path.poses
+            return path_copy
+        
+        # Create new path starting from projection point
+        new_path = Path()
+        new_path.header = Header(stamp=rospy.Time.now(), frame_id=leader_path.header.frame_id)
+        
+        # Add connection waypoints if follower is significantly off the path
+        if proj_dist > 2.0:  # More than 2m away from path
+            connection_waypoints = self._generate_connection_waypoints(
+                (fx, fy), path_points, proj_index, proj_t, proj_dist
+            )
+            for x, y, yaw in connection_waypoints:
+                pose = PoseStamped()
+                pose.header = new_path.header
+                pose.pose.position.x = x
+                pose.pose.position.y = y
+                pose.pose.orientation.w = math.cos(yaw * 0.5)
+                pose.pose.orientation.z = math.sin(yaw * 0.5)
+                new_path.poses.append(pose)
+        
+        # Add path points from projection point onwards
+        start_idx = proj_index
+        if proj_t > 0.5:  # If closer to next point, start from next point
+            start_idx = min(proj_index + 1, len(leader_path.poses) - 1)
+        
+        for i in range(start_idx, len(leader_path.poses)):
+            new_path.poses.append(leader_path.poses[i])
+        
+        return new_path if new_path.poses else None
+    
+    def _project_to_path(
+        self, path_points: List[Tuple[float, float]], px: float, py: float
+    ) -> Optional[Tuple[int, float, float]]:
+        """
+        Project point onto path and return (segment_index, t_parameter, distance).
+        Returns None if projection fails.
+        """
+        if not path_points or len(path_points) < 2:
             return None
-        samples = self._sample_track_segment(track_list, start_s, end_s, max(0.1, self.follow_path_step_m))
-        if len(samples) < max(2, self.follow_path_min_points):
+        
+        best_dist_sq = float("inf")
+        best_index = None
+        best_t = 0.0
+        
+        for idx in range(len(path_points) - 1):
+            x1, y1 = path_points[idx]
+            x2, y2 = path_points[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            
+            if seg_len_sq < 1e-6:
+                continue
+            
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+            
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_index = idx
+                best_t = t
+        
+        if best_index is None:
             return None
-        header = Header(stamp=rospy.Time.now())
-        if self._leader_track_header is not None and self._leader_track_header.frame_id:
-            header.frame_id = self._leader_track_header.frame_id
-        else:
-            header.frame_id = "map"
-        path = Path(header=header)
-        for x, y, yaw in samples:
-            pose = PoseStamped()
-            pose.header = header
-            pose.pose.position.x = x
-            pose.pose.position.y = y
-            pose.pose.orientation.w = math.cos(yaw * 0.5)
-            pose.pose.orientation.z = math.sin(yaw * 0.5)
-            path.poses.append(pose)
-        return path
-
-    def _sample_track_segment(
+        
+        return best_index, best_t, math.sqrt(best_dist_sq)
+    
+    def _generate_connection_waypoints(
         self,
-        track: List[Tuple[float, float, float, float]],
-        start_s: float,
-        end_s: float,
-        step: float,
+        follower_pos: Tuple[float, float],
+        path_points: List[Tuple[float, float]],
+        proj_index: int,
+        proj_t: float,
+        proj_dist: float,
     ) -> List[Tuple[float, float, float]]:
-        if not track:
+        """Generate waypoints from follower position to path projection point."""
+        if proj_index >= len(path_points) - 1:
             return []
-        step = max(0.05, step)
-        samples: List[Tuple[float, float, float]] = []
-        s = start_s
-        while s <= end_s + 1e-6:
-            point = self._interpolate_track(track, s)
-            if point is not None:
-                samples.append(point)
-            s += step
-        # ensure final point at end_s
-        if samples:
-            last = samples[-1]
-            if abs(end_s - last[0]) > 1e-3:
-                final_point = self._interpolate_track(track, end_s)
-                if final_point is not None:
-                    samples.append(final_point)
-        return [(x, y, yaw) for (_s, x, y, yaw) in samples]
-
-    def _interpolate_track(
-        self,
-        track: List[Tuple[float, float, float, float]],
-        target_s: float,
-    ) -> Optional[Tuple[float, float, float, float]]:
-        if not track:
-            return None
-        if target_s <= track[0][0]:
-            return track[0]
-        if target_s >= track[-1][0]:
-            return track[-1]
-        s_values = [item[0] for item in track]
-        idx = bisect.bisect_left(s_values, target_s)
-        if idx <= 0:
-            return track[0]
-        if idx >= len(track):
-            return track[-1]
-        s1, x1, y1, yaw1 = track[idx - 1]
-        s2, x2, y2, yaw2 = track[idx]
-        span = s2 - s1
-        if span <= 1e-6:
-            return track[idx]
-        ratio = (target_s - s1) / span
-        x = x1 + (x2 - x1) * ratio
-        y = y1 + (y2 - y1) * ratio
-        yaw = self._interp_angle(yaw1, yaw2, ratio)
-        return (target_s, x, y, yaw)
+        
+        fx, fy = follower_pos
+        x1, y1 = path_points[proj_index]
+        x2, y2 = path_points[proj_index + 1]
+        
+        # Projected point on path segment
+        dx = x2 - x1
+        dy = y2 - y1
+        proj_x = x1 + dx * proj_t
+        proj_y = y1 + dy * proj_t
+        
+        # Calculate direction from follower to projection point
+        to_proj_dx = proj_x - fx
+        to_proj_dy = proj_y - fy
+        to_proj_dist = math.hypot(to_proj_dx, to_proj_dy)
+        
+        if to_proj_dist < 1e-3:
+            return []
+        
+        # Path direction at projection point
+        path_yaw = math.atan2(dy, dx)
+        
+        waypoints = []
+        num_steps = max(2, int(to_proj_dist / self.path_connection_step_m))
+        
+        for i in range(1, num_steps + 1):
+            ratio = float(i) / float(num_steps)
+            x = fx + to_proj_dx * ratio
+            y = fy + to_proj_dy * ratio
+            
+            # Interpolate yaw: start with direction to path, end with path direction
+            start_yaw = math.atan2(to_proj_dy, to_proj_dx)
+            yaw_diff = path_yaw - start_yaw
+            # Normalize angle difference
+            while yaw_diff > math.pi:
+                yaw_diff -= 2.0 * math.pi
+            while yaw_diff < -math.pi:
+                yaw_diff += 2.0 * math.pi
+            yaw = start_yaw + yaw_diff * ratio
+            
+            waypoints.append((x, y, yaw))
+        
+        return waypoints
 
     def _cmd_cb(self, msg: AckermannDrive, role: str) -> None:
         self._cmd_cache[role] = msg
@@ -310,18 +351,55 @@ class PlatoonManager:
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         self.odom[role] = msg
-        if role == self.leader_role:
-            self._append_leader_track(msg)
+    
+    def _update_all_follower_paths(self, _evt=None) -> None:
+        """Periodically update all paths (leader and followers except rearmost) based on current odometry."""
+        if self.shared_global_path is None or not self.shared_global_path.poses:
+            return
+        
+        # Rebuild path cache and arc-length profile if needed
+        if self._path_points_cache is None or self._path_arc_length_profile is None:
+            self._path_points_cache = []
+            for p in self.shared_global_path.poses:
+                x = float(p.pose.position.x)
+                y = float(p.pose.position.y)
+                yaw = self._yaw_from_quat(p.pose.orientation)
+                self._path_points_cache.append((x, y, yaw))
+            self._path_arc_length_profile = self._compute_path_arc_length_profile(self._path_points_cache)
+        
+        path_points = [(p.pose.position.x, p.pose.position.y) for p in self.shared_global_path.poses]
+        all_roles_except_rearmost = [self.leader_role] + [r for r in self.follower_roles if r != self.rearmost_role]
+        
+        for role in all_roles_except_rearmost:
+            vehicle_odom = self.odom.get(role)
+            if vehicle_odom is None:
+                continue
+            
+            vehicle_path = self._build_follower_path_with_connection(
+                path_points, self.shared_global_path, vehicle_odom, role
+            )
+            pub = self.path_pubs.get(role)
+            if pub is not None and vehicle_path:
+                pub.publish(vehicle_path)
 
     # ----------------- Spacing control -----------------
     def _tick(self, _evt) -> None:
-        if self.leader_cmd is None:
-            return
+        # Check prerequisites
         lead_odom = self.odom.get(self.leader_role)
         if lead_odom is None:
+            rospy.logwarn_throttle(1.0, f"platoon_manager: leader {self.leader_role} odometry not available")
             return
-        self._publish_follower_paths()
-        # Leader forward unit vector from odometry orientation yaw
+        
+        # If leader command is not available, use odometry speed as fallback
+        if self.leader_cmd is None:
+            # Use leader's current speed from odometry as fallback
+            lv = lead_odom.twist.twist.linear
+            leader_speed = math.hypot(lv.x, lv.y)
+            if leader_speed < 0.1:  # If leader is not moving, don't start followers
+                rospy.logwarn_throttle(2.0, f"platoon_manager: leader {self.leader_role} command not available and leader is stationary")
+                return
+            # Create a dummy command for fallback
+            rospy.logdebug_throttle(1.0, f"platoon_manager: using leader odometry speed {leader_speed:.2f} as fallback")
         # Predecessor chain: leader -> follower_1 -> follower_2 -> ...
         chain = [self.leader_role] + self.follower_roles
         for idx, role in enumerate(self.follower_roles):
@@ -332,10 +410,9 @@ class PlatoonManager:
             pred_odom = self.odom.get(pred_role)
             if pred_odom is None:
                 continue
-            pyaw = self._yaw_from_quat(pred_odom.pose.pose.orientation)
-            fwd = (math.cos(pyaw), math.sin(pyaw))
-            gap, rel_speed = self._gap_and_rel_speed(pred_odom, foll_odom, fwd)
-            desired_gap = self._active_gap_for_index(1.0)
+            # Use arc-length based gap calculation for accurate curved path following
+            gap, rel_speed = self._gap_and_rel_speed_arclength(pred_odom, foll_odom)
+            desired_gap = self.desired_gap_m  # Simple fixed gap
             err = gap - desired_gap
             # Deadband to reduce chattering
             if abs(err) < max(0.0, self.gap_deadband_m):
@@ -346,8 +423,13 @@ class PlatoonManager:
             pred_cmd = self._cmd_cache.get(pred_role)
             if pred_cmd is not None:
                 base = float(pred_cmd.speed)
-            elif self.leader_cmd is not None and pred_role == self.leader_role:
-                base = float(self.leader_cmd.speed)
+            elif pred_role == self.leader_role:
+                if self.leader_cmd is not None:
+                    base = float(self.leader_cmd.speed)
+                else:
+                    # Fallback to leader odometry speed
+                    pv = pred_odom.twist.twist.linear
+                    base = math.hypot(pv.x, pv.y)
             else:
                 pv = pred_odom.twist.twist.linear
                 base = math.hypot(pv.x, pv.y)
@@ -381,6 +463,9 @@ class PlatoonManager:
             pub = self.override_pubs.get(role)
             if pub is not None:
                 pub.publish(cmd)
+                rospy.logdebug_throttle(1.0, f"platoon_manager: {role} speed={speed:.2f} m/s (gap={gap:.2f}m, err={err:.2f}m, base={base:.2f})")
+            else:
+                rospy.logwarn_throttle(2.0, f"platoon_manager: no override publisher for {role}")
             self._last_speed_cmd[role] = speed
             self._last_cmd_time[role] = now
 
@@ -388,26 +473,185 @@ class PlatoonManager:
     def _yaw_from_quat(q) -> float:
         return math.atan2(2.0 * (q.w * q.z + q.x * q.y), 1.0 - 2.0 * (q.y * q.y + q.z * q.z))
 
-    @staticmethod
-    def _angle_diff_rad(a: float, b: float) -> float:
-        diff = a - b
-        while diff > math.pi:
-            diff -= 2.0 * math.pi
-        while diff < -math.pi:
-            diff += 2.0 * math.pi
-        return abs(diff)
+    def _compute_path_arc_length_profile(self, path_points: List[Tuple[float, float, float]]) -> List[float]:
+        """Compute cumulative arc-length profile for the path."""
+        if not path_points or len(path_points) < 2:
+            return []
+        
+        arc_lengths = [0.0]
+        cumulative = 0.0
+        
+        for i in range(1, len(path_points)):
+            x1, y1, _ = path_points[i - 1]
+            x2, y2, _ = path_points[i]
+            seg_len = math.hypot(x2 - x1, y2 - y1)
+            cumulative += seg_len
+            arc_lengths.append(cumulative)
+        
+        return arc_lengths
+    
+    def _project_to_path_arclength(self, px: float, py: float) -> Optional[Tuple[float, int, float]]:
+        """
+        Project point onto path and return (arc_length, segment_index, distance_to_path).
+        Returns None if projection fails.
+        """
+        if not self._path_points_cache or not self._path_arc_length_profile:
+            return None
+        
+        if len(self._path_points_cache) < 2:
+            return None
+        
+        best_dist_sq = float("inf")
+        best_index = None
+        best_t = 0.0
+        
+        for idx in range(len(self._path_points_cache) - 1):
+            x1, y1, _ = self._path_points_cache[idx]
+            x2, y2, _ = self._path_points_cache[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            
+            if seg_len_sq < 1e-6:
+                continue
+            
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+            
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_index = idx
+                best_t = t
+        
+        if best_index is None:
+            return None
+        
+        # Compute arc-length at projection point
+        seg_len = math.hypot(
+            self._path_points_cache[best_index + 1][0] - self._path_points_cache[best_index][0],
+            self._path_points_cache[best_index + 1][1] - self._path_points_cache[best_index][1]
+        )
+        arclength = self._path_arc_length_profile[best_index] + seg_len * best_t
+        
+        return arclength, best_index, math.sqrt(best_dist_sq)
+    
+    def _get_path_direction_at_arclength(self, arclength: float) -> Optional[Tuple[float, float]]:
+        """Get path direction vector (unit vector) at given arc-length."""
+        if not self._path_points_cache or not self._path_arc_length_profile:
+            return None
+        
+        if len(self._path_points_cache) < 2:
+            return None
+        
+        # Find segment containing this arc-length
+        if arclength <= self._path_arc_length_profile[0]:
+            x1, y1, yaw1 = self._path_points_cache[0]
+            return (math.cos(yaw1), math.sin(yaw1))
+        
+        if arclength >= self._path_arc_length_profile[-1]:
+            x2, y2, yaw2 = self._path_points_cache[-1]
+            return (math.cos(yaw2), math.sin(yaw2))
+        
+        # Binary search for segment
+        for idx in range(len(self._path_arc_length_profile) - 1):
+            s1 = self._path_arc_length_profile[idx]
+            s2 = self._path_arc_length_profile[idx + 1]
+            
+            if s1 <= arclength <= s2:
+                # Interpolate direction
+                x1, y1, yaw1 = self._path_points_cache[idx]
+                x2, y2, yaw2 = self._path_points_cache[idx + 1]
+                
+                seg_len = s2 - s1
+                if seg_len < 1e-6:
+                    return (math.cos(yaw1), math.sin(yaw1))
+                
+                ratio = (arclength - s1) / seg_len
+                
+                # Interpolate yaw angle
+                yaw_diff = yaw2 - yaw1
+                while yaw_diff > math.pi:
+                    yaw_diff -= 2.0 * math.pi
+                while yaw_diff < -math.pi:
+                    yaw_diff += 2.0 * math.pi
+                yaw = yaw1 + yaw_diff * ratio
+                
+                return (math.cos(yaw), math.sin(yaw))
+        
+        # Fallback
+        x1, y1, yaw1 = self._path_points_cache[0]
+        return (math.cos(yaw1), math.sin(yaw1))
+    
+    def _gap_and_rel_speed_arclength(self, lead: Odometry, foll: Odometry) -> Tuple[float, float]:
+        """
+        Calculate gap and relative speed using arc-length along path.
+        This accounts for path curvature.
+        """
+        if not self._path_points_cache or not self._path_arc_length_profile:
+            # Fallback to simple 2D projection
+            return self._gap_and_rel_speed_simple(lead, foll)
+        
+        # Project both vehicles onto path
+        lx = float(lead.pose.pose.position.x)
+        ly = float(lead.pose.pose.position.y)
+        fx = float(foll.pose.pose.position.x)
+        fy = float(foll.pose.pose.position.y)
+        
+        lead_proj = self._project_to_path_arclength(lx, ly)
+        foll_proj = self._project_to_path_arclength(fx, fy)
+        
+        if lead_proj is None or foll_proj is None:
+            # Fallback if projection fails
+            return self._gap_and_rel_speed_simple(lead, foll)
+        
+        lead_s, lead_idx, lead_dist = lead_proj
+        foll_s, foll_idx, foll_dist = foll_proj
+        
+        # Gap is arc-length difference along path
+        gap = max(0.0, lead_s - foll_s)
+        
+        # Get path direction at follower position for velocity projection
+        path_dir = self._get_path_direction_at_arclength(foll_s)
+        if path_dir is None:
+            # Fallback
+            pyaw = self._yaw_from_quat(lead.pose.pose.orientation)
+            path_dir = (math.cos(pyaw), math.sin(pyaw))
+        
+        # Project velocities onto path direction
+        lv = lead.twist.twist.linear
+        fv = foll.twist.twist.linear
+        
+        # Transform velocities to path direction
+        lead_speed = lv.x * path_dir[0] + lv.y * path_dir[1]
+        foll_speed = fv.x * path_dir[0] + fv.y * path_dir[1]
+        
+        rel_speed = lead_speed - foll_speed
+        
+        return gap, rel_speed
 
     @staticmethod
-    def _interp_angle(a: float, b: float, ratio: float) -> float:
-        diff = b - a
-        while diff > math.pi:
-            diff -= 2.0 * math.pi
-        while diff < -math.pi:
-            diff += 2.0 * math.pi
-        return a + diff * ratio
+    def _gap_and_rel_speed_simple(lead: Odometry, foll: Odometry) -> Tuple[float, float]:
+        """Fallback: Simple 2D projection along leader heading (original method)."""
+        pyaw = PlatoonManager._yaw_from_quat(lead.pose.pose.orientation)
+        fwd = (math.cos(pyaw), math.sin(pyaw))
+        dx = lead.pose.pose.position.x - foll.pose.pose.position.x
+        dy = lead.pose.pose.position.y - foll.pose.pose.position.y
+        gap = max(0.0, dx * fwd[0] + dy * fwd[1])
+        lv = lead.twist.twist.linear
+        fv = foll.twist.twist.linear
+        rel_vx = (lv.x - fv.x)
+        rel_vy = (lv.y - fv.y)
+        rel_speed = rel_vx * fwd[0] + rel_vy * fwd[1]
+        return gap, rel_speed
 
     @staticmethod
     def _gap_and_rel_speed(lead: Odometry, foll: Odometry, fwd: Tuple[float, float]) -> Tuple[float, float]:
+        """Legacy method kept for compatibility - now uses arc-length method."""
+        # This method signature is kept for backward compatibility but should use arc-length
         dx = lead.pose.pose.position.x - foll.pose.pose.position.x
         dy = lead.pose.pose.position.y - foll.pose.pose.position.y
         # Longitudinal projection along leader forward
