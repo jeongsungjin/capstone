@@ -20,9 +20,9 @@
   <arg name="color_match_bonus" default="4.0" />
   <arg name="color_mismatch_penalty" default="15.0" />
   <arg name="color_missing_penalty" default="2.0" />
-  <!-- Initial alignment tuning -->
-  <arg name="enable_initial_alignment" default="true" />
-  <arg name="initial_alignment_timeout_sec" default="6.0" />
+  <!-- Initial alignment tuning (지연 최소화를 위해 기본값은 비활성화) -->
+  <arg name="enable_initial_alignment" default="false" />
+  <arg name="initial_alignment_timeout_sec" default="3.0" />
   <!-- Dist/yaw gate: <0 inherit normal, 0 disables (no gate), >0 overrides -->
   <arg name="initial_alignment_dist_gate_m" default="0.0" />
   <arg name="initial_alignment_yaw_gate_deg" default="0.0" />
@@ -30,18 +30,21 @@
   <arg name="initial_alignment_max_teleport_m" default="0.0" />
   <arg name="initial_alignment_teleport_yaw_gate_deg" default="0.0" />
   <arg name="initial_alignment_skip_warmup" default="true" />
-  <arg name="initial_alignment_avg_duration_sec" default="1.0" />
+  <!-- avg_duration=0.0 이면 샘플 평균 없이 바로 동작 -->
+  <arg name="initial_alignment_avg_duration_sec" default="0.0" />
   <!-- Matching and safety tuning -->
   <arg name="enable_matching" default="true" />
   <arg name="w_pos" default="1.0" />
   <arg name="w_yaw" default="0.3" />
   <arg name="dist_gate_m" default="30.0" />
   <arg name="yaw_gate_deg" default="0.0" />
-  <arg name="hold_sec" default="0.5" />
-  <arg name="ttl_sec" default="3.0" />
+  <!-- ID 매칭 홀드 시간을 줄여 새 매칭으로 빨리 전환 -->
+  <arg name="hold_sec" default="0.2" />
+  <arg name="ttl_sec" default="2.0" />
   <arg name="max_teleport_distance_m" default="30.0" />
   <arg name="teleport_yaw_gate_deg" default="0.0" />
-  <arg name="teleport_stability_warmup_sec" default="0.2" />
+  <!-- 매칭 변경 후 텔레포트 워밍업 시간: 지연 최소화를 위해 기본 0.0 -->
+  <arg name="teleport_stability_warmup_sec" default="0.0" />
   <arg name="enable_yaw_flip" default="false" />
   <arg name="yaw_flip_threshold_deg" default="150.0" />
   <arg name="enable_waypoint_heading_guard" default="false" />
@@ -71,6 +74,9 @@
   <arg name="kf_init_yaw_rate_deg_std" default="90.0" />
   <arg name="kf_meas_reject_distance_m" default="20.0" />
   <arg name="kf_meas_reject_yaw_deg" default="999.0" />
+
+  <!-- 지연 보상을 위한 칼만 forward prediction horizon (초) -->
+  <arg name="kf_prediction_horizon_sec" default="0.0" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
@@ -139,6 +145,7 @@
     <param name="kf_init_yaw_rate_deg_std" value="$(arg kf_init_yaw_rate_deg_std)" />
     <param name="kf_meas_reject_distance_m" value="$(arg kf_meas_reject_distance_m)" />
     <param name="kf_meas_reject_yaw_deg" value="$(arg kf_meas_reject_yaw_deg)" />
+    <param name="kf_prediction_horizon_sec" value="$(arg kf_prediction_horizon_sec)" />
     <!-- Initial alignment params -->
     <param name="enable_initial_alignment" value="$(arg enable_initial_alignment)" />
     <param name="initial_alignment_timeout_sec" value="$(arg initial_alignment_timeout_sec)" />

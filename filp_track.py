@@ -29,7 +29,7 @@ def send_command(host: str, port: int, payload: dict, timeout: float = 2.0) -> d
 
 def main():
     parser = argparse.ArgumentParser(description="Flip a track's yaw via the realtime fusion server command port.")
-    parser.add_argument("--host", default="192.168.0.165", help="command server host (default: 127.0.0.1)")
+    parser.add_argument("--host", default="192.168.0.173", help="command server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=18100, help="command server port (default: 18100)")
     parser.add_argument("--track-id", type=int, required=True, help="target track id")
     parser.add_argument("--delta", type=float, default=180.0, help="yaw delta degrees (default: 180)")

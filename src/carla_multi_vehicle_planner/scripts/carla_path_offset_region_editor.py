@@ -95,11 +95,10 @@ class CarlaPathOffsetRegionEditor:
         self.grid_drag_start_px: Tuple[int, int] = (0, 0)
         self.grid_origin_start: Tuple[float, float] = (self.grid_origin_x, self.grid_origin_y)
 
-        # Brush painting state
-        self.painting = False
-        self.brush_radius_px = int(rospy.get_param("~brush_radius_px", 6))
-        # 현재 브러쉬로 그리고 있는 world 좌표 포인트들
-        self.current_brush_points: List[Tuple[float, float]] = []
+        # Rectangle selection state (좌클릭 드래그로 직사각형 선택)
+        self.drawing_rect = False
+        self.rect_start_uv: Tuple[int, int] = (0, 0)
+        self.rect_end_uv: Tuple[int, int] = (0, 0)
 
         # Collected regions
         # Each region: {id, points (world coords), center, offset_lateral_m, offset_x_m, offset_y_m}
@@ -148,7 +147,7 @@ class CarlaPathOffsetRegionEditor:
 
         rospy.loginfo(
             "[OFFSET_EDITOR] UI started. "
-            "좌클릭 드래그=브러쉬 영역, 우클릭 드래그=격자 위치 조정, 방향키=off_x/off_y 조정, S=YAML 저장, Q/ESC=종료"
+            "좌클릭 드래그=직사각형 영역, 우클릭 드래그=격자 위치 조정, 방향키=off_x/off_y 조정, S=YAML 저장, Q/ESC=종료"
         )
 
         while not rospy.is_shutdown():
@@ -188,13 +187,13 @@ class CarlaPathOffsetRegionEditor:
                     cv2.LINE_AA,
                 )
 
-            # Draw current painting stroke
-            if self.painting and self.current_brush_points:
-                for (cx, cy) in self.current_brush_points:
-                    u, v = self.world_to_image(cx, cy)
-                    cv2.circle(img, (u, v), self.brush_radius_px, (0, 255, 0), 1)
+            # Draw current rectangle selection (preview)
+            if self.drawing_rect:
+                x1, y1 = self.rect_start_uv
+                x2, y2 = self.rect_end_uv
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 1)
 
-            help_text = "L-Drag: paint region, R-Drag: move grid, Arrows: adjust dx/dy, S: save YAML, Q/ESC: quit"
+            help_text = "L-Drag: rect region, R-Drag: move grid, Arrows: adjust dx/dy, S: save YAML, Q/ESC: quit"
             cv2.putText(
                 img,
                 help_text,
@@ -230,24 +229,35 @@ class CarlaPathOffsetRegionEditor:
     # -------------------------------------------------------------
     def _on_mouse(self, event, u, v, flags, param) -> None:
         if event == cv2.EVENT_LBUTTONDOWN:
-            # 브러쉬 시작
-            self.painting = True
-            self.current_brush_points = []
-            wx, wy = self.image_to_world(u, v)
-            self.current_brush_points.append((wx, wy))
-        elif event == cv2.EVENT_MOUSEMOVE and self.painting:
-            wx, wy = self.image_to_world(u, v)
-            # 너무 촘촘하지 않게 간격 제한
-            if not self.current_brush_points:
-                self.current_brush_points.append((wx, wy))
+            # 직사각형 시작점 기록 (image coords)
+            self.drawing_rect = True
+            self.rect_start_uv = (u, v)
+            self.rect_end_uv = (u, v)
+        elif event == cv2.EVENT_MOUSEMOVE and self.drawing_rect:
+            # 드래그 중: 현재 마우스 위치까지 직사각형 업데이트
+            self.rect_end_uv = (u, v)
+        elif event == cv2.EVENT_LBUTTONUP and self.drawing_rect:
+            # 직사각형 완료 → world 좌표로 변환하여 영역 등록
+            self.drawing_rect = False
+            x1, y1 = self.rect_start_uv
+            x2, y2 = self.rect_end_uv
+            if x1 == x2 or y1 == y2:
+                rospy.loginfo("[OFFSET_EDITOR] rectangle too thin, ignored")
             else:
-                lx, ly = self.current_brush_points[-1]
-                if math.hypot(wx - lx, wy - ly) > (self.brush_radius_px / self.scale):
-                    self.current_brush_points.append((wx, wy))
-        elif event == cv2.EVENT_LBUTTONUP and self.painting:
-            self.painting = False
-            if self.current_brush_points:
-                self._register_brush_region(self.current_brush_points)
+                wx1, wy1 = self.image_to_world(x1, y1)
+                wx2, wy2 = self.image_to_world(x2, y2)
+                x_min = min(wx1, wx2)
+                x_max = max(wx1, wx2)
+                y_min = min(wy1, wy2)
+                y_max = max(wy1, wy2)
+                # 시각화/오프셋 적용용으로 4개의 꼭짓점을 points 로 저장
+                points_world = [
+                    (x_min, y_max),  # top-left
+                    (x_max, y_max),  # top-right
+                    (x_max, y_min),  # bottom-right
+                    (x_min, y_min),  # bottom-left
+                ]
+                self._register_rect_region(points_world)
         # 우클릭: 격자 드래그 시작/종료
         elif event == cv2.EVENT_RBUTTONDOWN:
             self.dragging_grid = True
@@ -264,19 +274,20 @@ class CarlaPathOffsetRegionEditor:
         elif event == cv2.EVENT_RBUTTONUP and self.dragging_grid:
             self.dragging_grid = False
 
-    def _register_brush_region(self, points_world: List[Tuple[float, float]]) -> None:
-        if not points_world or len(points_world) < 3:
-            rospy.loginfo("[OFFSET_EDITOR] brush stroke too short, ignored")
+    def _register_rect_region(self, points_world: List[Tuple[float, float]]) -> None:
+        """직사각형 모서리 4점을 world 좌표로 받아 영역 등록."""
+        if not points_world or len(points_world) < 4:
+            rospy.loginfo("[OFFSET_EDITOR] rectangle has insufficient points, ignored")
             return
 
-        # center 계산
+        # center 계산 (4개 꼭짓점 평균)
         xs = [p[0] for p in points_world]
         ys = [p[1] for p in points_world]
         center_x = float(sum(xs) / len(xs))
         center_y = float(sum(ys) / len(ys))
 
-        print("\n[OFFSET_EDITOR] 새로운 영역이 선택되었습니다.")
-        print(f"  #points: {len(points_world)}")
+        print("\n[OFFSET_EDITOR] 새로운 직사각형 영역이 선택되었습니다.")
+        print(f"  corners: {len(points_world)}")
         print(f"  center(world): ({center_x:.2f},{center_y:.2f})")
 
         # 콘솔에서 id, offset 값 입력

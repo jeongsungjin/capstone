@@ -3,7 +3,7 @@
   <arg name="bind_ip" default="0.0.0.0" />
 
   <!-- Per-vehicle network args (override as needed). Up to 6 vehicles supported -->
-  <arg name="vehicle_1_ip" default="10.15.129.51" /> <!-- 보라  -->
+  <arg name="vehicle_1_ip" default="10.15.129.10" /> <!-- 보라  -->
 
   <arg name="vehicle_2_ip" default="10.15.129.7" /> <!-- 초록 -->
   <arg name="vehicle_3_ip" default="10.15.129.4" /> <!-- 빨강 -->
