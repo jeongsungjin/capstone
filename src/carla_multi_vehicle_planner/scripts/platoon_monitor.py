@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Odometry, Path
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from ackermann_msgs.msg import AckermannDrive
 
 try:
@@ -16,6 +16,16 @@ try:
 except Exception as exc:
     rospy.logfatal("platoon_monitor: failed to import python_qt_binding (Qt). %s", exc)
     raise
+
+try:
+    from setup_carla_path import *  # noqa: F401,F403
+except Exception:
+    pass
+
+try:
+    import carla  # type: ignore
+except Exception:
+    carla = None
 
 
 def _quaternion_to_yaw(q) -> float:
@@ -73,6 +83,15 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
         followers_str = str(rospy.get_param("~platoon_followers", "ego_vehicle_2,ego_vehicle_3")).strip()
         self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()]
 
+        self.draw_map_background = bool(rospy.get_param("~draw_map_background", True))
+        self.map_host = str(rospy.get_param("~carla_host", "localhost"))
+        self.map_port = int(rospy.get_param("~carla_port", 2000))
+        self.map_resolution = float(rospy.get_param("~map_waypoint_resolution", 10.0))
+        self.max_map_segments = int(rospy.get_param("~max_map_segments", 800))
+        self.map_min_span = float(rospy.get_param("~map_min_span", 20.0))
+        self.map_segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+        self.map_bounds: Optional[Tuple[float, float, float, float]] = None
+
         self.status: Dict[str, RoleStatus] = {role: RoleStatus() for role in self.roles}
         self._lock = threading.Lock()
         self.stop_publishers: Dict[str, rospy.Publisher] = {
@@ -81,11 +100,14 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
             )
             for role in self.roles
         }
+        self.replan_pub = rospy.Publisher("/force_replan", String, queue_size=1)
         self._shortcuts: List[QtWidgets.QShortcut] = []
         self.manual_stop_interval = float(rospy.get_param("~manual_stop_interval", 0.2))
 
         self._build_ui()
         self._setup_subscribers()
+        if self.draw_map_background:
+            self._load_map_segments()
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._update_table)
@@ -114,6 +136,16 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self.table.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
         layout.addWidget(self.table)
+
+        self.map_scene = QtWidgets.QGraphicsScene(self)
+        self.map_view = QtWidgets.QGraphicsView(self.map_scene, self)
+        self.map_view.setRenderHint(QtGui.QPainter.Antialiasing)
+        self.map_view.setMinimumHeight(240)
+        layout.addWidget(self.map_view)
+        self.map_items: Dict[str, Tuple[QtWidgets.QGraphicsEllipseItem, QtWidgets.QGraphicsSimpleTextItem]] = {}
+        self.replan_button = QtWidgets.QPushButton("Force Replan All", self)
+        self.replan_button.clicked.connect(self._trigger_replan_all)
+        layout.addWidget(self.replan_button)
 
     def _setup_subscribers(self) -> None:
         for role in self.roles:
@@ -148,6 +180,54 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
             shortcut.setContext(QtCore.Qt.WindowShortcut)
             shortcut.activated.connect(lambda r=role: self._toggle_manual_stop(r))
             self._shortcuts.append(shortcut)
+
+    def _load_map_segments(self) -> None:
+        if carla is None:
+            rospy.logwarn("platoon_monitor: CARLA API unavailable; map background disabled")
+            self.draw_map_background = False
+            return
+        try:
+            client = carla.Client(self.map_host, self.map_port)
+            client.set_timeout(2.0)
+            world = client.get_world()
+            carla_map = world.get_map()
+            waypoints = carla_map.generate_waypoints(max(1.0, float(self.map_resolution)))
+            segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+            min_x = min_y = float("inf")
+            max_x = max_y = float("-inf")
+            for wp in waypoints:
+                nxt = wp.next(self.map_resolution)
+                if not nxt:
+                    continue
+                loc1 = wp.transform.location
+                loc2 = nxt[0].transform.location
+                segments.append(((loc1.x, loc1.y), (loc2.x, loc2.y)))
+                min_x = min(min_x, loc1.x, loc2.x)
+                max_x = max(max_x, loc1.x, loc2.x)
+                min_y = min(min_y, loc1.y, loc2.y)
+                max_y = max(max_y, loc1.y, loc2.y)
+                if len(segments) >= self.max_map_segments:
+                    break
+            self.map_segments = segments
+            if segments:
+                self.map_bounds = (min_x, max_x, min_y, max_y)
+        except Exception as exc:
+            rospy.logwarn("platoon_monitor: failed to load CARLA map background: %s", exc)
+            self.draw_map_background = False
+
+    def _trigger_replan_all(self) -> None:
+        if self.replan_pub is None:
+            return
+        count = 0
+        for role in self.roles:
+            msg = String(data=role)
+            try:
+                self.replan_pub.publish(msg)
+                count += 1
+            except Exception as exc:
+                rospy.logwarn("platoon_monitor: failed to publish replan for %s: %s", role, exc)
+        if count:
+            rospy.loginfo("platoon_monitor: force replan requested for %d roles", count)
 
     def _toggle_manual_stop(self, role: str) -> None:
         with self._lock:
@@ -229,6 +309,13 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
             return "Follower"
         return "Solo"
 
+    def _role_color(self, role: str) -> QtGui.QColor:
+        if role == self.platoon_leader:
+            return QtGui.QColor(52, 152, 219)
+        if role in self.platoon_followers:
+            return QtGui.QColor(230, 126, 34)
+        return QtGui.QColor(149, 165, 166)
+
     def _compute_match_error(self, status: RoleStatus) -> Optional[float]:
         if status.odom is None or status.tracking_pose is None:
             return None
@@ -269,6 +356,8 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
                 odom = status.odom if status else None
                 match_err = self._compute_match_error(status) if status else None
                 path_err = self._compute_path_error(status) if status else None
+                manual_stop = status.manual_stop_active if status else False
+                last_stop_pub = status.last_stop_publish if status else 0.0
 
             self._set_cell(row, 0, role)
             self._set_cell(row, 1, self._role_platoon_label(role))
@@ -310,13 +399,77 @@ class PlatoonMonitorWidget(QtWidgets.QWidget):
             if path_err is not None and path_err >= 1.0:
                 status_text.append("Off-path")
                 status_color = QtGui.QColor(230, 126, 34)
-            if status and status.manual_stop_active:
+            if manual_stop:
                 status_text.append("Manual STOP")
                 status_color = QtGui.QColor(52, 152, 219)
-                if (now_sec - status.last_stop_publish) >= self.manual_stop_interval:
+                if (now_sec - last_stop_pub) >= self.manual_stop_interval:
                     self._publish_stop_command(role)
             summary = ", ".join(status_text) if status_text else "Nominal"
             self._set_cell(row, 7, summary, status_color)
+
+        positions_for_map: List[Tuple[str, float, float]] = []
+        with self._lock:
+            for role in self.roles:
+                odom = self.status[role].odom
+                if odom is None:
+                    continue
+                positions_for_map.append(
+                    (
+                        role,
+                        float(odom.pose.pose.position.x),
+                        float(odom.pose.pose.position.y),
+                    )
+                )
+        self._update_map_view(positions_for_map)
+
+    def _update_map_view(self, positions: List[Tuple[str, float, float]]) -> None:
+        self.map_scene.clear()
+        if self.draw_map_background and self.map_segments and self.map_bounds:
+            min_x, max_x, min_y, max_y = self.map_bounds
+            span = max(max_x - min_x, max_y - min_y, self.map_min_span)
+            cx = (min_x + max_x) * 0.5
+            cy = (min_y + max_y) * 0.5
+        elif positions:
+            cx = sum(p[1] for p in positions) / len(positions)
+            cy = sum(p[2] for p in positions) / len(positions)
+            span = max(
+                max(abs(p[1] - cx), abs(p[2] - cy)) for p in positions
+            ) * 2.0
+            span = max(span, self.map_min_span)
+        else:
+            self.map_scene.addText("No odometry yet")
+            return
+
+        scale = 260.0 / span if span > 1e-3 else 1.0
+        rect = QtCore.QRectF(-span * 0.6 * scale, -span * 0.6 * scale, span * 1.2 * scale, span * 1.2 * scale)
+        self.map_scene.setSceneRect(rect)
+        self.map_view.fitInView(rect, QtCore.Qt.KeepAspectRatio)
+
+        if self.draw_map_background and self.map_segments:
+            pen = QtGui.QPen(QtGui.QColor(189, 195, 199))
+            pen.setWidthF(0.8)
+            for (p1, p2) in self.map_segments:
+                x1 = (p1[0] - cx) * scale
+                y1 = -(p1[1] - cy) * scale
+                x2 = (p2[0] - cx) * scale
+                y2 = -(p2[1] - cy) * scale
+                self.map_scene.addLine(x1, y1, x2, y2, pen)
+        else:
+            axes_pen = QtGui.QPen(QtGui.QColor(189, 195, 199))
+            axes_pen.setStyle(QtCore.Qt.DashLine)
+            self.map_scene.addLine(-150, 0, 150, 0, axes_pen)
+            self.map_scene.addLine(0, -150, 0, 150, axes_pen)
+
+        for role, x, y in positions:
+            px = (x - cx) * scale
+            py = -(y - cy) * scale
+            color = self._role_color(role)
+            brush = QtGui.QBrush(color)
+            pen = QtGui.QPen(QtCore.Qt.black)
+            self.map_scene.addEllipse(px - 6, py - 6, 12, 12, pen, brush)
+            text = self.map_scene.addSimpleText(role.split("_")[-1])
+            text.setBrush(QtGui.QBrush(QtCore.Qt.white))
+            text.setPos(px - 6, py - 6)
 
 
 

@@ -5,6 +5,7 @@ import random
 import sys
 import os
 import time
+from typing import List, Optional, Set
 
 import rospy
 from geometry_msgs.msg import Pose, PoseStamped, Quaternion, Twist, Vector3
@@ -26,6 +27,25 @@ try:
 except ImportError as exc:
     rospy.logfatal(f"CARLA import failed: {exc}")
     carla = None
+
+
+DEFAULT_MODEL_MAP: List[str] = [
+    "vehicle.vehicle.purplexycar",   # ego_vehicle_1
+    "vehicle.vehicle.greenxycar",     # ego_vehicle_2
+    "vehicle.vehicle.redxycar",  # ego_vehicle_3
+    "vehicle.vehicle.yellowxycar",  # ego_vehicle_4
+    "vehicle.vehicle.pinkxycar",    # ego_vehicle_5
+    "vehicle.vehicle.blackxycar",   # ego_vehicle_6
+]
+
+DEFAULT_MODEL_MAP: List[str] = [
+    "vehicle.vehicle.redxycar",   # ego_vehicle_1
+    "vehicle.vehicle.purplexycar",     # ego_vehicle_2
+    "vehicle.vehicle.pinkxycar",  # ego_vehicle_3
+    "vehicle.vehicle.whitexycar",  # ego_vehicle_4
+    "vehicle.vehicle.redxycar",    # ego_vehicle_5
+    "vehicle.vehicle.yellowxycar",   # ego_vehicle_6
+]
 
 
 def euler_to_quaternion(roll, pitch, yaw):
@@ -75,10 +95,14 @@ class MultiVehicleSpawner:
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
         self.target_speed = rospy.get_param("~target_speed", 8.0)
-        self.randomize_spawn = rospy.get_param("~randomize_spawn", True)
+        self.randomize_spawn = bool(rospy.get_param("~randomize_spawn", False))
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
         self.spawn_min_separation_m = float(rospy.get_param("~spawn_min_separation_m", 8.0))
+        self.vehicle_models_param = str(rospy.get_param("~vehicle_models", "")).strip()
+        self.spawn_indices_param = str(rospy.get_param("~spawn_indices", "")).strip()
+        self.align_spawn_heading = bool(rospy.get_param("~align_spawn_heading", True))
+        self.spawn_heading_offset_deg = float(rospy.get_param("~spawn_heading_offset_deg", 0.0))
 
         # Optional platoon spawn alignment
         self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
@@ -107,6 +131,8 @@ class MultiVehicleSpawner:
         seed_value = int(self.spawn_seed) if self.spawn_seed is not None else None
         initial_seed = seed_value if seed_value is not None else time.time()
         self._spawn_rng = random.Random(initial_seed)
+        self.fixed_spawn_indices: List[int] = self._parse_spawn_indices(self.spawn_indices_param)
+        self._used_spawn_indices: Set[int] = set()
 
         self.initial_pose_pub = rospy.Publisher("/initialpose", PoseStamped, queue_size=1, latch=True)
 
@@ -127,6 +153,72 @@ class MultiVehicleSpawner:
         rospy.on_shutdown(self.cleanup)
         rospy.Timer(rospy.Duration(0.1), self.publish_odometry)
 
+    def _parse_spawn_indices(self, csv: str) -> List[int]:
+        if not csv:
+            return []
+        result: List[int] = []
+        for token in csv.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                idx = int(token)
+                if idx >= 0:
+                    result.append(idx)
+            except ValueError:
+                rospy.logwarn("multi_vehicle_spawner: invalid spawn index '%s' ignored", token)
+        return result
+
+    def _build_model_map(self) -> List[str]:
+        if self.vehicle_models_param:
+            models = [m.strip() for m in self.vehicle_models_param.split(",") if m.strip()]
+            if models:
+                return models
+        return list(DEFAULT_MODEL_MAP)
+
+    def _iter_candidate_transforms(self, seed_hint: Optional[float]):
+        if self.randomize_spawn:
+            yield from pick_spawn_transform(self.world, seed_hint, self.spawn_retry_limit)
+        else:
+            yield from self._iter_fixed_spawn_transforms()
+
+    def _iter_fixed_spawn_transforms(self):
+        if not self.spawn_points:
+            return
+        ordered = self.fixed_spawn_indices if self.fixed_spawn_indices else list(range(len(self.spawn_points)))
+        for idx in ordered:
+            if idx in self._used_spawn_indices:
+                continue
+            if idx < 0 or idx >= len(self.spawn_points):
+                continue
+            yield self.spawn_points[idx], idx
+
+    def _consume_spawn_index(self, spawn_index: Optional[int]) -> None:
+        if not self.randomize_spawn and spawn_index is not None:
+            self._used_spawn_indices.add(spawn_index)
+
+    def _align_heading_to_lane(self, transform: carla.Transform) -> carla.Transform:
+        if not self.align_spawn_heading or self.carla_map is None:
+            return transform
+        try:
+            waypoint = self.carla_map.get_waypoint(
+                transform.location,
+                project_to_road=True,
+                lane_type=carla.LaneType.Driving,
+            )
+        except Exception as exc:
+            rospy.logwarn_throttle(5.0, "multi_vehicle_spawner: waypoint lookup failed: %s", exc)
+            return transform
+        if waypoint is None:
+            return transform
+        yaw = waypoint.transform.rotation.yaw + self.spawn_heading_offset_deg
+        aligned_rotation = carla.Rotation(
+            pitch=transform.rotation.pitch,
+            roll=transform.rotation.roll,
+            yaw=yaw,
+        )
+        return carla.Transform(transform.location, aligned_rotation)
+
     def _configure_tm_globals(self):
         tm = self.traffic_manager
         # Best-effort: guard for API availability across versions
@@ -144,19 +236,11 @@ class MultiVehicleSpawner:
             pass
 
     def spawn_vehicles(self):
+        self._used_spawn_indices.clear()
         blueprint_library = self.world.get_blueprint_library()
+        model_map = self._build_model_map()
         if self.enable_autopilot:
             self._configure_tm_globals()
-
-        # Per-vehicle model mapping
-        model_map = [
-            "vehicle.vehicle.yellowxycar",   # vehicle 1
-            "vehicle.vehicle.greenxycar",    # vehicle 2
-            "vehicle.vehicle.redxycar", # vehicle 3
-            "vehicle.vehicle.purplexycar", # vehicle 4
-            "vehicle.vehicle.pinkxycar", # vehicle 5
-            "vehicle.vehicle.whitexycar", # vehicle 6
-        ]
 
         for index in range(self.num_vehicles):
             role_name = f"ego_vehicle_{index + 1}"
@@ -186,31 +270,29 @@ class MultiVehicleSpawner:
             chosen_transform = None
             chosen_index = None
 
-            if self.randomize_spawn:
-                seed_hint = self._spawn_rng.random()
-            else:
-                seed_hint_base = int(self.spawn_seed) if self.spawn_seed is not None else 0
-                seed_hint = seed_hint_base + index
+            seed_hint = self._spawn_rng.random() if self.randomize_spawn else None
 
-            for transform, spawn_index in pick_spawn_transform(
-                self.world, seed_hint, self.spawn_retry_limit
-            ):
+            for transform, spawn_index in self._iter_candidate_transforms(seed_hint):
+                aligned_transform = self._align_heading_to_lane(transform)
                 # Enforce minimum separation from previously spawned vehicles
                 too_close = False
                 for _role, (prev_tf, _idx) in self.spawned_transforms.items():
-                    dx = transform.location.x - prev_tf.location.x
-                    dy = transform.location.y - prev_tf.location.y
-                    dz = transform.location.z - prev_tf.location.z
+                    dx = aligned_transform.location.x - prev_tf.location.x
+                    dy = aligned_transform.location.y - prev_tf.location.y
+                    dz = aligned_transform.location.z - prev_tf.location.z
                     if math.sqrt(dx * dx + dy * dy + dz * dz) < max(0.0, self.spawn_min_separation_m):
                         too_close = True
                         break
                 if too_close:
+                    self._consume_spawn_index(spawn_index)
                     continue
-                vehicle = self.world.try_spawn_actor(blueprint, transform)
+                vehicle = self.world.try_spawn_actor(blueprint, aligned_transform)
                 if vehicle is not None:
-                    chosen_transform = transform
+                    chosen_transform = aligned_transform
                     chosen_index = spawn_index
+                    self._consume_spawn_index(spawn_index)
                     break
+                self._consume_spawn_index(spawn_index)
                 time.sleep(0.1)
 
             if vehicle is None:

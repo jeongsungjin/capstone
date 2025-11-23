@@ -8,19 +8,69 @@
   <arg name="z_offset" default="0.0" />
   <arg name="carla_host" default="localhost" />
   <arg name="carla_port" default="2000" />
+  <!-- Optional color hints per vehicle (used for Hungarian matching assistance) -->
+  <arg name="vehicle_1_color" default="purple" />
+  <arg name="vehicle_2_color" default="purple" />
+  <arg name="vehicle_3_color" default="pink" />
+  <arg name="vehicle_4_color" default="white" />
+  <arg name="vehicle_5_color" default="" />
+  <arg name="vehicle_6_color" default="" />
+  <arg name="enable_color_matching" default="true" />
+  <arg name="color_gate_on_mismatch" default="true" />
+  <arg name="color_match_bonus" default="4.0" />
+  <arg name="color_mismatch_penalty" default="15.0" />
+  <arg name="color_missing_penalty" default="2.0" />
+  <!-- Initial alignment tuning -->
+  <arg name="enable_initial_alignment" default="true" />
+  <arg name="initial_alignment_timeout_sec" default="6.0" />
+  <!-- Dist/yaw gate: <0 inherit normal, 0 disables (no gate), >0 overrides -->
+  <arg name="initial_alignment_dist_gate_m" default="0.0" />
+  <arg name="initial_alignment_yaw_gate_deg" default="0.0" />
+  <!-- Teleport limits: <0 inherit, 0 disables limit -->
+  <arg name="initial_alignment_max_teleport_m" default="0.0" />
+  <arg name="initial_alignment_teleport_yaw_gate_deg" default="0.0" />
+  <arg name="initial_alignment_skip_warmup" default="true" />
+  <arg name="initial_alignment_avg_duration_sec" default="1.0" />
   <!-- Matching and safety tuning -->
   <arg name="enable_matching" default="true" />
   <arg name="w_pos" default="1.0" />
   <arg name="w_yaw" default="0.3" />
-  <arg name="dist_gate_m" default="10.0" />
-  <arg name="yaw_gate_deg" default="60.0" />
+  <arg name="dist_gate_m" default="30.0" />
+  <arg name="yaw_gate_deg" default="0.0" />
   <arg name="hold_sec" default="0.5" />
   <arg name="ttl_sec" default="3.0" />
-  <arg name="max_teleport_distance_m" default="20.0" />
-  <arg name="teleport_yaw_gate_deg" default="160.0" />
+  <arg name="max_teleport_distance_m" default="30.0" />
+  <arg name="teleport_yaw_gate_deg" default="0.0" />
   <arg name="teleport_stability_warmup_sec" default="0.2" />
-  <arg name="enable_yaw_flip" default="true" />
+  <arg name="enable_yaw_flip" default="false" />
   <arg name="yaw_flip_threshold_deg" default="150.0" />
+  <arg name="enable_waypoint_heading_guard" default="false" />
+  <arg name="waypoint_heading_window_deg" default="35.0" />
+  <arg name="disable_collision_check" default="true" />
+  <arg name="snap_to_spawn_heading" default="true" />
+  <arg name="spawn_heading_max_distance_m" default="8.0" />
+  <arg name="snap_to_spawn_pose_initial" default="false" />
+  <arg name="yaw_blend_enabled" default="false" />
+  <arg name="yaw_waypoint_weight" default="0.1" />
+  <arg name="yaw_path_weight" default="0.5" />
+  <arg name="yaw_stability_alpha" default="0.6" />
+  <arg name="only_correct_yaw_during_alignment" default="true" />
+
+  <arg name="kf_enabled" default="true" />
+  <arg name="kf_default_dt" default="0.05" />
+  <arg name="kf_max_dt" default="0.2" />
+  <arg name="kf_process_noise_pos" default="0.5" />
+  <arg name="kf_process_noise_vel" default="1.0" />
+  <arg name="kf_process_noise_yaw_deg" default="12.0" />
+  <arg name="kf_process_noise_yaw_rate_deg" default="30.0" />
+  <arg name="kf_measurement_noise_pos" default="0.25" />
+  <arg name="kf_measurement_noise_yaw_deg" default="6.0" />
+  <arg name="kf_init_pos_std" default="1.0" />
+  <arg name="kf_init_vel_std" default="1.0" />
+  <arg name="kf_init_yaw_deg_std" default="45.0" />
+  <arg name="kf_init_yaw_rate_deg_std" default="90.0" />
+  <arg name="kf_meas_reject_distance_m" default="20.0" />
+  <arg name="kf_meas_reject_yaw_deg" default="999.0" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
@@ -36,6 +86,15 @@
     <param name="z_offset" value="$(arg z_offset)" />
     <param name="carla_host" value="$(arg carla_host)" />
     <param name="carla_port" value="$(arg carla_port)" />
+    <!-- Color hint dictionary -->
+    <rosparam param="role_color_map" subst_value="true">
+      ego_vehicle_1: "$(arg vehicle_1_color)"
+      ego_vehicle_2: "$(arg vehicle_2_color)"
+      ego_vehicle_3: "$(arg vehicle_3_color)"
+      ego_vehicle_4: "$(arg vehicle_4_color)"
+      ego_vehicle_5: "$(arg vehicle_5_color)"
+      ego_vehicle_6: "$(arg vehicle_6_color)"
+    </rosparam>
     <!-- Matching and safety params -->
     <param name="enable_matching" value="$(arg enable_matching)" />
     <param name="w_pos" value="$(arg w_pos)" />
@@ -44,11 +103,51 @@
     <param name="yaw_gate_deg" value="$(arg yaw_gate_deg)" />
     <param name="hold_sec" value="$(arg hold_sec)" />
     <param name="ttl_sec" value="$(arg ttl_sec)" />
+    <param name="enable_color_matching" value="$(arg enable_color_matching)" />
+    <param name="color_gate_on_mismatch" value="$(arg color_gate_on_mismatch)" />
+    <param name="color_match_bonus" value="$(arg color_match_bonus)" />
+    <param name="color_mismatch_penalty" value="$(arg color_mismatch_penalty)" />
+    <param name="color_missing_penalty" value="$(arg color_missing_penalty)" />
     <param name="max_teleport_distance_m" value="$(arg max_teleport_distance_m)" />
     <param name="teleport_yaw_gate_deg" value="$(arg teleport_yaw_gate_deg)" />
     <param name="teleport_stability_warmup_sec" value="$(arg teleport_stability_warmup_sec)" />
     <param name="enable_yaw_flip" value="$(arg enable_yaw_flip)" />
     <param name="yaw_flip_threshold_deg" value="$(arg yaw_flip_threshold_deg)" />
+    <param name="enable_waypoint_heading_guard" value="$(arg enable_waypoint_heading_guard)" />
+    <param name="waypoint_heading_window_deg" value="$(arg waypoint_heading_window_deg)" />
+    <param name="disable_collision_check" value="$(arg disable_collision_check)" />
+    <param name="snap_to_spawn_heading" value="$(arg snap_to_spawn_heading)" />
+    <param name="spawn_heading_max_distance_m" value="$(arg spawn_heading_max_distance_m)" />
+    <param name="snap_to_spawn_pose_initial" value="$(arg snap_to_spawn_pose_initial)" />
+    <param name="yaw_blend_enabled" value="$(arg yaw_blend_enabled)" />
+    <param name="yaw_waypoint_weight" value="$(arg yaw_waypoint_weight)" />
+    <param name="yaw_path_weight" value="$(arg yaw_path_weight)" />
+    <param name="yaw_stability_alpha" value="$(arg yaw_stability_alpha)" />
+    <param name="only_correct_yaw_during_alignment" value="$(arg only_correct_yaw_during_alignment)" />
+    <param name="kf_enabled" value="$(arg kf_enabled)" />
+    <param name="kf_default_dt" value="$(arg kf_default_dt)" />
+    <param name="kf_max_dt" value="$(arg kf_max_dt)" />
+    <param name="kf_process_noise_pos" value="$(arg kf_process_noise_pos)" />
+    <param name="kf_process_noise_vel" value="$(arg kf_process_noise_vel)" />
+    <param name="kf_process_noise_yaw_deg" value="$(arg kf_process_noise_yaw_deg)" />
+    <param name="kf_process_noise_yaw_rate_deg" value="$(arg kf_process_noise_yaw_rate_deg)" />
+    <param name="kf_measurement_noise_pos" value="$(arg kf_measurement_noise_pos)" />
+    <param name="kf_measurement_noise_yaw_deg" value="$(arg kf_measurement_noise_yaw_deg)" />
+    <param name="kf_init_pos_std" value="$(arg kf_init_pos_std)" />
+    <param name="kf_init_vel_std" value="$(arg kf_init_vel_std)" />
+    <param name="kf_init_yaw_deg_std" value="$(arg kf_init_yaw_deg_std)" />
+    <param name="kf_init_yaw_rate_deg_std" value="$(arg kf_init_yaw_rate_deg_std)" />
+    <param name="kf_meas_reject_distance_m" value="$(arg kf_meas_reject_distance_m)" />
+    <param name="kf_meas_reject_yaw_deg" value="$(arg kf_meas_reject_yaw_deg)" />
+    <!-- Initial alignment params -->
+    <param name="enable_initial_alignment" value="$(arg enable_initial_alignment)" />
+    <param name="initial_alignment_timeout_sec" value="$(arg initial_alignment_timeout_sec)" />
+    <param name="initial_alignment_dist_gate_m" value="$(arg initial_alignment_dist_gate_m)" />
+    <param name="initial_alignment_yaw_gate_deg" value="$(arg initial_alignment_yaw_gate_deg)" />
+    <param name="initial_alignment_max_teleport_m" value="$(arg initial_alignment_max_teleport_m)" />
+    <param name="initial_alignment_teleport_yaw_gate_deg" value="$(arg initial_alignment_teleport_yaw_gate_deg)" />
+    <param name="initial_alignment_skip_warmup" value="$(arg initial_alignment_skip_warmup)" />
+    <param name="initial_alignment_avg_duration_sec" value="$(arg initial_alignment_avg_duration_sec)" />
   </node>
 </launch>
 
