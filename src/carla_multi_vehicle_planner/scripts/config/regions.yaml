@@ -212,8 +212,8 @@ regions:
   width: 12.953333333333333
   height: 14.315025487450612
 - id: region_11
-  speed_gain: 3.0
-  steering_gain: 0.5
+  speed_gain: 1.0
+  steering_gain: 1.0
   corners:
     top_left:
     - 60.41666666666666

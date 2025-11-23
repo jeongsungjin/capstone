@@ -19,7 +19,7 @@
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
     <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
-    <param name="platoon_gap_m" value="6.0" />
+    <param name="platoon_gap_m" value="8.0" />
   </node>
 
   <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
@@ -52,13 +52,9 @@
     <!-- Optional: 전역 경로에서 특정 영역에 lateral offset 적용 -->
     <param name="offset_regions_file"
            value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
-    <!-- Fixed loop path for platoon vehicles (1, 2, 3) -->
-    <!-- Set this to the YAML file path containing the loop path for platoon vehicles -->
-    <param name="fixed_loop_path_file" value="$(find carla_multi_vehicle_planner)/scripts/manual_path_map_package_Maps_bigmap_bigmap_20251123_123413.yaml" />
-    <!-- Platoon configuration for fixed loop path -->
-    <param name="platoon_enable" value="$(arg enable_platooning)" />
-    <param name="platoon_leader_role" value="ego_vehicle_1" />
-    <param name="platoon_follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- 플래투닝 차량도 일반 동적 경로계획을 사용하도록 fixed loop / planner 내부 platoon 모드 비활성화 -->
+    <param name="fixed_loop_path_file" value="" />
+    <param name="platoon_enable" value="false" />
     <!-- Safety area bounds (must match multi_vehicle_controller) for intersection detection -->
     <param name="safety_x_min" value="-18.0" />
     <param name="safety_x_max" value="18.0" />
@@ -78,12 +74,11 @@
     <!-- Always reset ignore list so stale values from previous runs don't persist -->
     <param name="ignore_roles" value="" />
     <!-- 
-      Platooning mode: 
-      - Rearmost follower (ego_vehicle_3) uses its own path (relayed by path_relay)
-      - Leader and other followers use rearmost's path (handled by platoon_manager)
-      - So we ignore leader and non-rearmost followers, but relay rearmost follower's path
+      Platooning mode (vehicles 1,2,3 share follower-2's path via platoon_manager):
+      - All platoon vehicles (ego_vehicle_1, ego_vehicle_2, ego_vehicle_3) get their planned_path_* from platoon_manager
+      - So we ignore them in path_relay and only relay paths for non-platoon vehicles
     -->
-    <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_1,ego_vehicle_2" />
+    <param if="$(arg enable_platooning)" name="ignore_roles" value="ego_vehicle_1,ego_vehicle_2,ego_vehicle_3" />
   </node>
 
   <!-- 3.5) BEV / Marker visualizer: vehicle cubes + colored path markers on map frame -->
@@ -156,11 +151,17 @@
   <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="platoon_manager.py" name="platoon_manager" output="screen">
     <param name="leader_role" value="ego_vehicle_1" />
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
-    <param name="desired_gap_m" value="3.0" />
+    <param name="desired_gap_m" value="10.0" />
     <param name="teleport_on_start" value="true" />
-    <param name="kp_gap" value="0.3" />
-    <param name="kd_gap" value="0.6" />
-    <param name="max_speed" value="8.0" />
+    <!-- Conservative PD gains for smooth spacing at low speed (2 m/s, 6 m gap) -->
+    <param name="kp_gap" value="0.15" />
+    <param name="kd_gap" value="0.20" />
+    <param name="kp_gap_close" value="0.30" />
+    <param name="kd_gap_close" value="0.30" />
+    <!-- Ignore small gap / relative-speed noise -->
+    <param name="gap_deadband_m" value="1.0" />
+    <param name="rel_speed_deadband" value="0.3" />
+    <param name="max_speed" value="2.0" />
   </node>
 
   <!-- 4.6) Monitoring dashboard -->

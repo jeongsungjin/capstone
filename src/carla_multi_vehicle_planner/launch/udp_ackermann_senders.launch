@@ -3,17 +3,16 @@
   <arg name="bind_ip" default="0.0.0.0" />
 
   <!-- Per-vehicle network args (override as needed). Up to 6 vehicles supported -->
-  <arg name="vehicle_1_ip" default="10.15.129.10" /> <!-- 보라  -->
-
+  <arg name="vehicle_1_ip" default="10.15.129.2" /> <!-- 핑크  -->
   <arg name="vehicle_2_ip" default="10.15.129.7" /> <!-- 초록 -->
-  <arg name="vehicle_3_ip" default="10.15.129.4" /> <!-- 빨강 -->
+  <arg name="vehicle_3_ip" default="10.15.129.51" /> <!-- 보라 -->
   <arg name="vehicle_4_ip" default="127.0.0.1" />
   <arg name="vehicle_5_ip" default="127.0.0.1" />
   <arg name="vehicle_6_ip" default="127.0.0.1" />
   <!-- Vehicle color hints (used by BEV teleporter via shared args) -->
-  <arg name="vehicle_1_color" default="purple" />
+  <arg name="vehicle_1_color" default="pink" />
   <arg name="vehicle_2_color" default="green" />
-  <arg name="vehicle_3_color" default="red" />
+  <arg name="vehicle_3_color" default="purple" />
   <arg name="vehicle_4_color" default="" />
   <arg name="vehicle_5_color" default="" />
   <arg name="vehicle_6_color" default="" />
@@ -46,17 +45,17 @@
     <param name="vehicles/ego_vehicle_6/dest_port" value="5555" />
 
     <!-- Per-vehicle calibration (defaults). Override as needed per car. -->
-    <param name="vehicles/ego_vehicle_1/angle_scale" value="0.8" />
+    <param name="vehicles/ego_vehicle_1/angle_scale" value="1.0" />
     <param name="vehicles/ego_vehicle_1/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
     <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.00" />
-    <param name="vehicles/ego_vehicle_1/speed_scale" value="1.0" />
+    <param name="vehicles/ego_vehicle_1/speed_scale" value="1.5" />
     <param name="vehicles/ego_vehicle_1/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_1/force_min_speed_on_zero" value="false" />
     <param name="vehicles/ego_vehicle_1/zero_speed_value" value="1.0" />
 
-    <param name="vehicles/ego_vehicle_2/angle_scale" value="0.8" />
+    <param name="vehicles/ego_vehicle_2/angle_scale" value="1.0" />
     <param name="vehicles/ego_vehicle_2/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_2/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_2/angle_invert" value="false" />
@@ -70,7 +69,7 @@
     <param name="vehicles/ego_vehicle_3/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_3/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_3/angle_invert" value="false" />
-    <param name="vehicles/ego_vehicle_3/angle_center_rad" value="-0.05" />
+    <param name="vehicles/ego_vehicle_3/angle_center_rad" value="-0.00" />
     <param name="vehicles/ego_vehicle_3/speed_scale" value="1.0" />
     <param name="vehicles/ego_vehicle_3/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_3/force_min_speed_on_zero" value="false" />

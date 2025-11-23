@@ -81,34 +81,11 @@ class MultiAgentConflictFreePlanner:
             self.force_outer_lane_roles = {role.strip() for role in outer_lane_roles_str.split(",") if role.strip()}
             rospy.loginfo("force_outer_lane_roles: %s", self.force_outer_lane_roles)
         
-        # Fixed loop path for platoon vehicles
-        self.fixed_loop_path_file = rospy.get_param("~fixed_loop_path_file", "")
-        # Platoon roles: leader (ego_vehicle_1) + followers (ego_vehicle_2, ego_vehicle_3)
+        # Fixed loop path / platoon-specific planning 모드는 비활성화 (플래투닝 차량도 모두 일반 동적 경로계획 사용)
+        self.fixed_loop_path_file = ""
         self.platoon_roles = set()
-        # Shared-path role for platooning (주로 ego_vehicle_2, follower 중 첫 번째)
         self.platoon_shared_role: Optional[str] = None
-        platoon_enable = rospy.get_param("~platoon_enable", False)
-        if platoon_enable:
-            # Get platoon roles from launch file (default: ego_vehicle_1, ego_vehicle_2, ego_vehicle_3)
-            leader_role = str(rospy.get_param("~platoon_leader_role", "ego_vehicle_1"))
-            follower_roles_str = str(rospy.get_param("~platoon_follower_roles", "ego_vehicle_2,ego_vehicle_3")).strip()
-            follower_roles = [r.strip() for r in follower_roles_str.split(",") if r.strip()]
-            self.platoon_roles = {leader_role} | set(follower_roles)
-            # Shared path role: use first follower if available, else leader
-            if follower_roles:
-                self.platoon_shared_role = follower_roles[0]
-            else:
-                self.platoon_shared_role = leader_role
-            rospy.loginfo("Platoon enabled: roles=%s, shared_path_role=%s", sorted(self.platoon_roles), self.platoon_shared_role)
-        
         self.fixed_loop_path_points: Optional[List[Tuple[float, float, float]]] = None
-        if self.fixed_loop_path_file:
-            self.fixed_loop_path_points = self._load_fixed_loop_path(self.fixed_loop_path_file)
-            if self.fixed_loop_path_points:
-                rospy.loginfo("Loaded fixed loop path: %d points from %s", 
-                             len(self.fixed_loop_path_points), self.fixed_loop_path_file)
-                if self.platoon_roles:
-                    rospy.loginfo("Fixed loop path will be used for platoon vehicles: %s", sorted(self.platoon_roles))
         
         # Safety area bounds for intersection detection (only apply outer lane filter outside intersections)
         # These should match the safety area bounds in multi_vehicle_controller
@@ -201,9 +178,8 @@ class MultiAgentConflictFreePlanner:
         self.vehicle_path_s: Dict[str, List[float]] = {}
         self.vehicle_path_len: Dict[str, float] = {}
         self._planning_lock = threading.RLock()
-        # Mode: when True, platoon vehicles use fixed loop path only (no auto planning)
-        # when False, platoon vehicles use normal/dynamic global planning (and ego_vehicle_2 path is shared via platoon_manager)
-        self.fixed_loop_mode: bool = bool(self.fixed_loop_path_points and self.platoon_roles)
+        # 플래투닝 전용 fixed-loop 모드 비활성화: 항상 동적 경로계획 사용
+        self.fixed_loop_mode: bool = False
 
         # Override goal support (manual goal from RViz via rviz_goal_mux)
         # Map role -> (x, y, stamp)
