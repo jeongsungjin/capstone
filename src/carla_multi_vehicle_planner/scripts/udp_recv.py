@@ -39,8 +39,8 @@ def main():
     current_vehicle_id = None
     destinations = {
         "hotel",
-        "building",  
-        "office",
+        "office",  
+        "info",
         "school",
         "home",
         "church",

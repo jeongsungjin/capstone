@@ -49,11 +49,11 @@ class CarlaPathOffsetRegionEditor:
             ),
         )
         # 키보드 방향키로 영역의 x/y 오프셋을 조정할 때 한 번에 움직이는 거리(m)
-        self.nudge_step_m = float(rospy.get_param("~nudge_step_m", 0.5))
+        self.nudge_step_m = float(rospy.get_param("~nudge_step_m", 0.4))
         self.carla_host = rospy.get_param("~carla_host", "localhost")
         self.carla_port = int(rospy.get_param("~carla_port", 2000))
         self.map_waypoint_resolution = float(
-            rospy.get_param("~map_waypoint_resolution", 4.0)
+            rospy.get_param("~map_waypoint_resolution", 1.0)
         )
 
         if carla is None:
@@ -97,7 +97,7 @@ class CarlaPathOffsetRegionEditor:
 
         # Brush painting state
         self.painting = False
-        self.brush_radius_px = int(rospy.get_param("~brush_radius_px", 6))
+        self.brush_radius_px = int(rospy.get_param("~brush_radius_px", 20))
         # 현재 브러쉬로 그리고 있는 world 좌표 포인트들
         self.current_brush_points: List[Tuple[float, float]] = []
 

@@ -62,7 +62,7 @@ class MultiVehicleController:
         # Target selection policy: use arc-length along path (preserves waypoint order)
         self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
         # Region-based control gains
-        self.regions_config_file = rospy.get_param("~regions_config_file", "/home/ctrl/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
+        self.regions_config_file = rospy.get_param("~regions_config_file", "/home/jamie/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
         self.default_speed_gain = float(rospy.get_param("~default_speed_gain", 1.0))
         self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.7))
         self.regions: List[Dict] = []

@@ -138,8 +138,8 @@ class CamPerspective:
         self._forced_use_cam_index = None
         self._destination_to_cam_index = {
             "hotel": 1,
-            "building": 2,
-            "office": 3,
+            "office": 2,
+            "info": 3,
             "school": 4,
             "home": 5,
             "church": 6,

@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>Multi-vehicle planning and visualization pipeline for CARLA 0.9.16 using ROS1.</description>
 
-  <maintainer email="user@example.com">ctrl</maintainer>
+  <maintainer email="user@example.com">jamie</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>catkin</buildtool_depend>
