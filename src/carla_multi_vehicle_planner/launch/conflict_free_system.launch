@@ -28,7 +28,7 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="global_route_resolution" value="1.0" />
     <param name="path_sampling" value="0.3" />
-    <param name="min_destination_distance" value="50.0" />
+    <param name="min_destination_distance" value="80.0" />
     <param name="max_destination_distance" value="180.0" />
     <param name="destination_retry_limit" value="120" />
     <param name="start_k_candidates" value="80" />
@@ -40,8 +40,30 @@
     <param name="conflict_key_resolution" value="1.0" />
     <param name="heading_compat_deg" value="75.0" />
     <!-- Replanning only when close to destination -->
-    <param name="replan_remaining_m" value="50.0" />
+    <param name="replan_remaining_m" value="60.0" />
     <param name="replan_interval" value="1.0" />
+    <!-- Force outer lane for specific vehicles (comma-separated, e.g., "ego_vehicle_2") -->
+    <!-- Outer lane filtering is applied ONLY outside safety area (intersections) to allow turns -->
+    <param name="force_outer_lane_roles" value="ego_vehicle_2" />
+    <!-- Optional: 사용자 편집 글로벌 루트 YAML을 목적지 후보 세트로 사용 (ON/OFF) -->
+    <param name="use_custom_goal_points" value="true" />
+    <param name="custom_goal_points_file"
+           value="$(find carla_multi_vehicle_planner)/scripts/config/edited_global_route.yaml" />
+    <!-- Optional: 전역 경로에서 특정 영역에 lateral offset 적용 -->
+    <param name="offset_regions_file"
+           value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
+    <!-- Fixed loop path for platoon vehicles (1, 2, 3) -->
+    <!-- Set this to the YAML file path containing the loop path for platoon vehicles -->
+    <param name="fixed_loop_path_file" value="$(find carla_multi_vehicle_planner)/scripts/manual_path_map_package_Maps_bigmap_bigmap_20251123_123413.yaml" />
+    <!-- Platoon configuration for fixed loop path -->
+    <param name="platoon_enable" value="$(arg enable_platooning)" />
+    <param name="platoon_leader_role" value="ego_vehicle_1" />
+    <param name="platoon_follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- Safety area bounds (must match multi_vehicle_controller) for intersection detection -->
+    <param name="safety_x_min" value="-18.0" />
+    <param name="safety_x_max" value="18.0" />
+    <param name="safety_y_min" value="-35.0" />
+    <param name="safety_y_max" value="3.0" />
   </node>
 
   <!-- 2.5) Occupancy grid for road geometry (RViz Map display on /map) -->
@@ -92,7 +114,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
-    <param name="target_speed" value="8.0" />
+    <param name="target_speed" value="2.0" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
     <param name="safety_x_min" value="-18.0" />
@@ -134,11 +156,11 @@
   <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="platoon_manager.py" name="platoon_manager" output="screen">
     <param name="leader_role" value="ego_vehicle_1" />
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
-    <param name="desired_gap_m" value="8.0" />
+    <param name="desired_gap_m" value="3.0" />
     <param name="teleport_on_start" value="true" />
     <param name="kp_gap" value="0.3" />
     <param name="kd_gap" value="0.6" />
-    <param name="max_speed" value="3.0" />
+    <param name="max_speed" value="8.0" />
   </node>
 
   <!-- 4.6) Monitoring dashboard -->

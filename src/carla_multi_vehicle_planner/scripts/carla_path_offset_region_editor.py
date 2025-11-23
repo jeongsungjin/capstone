@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+
+import math
+import os
+from typing import List, Tuple, Dict, Any
+
+import cv2
+import numpy as np
+import rospy
+import yaml
+
+try:
+    from setup_carla_path import CARLA_EGG, AGENTS_ROOT  # type: ignore
+except Exception:
+    CARLA_EGG = None
+    AGENTS_ROOT = None
+
+try:
+    import carla  # type: ignore
+except Exception as exc:  # pragma: no cover
+    carla = None
+    rospy.logfatal(f"[OFFSET_EDITOR] Failed to import CARLA: {exc}")
+
+
+class CarlaPathOffsetRegionEditor:
+    """
+    CARLA 맵 위에서 '좌표 오프셋을 줄 영역'을 브러쉬로 칠해서 지정하고
+    각 영역마다 lateral + x/y 방향 오프셋 값을 설정하는 도구.
+
+    - CARLA 맵 로드 → driving lane waypoint 를 2D로 시각화
+    - 마우스 드래그로 브러쉬 영역을 칠함 (곡선 커브도 쉽게 지정)
+    - 콘솔에서 영역 id, 기본 오프셋(lateral / x / y)을 입력
+    - 방향키(←→↑↓)로 선택된 영역의 x/y 오프셋을 nudge_step_m 단위로 조정
+    - YAML 로 저장
+
+    이 YAML 은 이후 multi_agent_conflict_free_planner 의q
+    _route_to_points() 같은 곳에서 좌표 오프셋을 적용할 때 사용할 수 있다.
+    """
+
+    def __init__(self) -> None:
+        rospy.init_node("carla_path_offset_region_editor", anonymous=True)
+
+        self.output_yaml = rospy.get_param(
+            "~output_yaml",
+            os.path.join(
+                os.path.dirname(__file__),
+                "config",
+                "path_offset_regions.yaml",
+            ),
+        )
+        # 키보드 방향키로 영역의 x/y 오프셋을 조정할 때 한 번에 움직이는 거리(m)
+        self.nudge_step_m = float(rospy.get_param("~nudge_step_m", 0.5))
+        self.carla_host = rospy.get_param("~carla_host", "localhost")
+        self.carla_port = int(rospy.get_param("~carla_port", 2000))
+        self.map_waypoint_resolution = float(
+            rospy.get_param("~map_waypoint_resolution", 4.0)
+        )
+
+        if carla is None:
+            raise RuntimeError("[OFFSET_EDITOR] CARLA Python API not available")
+
+        # Connect to CARLA
+        client = carla.Client(self.carla_host, self.carla_port)
+        client.set_timeout(5.0)
+        self.world = client.get_world()
+        self.carla_map = self.world.get_map()
+
+        # Generate base waypoints for visualization
+        waypoints = self.carla_map.generate_waypoints(self.map_waypoint_resolution)
+        self.map_points: List[Tuple[float, float]] = []
+        for wp in waypoints:
+            try:
+                if wp.lane_type != carla.LaneType.Driving:
+                    continue
+            except Exception:
+                pass
+            loc = wp.transform.location
+            self.map_points.append((float(loc.x), float(loc.y)))
+
+        if not self.map_points:
+            raise RuntimeError("[OFFSET_EDITOR] No driving waypoints found on map")
+
+        # Image/transform parameters
+        self.margin = 40
+        self.img_size = 1000
+        self._compute_bounds()
+
+        # Brush painting state
+        self.painting = False
+        self.brush_radius_px = int(rospy.get_param("~brush_radius_px", 6))
+        # 현재 브러쉬로 그리고 있는 world 좌표 포인트들
+        self.current_brush_points: List[Tuple[float, float]] = []
+
+        # Collected regions
+        # Each region: {id, points (world coords), center, offset_lateral_m, offset_x_m, offset_y_m}
+        self.regions: List[Dict[str, Any]] = []
+
+        # 현재 선택/조정 대상 영역 인덱스 (기본: 마지막 영역)
+        self.selected_region_idx: int = -1
+
+        self._run_ui()
+
+    # -------------------------------------------------------------
+    # 좌표 변환
+    # -------------------------------------------------------------
+    def _compute_bounds(self) -> None:
+        xs = [p[0] for p in self.map_points]
+        ys = [p[1] for p in self.map_points]
+        self.min_x = min(xs)
+        self.max_x = max(xs)
+        self.min_y = min(ys)
+        self.max_y = max(ys)
+
+        width = max(self.max_x - self.min_x, 1e-3)
+        height = max(self.max_y - self.min_y, 1e-3)
+        span = max(width, height)
+        available = self.img_size - 2 * self.margin
+        self.scale = available / span
+
+    def world_to_image(self, x: float, y: float) -> Tuple[int, int]:
+        u = int((x - self.min_x) * self.scale) + self.margin
+        # OpenCV: y-axis downwards
+        v = int((self.max_y - y) * self.scale) + self.margin
+        return u, v
+
+    def image_to_world(self, u: int, v: int) -> Tuple[float, float]:
+        x = (u - self.margin) / self.scale + self.min_x
+        y = self.max_y - (v - self.margin) / self.scale
+        return float(x), float(y)
+
+    # -------------------------------------------------------------
+    # UI 루프
+    # -------------------------------------------------------------
+    def _run_ui(self) -> None:
+        win_name = "CARLA Path Offset Region Editor"
+        cv2.namedWindow(win_name)
+        cv2.setMouseCallback(win_name, self._on_mouse)
+
+        rospy.loginfo(
+            "[OFFSET_EDITOR] UI started. "
+            "마우스 드래그=브러쉬 영역, 방향키=off_x/off_y 조정, S=YAML 저장, Q/ESC=종료"
+        )
+
+        while not rospy.is_shutdown():
+            img = np.ones((self.img_size, self.img_size, 3), dtype=np.uint8) * 40
+
+            # Draw map waypoints
+            for x, y in self.map_points:
+                u, v = self.world_to_image(x, y)
+                cv2.circle(img, (u, v), 1, (120, 120, 120), -1)
+
+            # Draw existing regions (브러쉬 포인트 + 현재 offset 반영)
+            for idx, region in enumerate(self.regions):
+                pts = region.get("points", [])
+                if not pts:
+                    continue
+                color = (0, 255, 255) if idx == self.selected_region_idx else (255, 255, 0)
+                off_x = float(region.get("offset_x_m", 0.0))
+                off_y = float(region.get("offset_y_m", 0.0))
+                for (cx, cy) in pts[:: max(1, len(pts) // 500)]:  # 많을 때는 샘플링
+                    u, v = self.world_to_image(cx + off_x, cy + off_y)
+                    cv2.circle(img, (u, v), 2, color, -1)
+                center = region.get("center", [0.0, 0.0])
+                oid = str(region.get("id", ""))
+                off_lat = float(region.get("offset_lateral_m", 0.0))
+                cu, cv = self.world_to_image(center[0] + off_x, center[1] + off_y)
+                cv2.putText(
+                    img,
+                    f"{oid}: lat={off_lat:.2f}, dx={off_x:.2f}, dy={off_y:.2f}",
+                    (cu + 5, cv - 5),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+            # Draw current painting stroke
+            if self.painting and self.current_brush_points:
+                for (cx, cy) in self.current_brush_points:
+                    u, v = self.world_to_image(cx, cy)
+                    cv2.circle(img, (u, v), self.brush_radius_px, (0, 255, 0), 1)
+
+            help_text = "Drag: paint region, Arrows: adjust dx/dy, S: save YAML, Q/ESC: quit (id/offset은 콘솔에서 입력)"
+            cv2.putText(
+                img,
+                help_text,
+                (10, self.img_size - 15),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                (200, 200, 200),
+                1,
+                cv2.LINE_AA,
+            )
+
+            cv2.imshow(win_name, img)
+            key = cv2.waitKey(30) & 0xFF
+            if key == 27 or key == ord("q"):
+                rospy.loginfo("[OFFSET_EDITOR] exit requested")
+                break
+            elif key == ord("s"):
+                self._save_yaml()
+            # 방향키로 마지막/선택된 영역을 world 좌표 기준으로 이동
+            elif key == 81:  # left
+                self._nudge_selected_region(dx=-self.nudge_step_m, dy=0.0)
+            elif key == 83:  # right
+                self._nudge_selected_region(dx=self.nudge_step_m, dy=0.0)
+            elif key == 82:  # up
+                self._nudge_selected_region(dx=0.0, dy=self.nudge_step_m)
+            elif key == 84:  # down
+                self._nudge_selected_region(dx=0.0, dy=-self.nudge_step_m)
+
+        cv2.destroyAllWindows()
+
+    # -------------------------------------------------------------
+    # 마우스 콜백
+    # -------------------------------------------------------------
+    def _on_mouse(self, event, u, v, flags, param) -> None:
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # 브러쉬 시작
+            self.painting = True
+            self.current_brush_points = []
+            wx, wy = self.image_to_world(u, v)
+            self.current_brush_points.append((wx, wy))
+        elif event == cv2.EVENT_MOUSEMOVE and self.painting:
+            wx, wy = self.image_to_world(u, v)
+            # 너무 촘촘하지 않게 간격 제한
+            if not self.current_brush_points:
+                self.current_brush_points.append((wx, wy))
+            else:
+                lx, ly = self.current_brush_points[-1]
+                if math.hypot(wx - lx, wy - ly) > (self.brush_radius_px / self.scale):
+                    self.current_brush_points.append((wx, wy))
+        elif event == cv2.EVENT_LBUTTONUP and self.painting:
+            self.painting = False
+            if self.current_brush_points:
+                self._register_brush_region(self.current_brush_points)
+
+    def _register_brush_region(self, points_world: List[Tuple[float, float]]) -> None:
+        if not points_world or len(points_world) < 3:
+            rospy.loginfo("[OFFSET_EDITOR] brush stroke too short, ignored")
+            return
+
+        # center 계산
+        xs = [p[0] for p in points_world]
+        ys = [p[1] for p in points_world]
+        center_x = float(sum(xs) / len(xs))
+        center_y = float(sum(ys) / len(ys))
+
+        print("\n[OFFSET_EDITOR] 새로운 영역이 선택되었습니다.")
+        print(f"  #points: {len(points_world)}")
+        print(f"  center(world): ({center_x:.2f},{center_y:.2f})")
+
+        # 콘솔에서 id, offset 값 입력
+        try:
+            region_id = input("  영역 id를 입력하세요 (예: 'R1' 또는 '5'): ").strip()
+        except Exception:
+            region_id = ""
+        if not region_id:
+            region_id = f"region_{len(self.regions)+1}"
+
+        offset_lat = 0.0
+        try:
+            raw = input("  lateral offset [m] (기본 0.0, +면 왼쪽, -면 오른쪽으로 생각): ").strip()
+            if raw:
+                offset_lat = float(raw)
+        except Exception:
+            offset_lat = 0.0
+
+        offset_x = 0.0
+        try:
+            raw = input("  world X offset [m] (기본 0.0, +면 +X 방향): ").strip()
+            if raw:
+                offset_x = float(raw)
+        except Exception:
+            offset_x = 0.0
+
+        offset_y = 0.0
+        try:
+            raw = input("  world Y offset [m] (기본 0.0, +면 +Y 방향): ").strip()
+            if raw:
+                offset_y = float(raw)
+        except Exception:
+            offset_y = 0.0
+
+        region = {
+            "id": region_id,
+            "center": [float(center_x), float(center_y)],
+            "points": [[float(x), float(y)] for (x, y) in points_world],
+            "offset_lateral_m": float(offset_lat),
+            "offset_x_m": float(offset_x),
+            "offset_y_m": float(offset_y),
+        }
+        self.regions.append(region)
+        # 새로 추가된 영역을 선택 대상으로 설정
+        self.selected_region_idx = len(self.regions) - 1
+        rospy.loginfo(
+            "[OFFSET_EDITOR] Added region %s with offset(lat=%.2f, dx=%.2f, dy=%.2f) (center=%.2f,%.2f)",
+            region_id,
+            offset_lat,
+            offset_x,
+            offset_y,
+            center_x,
+            center_y,
+        )
+
+    def _nudge_selected_region(self, dx: float, dy: float) -> None:
+        """선택된 영역의 world X/Y 오프셋 값을 조정."""
+        if not self.regions:
+            return
+        idx = self.selected_region_idx
+        if idx < 0 or idx >= len(self.regions):
+            idx = len(self.regions) - 1
+            self.selected_region_idx = idx
+        region = self.regions[idx]
+        region["offset_x_m"] = float(region.get("offset_x_m", 0.0)) + dx
+        region["offset_y_m"] = float(region.get("offset_y_m", 0.0)) + dy
+        rospy.loginfo(
+            "[OFFSET_EDITOR] Nudged region %s offset to (dx=%.2f, dy=%.2f)",
+            region.get("id", "unknown"),
+            region.get("offset_x_m", 0.0),
+            region.get("offset_y_m", 0.0),
+        )
+
+    # -------------------------------------------------------------
+    # YAML 저장
+    # -------------------------------------------------------------
+    def _save_yaml(self) -> None:
+        if not self.regions:
+            rospy.logwarn("[OFFSET_EDITOR] No regions to save")
+            return
+        data = {
+            "regions": self.regions,
+            "description": "Regions for geometric offset along global paths. "
+            "offset_lateral_m is applied along lane normal; offset_x_m, offset_y_m are world X/Y shifts.",
+        }
+        out_dir = os.path.dirname(self.output_yaml)
+        if out_dir and not os.path.exists(out_dir):
+            os.makedirs(out_dir, exist_ok=True)
+        with open(self.output_yaml, "w") as f:
+            yaml.safe_dump(data, f, sort_keys=False)
+        rospy.loginfo(
+            "[OFFSET_EDITOR] Saved %d regions to %s", len(self.regions), self.output_yaml
+        )
+
+
+if __name__ == "__main__":
+    try:
+        CarlaPathOffsetRegionEditor()
+    except rospy.ROSInterruptException:
+        pass
+
+
