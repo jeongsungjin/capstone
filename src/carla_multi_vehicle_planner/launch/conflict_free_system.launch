@@ -14,7 +14,6 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
-    <param name="target_speed" value="5.5" />
     <param name="spawn_delay" value="1.5" />
     <!-- Optional: spawn-time platoon alignment -->
     <param name="platoon_enable" value="$(arg enable_platooning)" />
@@ -93,15 +92,15 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
-    <param name="target_speed" value="2.0" />
+    <param name="target_speed" value="8.0" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="true" />
-    <param name="safety_x_min" value="-20.0" />
-    <param name="safety_x_max" value="20.0" />
-    <param name="safety_y_min" value="-32.0" />
-    <param name="safety_y_max" value="8.0" />
+    <param name="safety_x_min" value="-18.0" />
+    <param name="safety_x_max" value="18.0" />
+    <param name="safety_y_min" value="-35.0" />
+    <param name="safety_y_max" value="3.0" />
     <param name="safety_distance" value="20.0" />
-    <param name="safety_front_cone_deg" value="140.0" />
+    <param name="safety_front_cone_deg" value="160.0" />
     <param name="safety_require_closing" value="true" />
     <param name="enable_opposite_lane_ignore" value="true" />
     <!-- Controller extensions: hysteresis & external overrides & platoon priority -->
@@ -119,16 +118,16 @@
     <!-- Intersection dynamic priority: Area 0 and Area 1 -->
     <param name="intersection_dynamic_priority" value="true" />
     <!-- Area 0 -->
-    <param name="intersection_x_min" value="-19.0" />
-    <param name="intersection_x_max" value="18.0" />
-    <param name="intersection_y_min" value="-32.0" />
-    <param name="intersection_y_max" value="-20.0" />
+    <param name="intersection_x_min" value="-17.0" />
+    <param name="intersection_x_max" value="17.0" />
+    <param name="intersection_y_min" value="-13.0" />
+    <param name="intersection_y_max" value="3.0" />
     <!-- Area 1 -->
     <param name="intersection2_enabled" value="true" />
-    <param name="intersection2_x_min" value="-20.0" />
-    <param name="intersection2_x_max" value="20.0" />
-    <param name="intersection2_y_min" value="-18.0" />
-    <param name="intersection2_y_max" value="8.0" />
+    <param name="intersection2_x_min" value="-16.0" />
+    <param name="intersection2_x_max" value="16.0" />
+    <param name="intersection2_y_min" value="-20.0" />
+    <param name="intersection2_y_max" value="-34.0" />
   </node>
 
   <!-- 4.5) Platoon manager (optional) -->

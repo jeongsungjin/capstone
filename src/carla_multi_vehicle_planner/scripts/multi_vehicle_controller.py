@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
 import math
-import sys
 import os
+import sys
+from typing import Dict, List, Optional, Tuple
+
 import rospy
+import yaml
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
@@ -42,12 +45,19 @@ class MultiVehicleController:
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 3)
         self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
-        self.wheelbase = rospy.get_param("~wheelbase", 2.8)
+        self.wheelbase = rospy.get_param("~wheelbase", 2.7)
         self.max_steer = rospy.get_param("~max_steer", 1.0)
         self.target_speed = rospy.get_param("~target_speed", 3.0)
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
         # Target selection policy: use arc-length along path (preserves waypoint order)
         self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
+        # Region-based control gains
+        self.regions_config_file = rospy.get_param("~regions_config_file", "/home/ctrl/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
+        self.default_speed_gain = float(rospy.get_param("~default_speed_gain", 1.0))
+        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.3))
+        self.regions: List[Dict] = []
+        if self.regions_config_file:
+            self._load_regions_config()
         # (removed) projection stabilization params
 
         # Safety stop parameters (area-limited)
@@ -109,6 +119,10 @@ class MultiVehicleController:
         self.person_topic = str(rospy.get_param("~person_topic", "/spawned_person"))
         self._person_xy = None  # type: ignore
         self._person_stamp = None  # type: ignore
+        # Global emergency stop (applies to all vehicles regardless of area)
+        self.enable_global_emergency_stop = bool(rospy.get_param("~enable_global_emergency_stop", True))
+        self.global_emergency_distance_m = float(rospy.get_param("~global_emergency_distance_m", 10.0))
+        self.global_emergency_cone_deg = float(rospy.get_param("~global_emergency_cone_deg", 30.0))  # ±60 degrees
         # Tracking hold (pause control when BEV tracking unavailable)
         self.enable_tracking_hold = bool(rospy.get_param("~enable_tracking_hold", True))
         self.tracking_hold_timeout_sec = float(rospy.get_param("~tracking_hold_timeout_sec", 0.5))
@@ -201,6 +215,82 @@ class MultiVehicleController:
             if role in self.states:
                 self.vehicles[role] = actor
 
+    def _load_regions_config(self):
+        """Load region-based control gains from YAML file."""
+        try:
+            config_path = self.regions_config_file
+            if not config_path:
+                rospy.logwarn("Region config file path not specified")
+                return
+            
+            # Support both absolute and relative paths
+            if not os.path.isabs(config_path):
+                # Try to find relative to package
+                try:
+                    import rospkg
+                    rospack = rospkg.RosPack()
+                    pkg_path = rospack.get_path("carla_multi_vehicle_planner")
+                    config_path = os.path.join(pkg_path, config_path)
+                except Exception:
+                    # Fallback to relative to current working directory
+                    pass
+            
+            if not os.path.exists(config_path):
+                rospy.logwarn(f"Region config file not found: {config_path}")
+                return
+            
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            self.regions = config.get("regions", [])
+            rospy.loginfo(f"Loaded {len(self.regions)} regions from {config_path}")
+            
+            # Validate and set default gains if not specified
+            for region in self.regions:
+                if "speed_gain" not in region:
+                    region["speed_gain"] = self.default_speed_gain
+                if "steering_gain" not in region:
+                    region["steering_gain"] = self.default_steering_gain
+                rospy.loginfo(f"  {region.get('id', 'unknown')}: speed_gain={region['speed_gain']:.2f}, steering_gain={region['steering_gain']:.2f}")
+        
+        except Exception as e:
+            rospy.logerr(f"Failed to load region config: {e}")
+            self.regions = []
+    
+    def _point_in_rectangle(self, px: float, py: float, corners: Dict) -> bool:
+        """Check if a point is inside a rectangle defined by 4 corners."""
+        try:
+            tl = corners.get("top_left", [0, 0])
+            tr = corners.get("top_right", [0, 0])
+            br = corners.get("bottom_right", [0, 0])
+            bl = corners.get("bottom_left", [0, 0])
+            
+            # Get rectangle bounds
+            x_min = min(tl[0], tr[0], br[0], bl[0])
+            x_max = max(tl[0], tr[0], br[0], bl[0])
+            y_min = min(tl[1], tr[1], br[1], bl[1])
+            y_max = max(tl[1], tr[1], br[1], bl[1])
+            
+            # Check if point is inside rectangle
+            return x_min <= px <= x_max and y_min <= py <= y_max
+        
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"Error checking point in rectangle: {e}")
+            return False
+    
+    def _get_region_gains(self, x: float, y: float) -> Tuple[float, float]:
+        """Get speed and steering gains for current position."""
+        # Check each region (first match wins)
+        for region in self.regions:
+            corners = region.get("corners", {})
+            if self._point_in_rectangle(x, y, corners):
+                speed_gain = float(region.get("speed_gain", self.default_speed_gain))
+                steering_gain = float(region.get("steering_gain", self.default_steering_gain))
+                return speed_gain, steering_gain
+        
+        # Default gains if not in any region
+        return self.default_speed_gain, self.default_steering_gain
+    
     def _role_index_from_name(self, role):
         try:
             return max(1, int(role.split("_")[-1]))
@@ -213,6 +303,17 @@ class MultiVehicleController:
         x = position.x
         y = position.y
         return (self.safety_x_min <= x <= self.safety_x_max) and (self.safety_y_min <= y <= self.safety_y_max)
+    
+    def _in_safety_area_with_margin(self, position, margin):
+        """Check if position is within safety area with margin (for hysteresis)."""
+        if position is None:
+            return False
+        x = position.x
+        y = position.y
+        return (
+            (self.safety_x_min - margin) <= x <= (self.safety_x_max + margin)
+            and (self.safety_y_min - margin) <= y <= (self.safety_y_max + margin)
+        )
 
     def _which_intersection_area(self, position):
         if position is None:
@@ -281,6 +382,58 @@ class MultiVehicleController:
             return False
         return False
 
+    def _has_imminent_collision(self, my_role, my_position, my_yaw):
+        """Check if there's a vehicle in very close range (emergency stop).
+        
+        This applies globally to all vehicles regardless of intersection area.
+        Checks for vehicles within a narrow front cone at very close distance.
+        """
+        if my_position is None or my_yaw is None:
+            return False
+        
+        forward_x = math.cos(my_yaw)
+        forward_y = math.sin(my_yaw)
+        # Narrow cone: ±60 degrees (total 120 degrees)
+        half_cone_rad = math.radians(self.global_emergency_cone_deg / 2.0)
+        cos_limit = math.cos(half_cone_rad)
+        
+        for other_role, other_state in self.states.items():
+            if other_role == my_role:
+                continue
+            # Skip platoon members if platooning is enabled
+            if (
+                self.platoon_enable
+                and self._platoon_roles
+                and (my_role in self._platoon_roles)
+                and (other_role in self._platoon_roles)
+            ):
+                continue
+            
+            other_pos = other_state.get("position")
+            if other_pos is None:
+                continue
+            
+            dx = other_pos.x - my_position.x
+            dy = other_pos.y - my_position.y
+            dist = math.hypot(dx, dy)
+            
+            # Check distance threshold
+            if dist > self.global_emergency_distance_m:
+                continue
+            
+            # Check if in front cone
+            if dist > 1e-3:
+                dir_dot = (dx * forward_x + dy * forward_y) / dist
+                if dir_dot < cos_limit:
+                    continue
+            
+            # Vehicle found in narrow front cone at very close range
+            rospy.logwarn_throttle(0.5, "[EMERGENCY] %s: vehicle %s detected at %.2fm in front cone (%.1f deg)", 
+                                   my_role, other_role, dist, self.global_emergency_cone_deg)
+            return True
+        
+        return False
+
     def _has_nearby_higher_priority(self, my_role, my_position, my_yaw):
         my_index = self._role_index_from_name(my_role)
         if my_position is None or my_index is None or my_yaw is None:
@@ -317,14 +470,27 @@ class MultiVehicleController:
             other_area = self._which_intersection_area(other_pos)
             if self.intersection_dynamic_priority and in_intersection and (other_area == my_area):
                 other_order = self.intersection_orders.get(my_area, {}).get(other_role)
+                # If both have orders, compare them
                 if other_order is not None and my_order is not None:
                     higher = other_order < my_order
+                # If other has order but I don't, other has higher priority (entered first)
                 elif other_order is not None and my_order is None:
                     higher = True
+                    rospy.logdebug_throttle(1.0, "[PRIORITY] %s (no order) yields to %s (order %d)", 
+                                          my_role, other_role, other_order)
+                # If I have order but other doesn't, I have higher priority (entered first)
+                elif other_order is None and my_order is not None:
+                    higher = False
+                    rospy.logdebug_throttle(1.0, "[PRIORITY] %s (order %d) has priority over %s (no order)", 
+                                          my_role, my_order, other_role)
+                # If neither has order yet, use role index as fallback (to avoid deadlock)
                 else:
                     other_index = self._role_index_from_name(other_role)
                     higher = other_index < my_index
+                    rospy.logdebug_throttle(1.0, "[PRIORITY] %s and %s both have no order, using role index: %d < %d", 
+                                          my_role, other_role, other_index, my_index)
             else:
+                # Outside intersection or dynamic priority disabled, use role index
                 other_index = self._role_index_from_name(other_role)
                 higher = other_index < my_index
 
@@ -524,22 +690,38 @@ class MultiVehicleController:
                         else:
                             steer = cmd.steering_angle
                             speed = cmd.speed
-            # Area-limited safety stop for lower-priority vehicles near other vehicles
+            # Global emergency stop: check for imminent collision regardless of area
             position = state.get("position")
             orientation = state.get("orientation")
             my_yaw = quaternion_to_yaw(orientation) if orientation is not None else None
-            now_sec = float(rospy.Time.now().to_sec())
+            
+            if self.enable_global_emergency_stop and position is not None and my_yaw is not None:
+                if self._has_imminent_collision(role, position, my_yaw):
+                    speed = 0.0
+                    rospy.logwarn_throttle(0.5, "[EMERGENCY] %s: emergency stop due to imminent collision", role)
+            
+            # Area-limited safety stop for lower-priority vehicles near other vehicles
             in_area = self._in_safety_area(position)
             # Area-limited safety stop for lower-priority vehicles near other vehicles
             if self.enable_safety_stop and in_area:
+                now = rospy.Time.now().to_sec()
+                base_area = None
                 if self.intersection_dynamic_priority:
-                    now = rospy.Time.now().to_sec()
                     base_area = self._which_intersection_area(position)
                 # Assign order on first entry to base (tight) area only
-                if base_area is not None:
-                    if role not in self.intersection_orders.get(base_area, {}):
+                if self.intersection_dynamic_priority and base_area is not None:
+                    # Initialize dictionary if needed
+                    if base_area not in self.intersection_orders:
+                        self.intersection_orders[base_area] = {}
+                    if base_area not in self._intersection_counters:
+                        self._intersection_counters[base_area] = 0
+                    
+                    # Assign priority only if not already assigned
+                    if role not in self.intersection_orders[base_area]:
                         self._intersection_counters[base_area] += 1
-                        self.intersection_orders[base_area][role] = self._intersection_counters[base_area]
+                        assigned_order = self._intersection_counters[base_area]
+                        self.intersection_orders[base_area][role] = assigned_order
+                        rospy.loginfo("[INTERSECTION] %s assigned order %d in area %d", role, assigned_order, base_area)
                     # Platoon: inherit leader's order for followers in same area
                     if self.platoon_enable and role in self.platoon_followers:
                         lead_order = self.intersection_orders.get(base_area, {}).get(self.platoon_leader)
@@ -547,6 +729,8 @@ class MultiVehicleController:
                             current = self.intersection_orders.get(base_area, {}).get(role)
                             if current is None or lead_order < current:
                                 self.intersection_orders[base_area][role] = lead_order
+                                rospy.loginfo("[INTERSECTION] %s inherited order %d from leader %s in area %d", 
+                                             role, lead_order, self.platoon_leader, base_area)
                 # Update last-inside timestamps using hysteresis margin for both areas
                 for a_idx in (0, 1):
                     if a_idx == 1 and not self.intersection2_enabled:
@@ -704,6 +888,14 @@ class MultiVehicleController:
         #     speed *= 0.7
         # if Ld < effective_lookahead:
         #     speed *= max(0.0, Ld / max(1e-6, effective_lookahead))
+        
+        # Apply region-based gains
+        if self.regions:
+            speed_gain, steering_gain = self._get_region_gains(x, y)
+            speed *= speed_gain
+            steer *= steering_gain
+            # Re-clamp steering after gain application
+            steer = max(-self.max_steer, min(self.max_steer, steer))
 
         return steer, speed
 
@@ -715,7 +907,7 @@ class MultiVehicleController:
         speed_error = speed - current_speed
         if speed_error > 0:
             control.throttle = max(0.2, min(1.0, speed_error / max(1.0, speed)))
-            control.brake = 0.0
+            control.brake = 0.0 
         else:
             control.throttle = 0.0
             control.brake = min(1.0, -speed_error / max(1.0, self.target_speed))
