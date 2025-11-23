@@ -85,6 +85,16 @@ class CarlaPathOffsetRegionEditor:
         self.img_size = 1000
         self._compute_bounds()
 
+        # Infinite grid (world coordinates) – 8x8m 기본, 원점/위치는 드래그로 조정
+        self.grid_cell_m = float(rospy.get_param("~grid_cell_m", 8.0))
+        # grid origin in world coords (기본: (0,0))
+        self.grid_origin_x = float(rospy.get_param("~grid_origin_x", 0.0))
+        self.grid_origin_y = float(rospy.get_param("~grid_origin_y", 0.0))
+        # Grid drag state (우클릭 드래그)
+        self.dragging_grid = False
+        self.grid_drag_start_px: Tuple[int, int] = (0, 0)
+        self.grid_origin_start: Tuple[float, float] = (self.grid_origin_x, self.grid_origin_y)
+
         # Brush painting state
         self.painting = False
         self.brush_radius_px = int(rospy.get_param("~brush_radius_px", 6))
@@ -138,16 +148,19 @@ class CarlaPathOffsetRegionEditor:
 
         rospy.loginfo(
             "[OFFSET_EDITOR] UI started. "
-            "마우스 드래그=브러쉬 영역, 방향키=off_x/off_y 조정, S=YAML 저장, Q/ESC=종료"
+            "좌클릭 드래그=브러쉬 영역, 우클릭 드래그=격자 위치 조정, 방향키=off_x/off_y 조정, S=YAML 저장, Q/ESC=종료"
         )
 
         while not rospy.is_shutdown():
             img = np.ones((self.img_size, self.img_size, 3), dtype=np.uint8) * 40
 
+            # Draw infinite grid in world coordinates
+            self._draw_grid(img)
+
             # Draw map waypoints
             for x, y in self.map_points:
                 u, v = self.world_to_image(x, y)
-                cv2.circle(img, (u, v), 1, (120, 120, 120), -1)
+                cv2.circle(img, (u, v), 1, (100, 100, 100), -1)
 
             # Draw existing regions (브러쉬 포인트 + 현재 offset 반영)
             for idx, region in enumerate(self.regions):
@@ -181,7 +194,7 @@ class CarlaPathOffsetRegionEditor:
                     u, v = self.world_to_image(cx, cy)
                     cv2.circle(img, (u, v), self.brush_radius_px, (0, 255, 0), 1)
 
-            help_text = "Drag: paint region, Arrows: adjust dx/dy, S: save YAML, Q/ESC: quit (id/offset은 콘솔에서 입력)"
+            help_text = "L-Drag: paint region, R-Drag: move grid, Arrows: adjust dx/dy, S: save YAML, Q/ESC: quit"
             cv2.putText(
                 img,
                 help_text,
@@ -235,6 +248,21 @@ class CarlaPathOffsetRegionEditor:
             self.painting = False
             if self.current_brush_points:
                 self._register_brush_region(self.current_brush_points)
+        # 우클릭: 격자 드래그 시작/종료
+        elif event == cv2.EVENT_RBUTTONDOWN:
+            self.dragging_grid = True
+            self.grid_drag_start_px = (u, v)
+            self.grid_origin_start = (self.grid_origin_x, self.grid_origin_y)
+        elif event == cv2.EVENT_MOUSEMOVE and self.dragging_grid:
+            du = u - self.grid_drag_start_px[0]
+            dv = v - self.grid_drag_start_px[1]
+            # 이미지 → 월드 좌표 변환 (world_to_image 의 역방향)
+            dx_world = du / self.scale
+            dy_world = -dv / self.scale  # 이미지 y는 아래로 증가
+            self.grid_origin_x = self.grid_origin_start[0] + dx_world
+            self.grid_origin_y = self.grid_origin_start[1] + dy_world
+        elif event == cv2.EVENT_RBUTTONUP and self.dragging_grid:
+            self.dragging_grid = False
 
     def _register_brush_region(self, points_world: List[Tuple[float, float]]) -> None:
         if not points_world or len(points_world) < 3:
@@ -342,6 +370,38 @@ class CarlaPathOffsetRegionEditor:
         rospy.loginfo(
             "[OFFSET_EDITOR] Saved %d regions to %s", len(self.regions), self.output_yaml
         )
+
+    # -------------------------------------------------------------
+    # Grid drawing
+    # -------------------------------------------------------------
+    def _draw_grid(self, img: np.ndarray) -> None:
+        """무한 8x8m(기본) 격자를 world 좌표계 기준으로 그리고, 우클릭 드래그로 origin 을 조정."""
+        cell = max(0.1, float(self.grid_cell_m))
+
+        # world bounds of current view
+        x_min = self.min_x
+        x_max = self.max_x
+        y_min = self.min_y
+        y_max = self.max_y
+
+        # vertical lines (고정 x)
+        # k such that x = grid_origin_x + k*cell in [x_min, x_max]
+        start_k = int(math.floor((x_min - self.grid_origin_x) / cell))
+        end_k = int(math.ceil((x_max - self.grid_origin_x) / cell))
+        for k in range(start_k, end_k + 1):
+            gx = self.grid_origin_x + k * cell
+            p1u, p1v = self.world_to_image(gx, y_min)
+            p2u, p2v = self.world_to_image(gx, y_max)
+            cv2.line(img, (p1u, p1v), (p2u, p2v), (60, 60, 60), 1)
+
+        # horizontal lines (고정 y)
+        start_l = int(math.floor((y_min - self.grid_origin_y) / cell))
+        end_l = int(math.ceil((y_max - self.grid_origin_y) / cell))
+        for l in range(start_l, end_l + 1):
+            gy = self.grid_origin_y + l * cell
+            p1u, p1v = self.world_to_image(x_min, gy)
+            p2u, p2v = self.world_to_image(x_max, gy)
+            cv2.line(img, (p1u, p1v), (p2u, p2v), (60, 60, 60), 1)
 
 
 if __name__ == "__main__":
