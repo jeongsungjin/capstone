@@ -28,34 +28,37 @@ def send_command(host: str, port: int, payload: dict, timeout: float = 2.0) -> d
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Flip a track's yaw via the realtime fusion server command port.")
+    parser = argparse.ArgumentParser(description="Set a track's color label via the realtime fusion server command port.")
     parser.add_argument("--host", default="192.168.0.173", help="command server host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=18100, help="command server port (default: 18100)")
     parser.add_argument("--track-id", type=int, required=True, help="target track id")
-    parser.add_argument("--delta", type=float, default=180.0, help="yaw delta degrees (default: 180)")
+    parser.add_argument("--color", required=True, help="color label to set (use 'none' to clear)")
     parser.add_argument("--timeout", type=float, default=2.0, help="command response timeout (seconds)")
     args = parser.parse_args()
 
+    color_str = str(args.color).strip()
+    color_payload = None if not color_str or color_str.lower() == "none" else color_str
+
     payload = {
-        "cmd": "flip_yaw",
+        "cmd": "set_color",
         "track_id": args.track_id,
-        "delta": args.delta,
+        "color": color_payload,
     }
 
     try:
         resp = send_command(args.host, args.port, payload, timeout=args.timeout)
     except RuntimeError as exc:
-        print(f"[flip_track] {exc}", file=sys.stderr)
+        print(f"[set_track_color] {exc}", file=sys.stderr)
         sys.exit(1)
 
     status = resp.get("status")
     if status == "ok":
         track_id = resp.get("track_id")
-        delta = resp.get("delta")
-        print(f"[flip_track] flipped track {track_id} by {delta} degrees")
+        color = resp.get("color")
+        print(f"[set_track_color] set track {track_id} color -> {color}")
     else:
         message = resp.get("message", "unknown error")
-        print(f"[flip_track] command failed: {message}", file=sys.stderr)
+        print(f"[set_track_color] command failed: {message}", file=sys.stderr)
         sys.exit(1)
 
 

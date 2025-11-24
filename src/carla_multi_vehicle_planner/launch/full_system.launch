@@ -19,10 +19,10 @@
   <arg name="yaw_path_weight" default="0.3" />
   <arg name="yaw_stability_alpha" default="0.6" />
   <!-- Vehicle color hints (used for Hungarian matching assist) -->
-  <arg name="vehicle_1_color" default="red" />
-  <arg name="vehicle_2_color" default="purple" />
-  <arg name="vehicle_3_color" default="pink" />
-  <arg name="vehicle_4_color" default="" />
+  <arg name="vehicle_1_color" default="yellow" />
+  <arg name="vehicle_2_color" default="green" />
+  <arg name="vehicle_3_color" default="red" />
+  <arg name="vehicle_4_color" default="purple" />
   <arg name="vehicle_5_color" default="" />
   <arg name="vehicle_6_color" default="" />
   <arg name="enable_color_matching" default="true" />
