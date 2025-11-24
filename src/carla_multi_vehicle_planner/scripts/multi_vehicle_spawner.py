@@ -43,7 +43,7 @@ DEFAULT_MODEL_MAP: List[str] = [
     "vehicle.vehicle.purplexycar",     # ego_vehicle_2
     "vehicle.vehicle.pinkxycar",  # ego_vehicle_3
     "vehicle.vehicle.whitexycar",  # ego_vehicle_4
-    "vehicle.vehicle.redxycar",    # ego_vehicle_5
+    "vehicle.vehicle.greenxycar",    # ego_vehicle_5
     "vehicle.vehicle.yellowxycar",   # ego_vehicle_6
 ]
 
@@ -99,6 +99,9 @@ class MultiVehicleSpawner:
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
         self.spawn_min_separation_m = float(rospy.get_param("~spawn_min_separation_m", 8.0))
+        self.spawn_z_offset_m = float(rospy.get_param("~spawn_z_offset_m", 0.5))
+        self.use_waypoint_spawn_fallback = bool(rospy.get_param("~use_waypoint_spawn_fallback", True))
+        self.waypoint_spawn_spacing_m = float(rospy.get_param("~waypoint_spawn_spacing_m", 8.0))
         self.vehicle_models_param = str(rospy.get_param("~vehicle_models", "")).strip()
         self.spawn_indices_param = str(rospy.get_param("~spawn_indices", "")).strip()
         self.align_spawn_heading = bool(rospy.get_param("~align_spawn_heading", True))
@@ -125,8 +128,18 @@ class MultiVehicleSpawner:
                 self.enable_autopilot = False
         self.carla_map = self.world.get_map()
         self.spawn_points = self.carla_map.get_spawn_points()
+        # Fallback: if map provides too few spawn points (custom maps), synthesize from waypoints
+        if (not self.spawn_points or len(self.spawn_points) < max(2, self.num_vehicles)) and self.use_waypoint_spawn_fallback:
+            try:
+                self._augment_spawn_points_with_waypoints()
+                rospy.loginfo(
+                    "multi_vehicle_spawner: waypoint fallback used, total spawn candidates=%d",
+                    len(self.spawn_points),
+                )
+            except Exception as exc:
+                rospy.logwarn("multi_vehicle_spawner: waypoint fallback failed: %s", exc)
         if not self.spawn_points:
-            raise RuntimeError("No spawn points available in CARLA map")
+            raise RuntimeError("No spawn points available in CARLA map (and waypoint fallback failed)")
 
         seed_value = int(self.spawn_seed) if self.spawn_seed is not None else None
         initial_seed = seed_value if seed_value is not None else time.time()
@@ -274,6 +287,11 @@ class MultiVehicleSpawner:
 
             for transform, spawn_index in self._iter_candidate_transforms(seed_hint):
                 aligned_transform = self._align_heading_to_lane(transform)
+                # Lift Z slightly to avoid immediate collisions with ground/props on custom maps
+                try:
+                    aligned_transform.location.z = float(aligned_transform.location.z) + float(self.spawn_z_offset_m)
+                except Exception:
+                    pass
                 # Enforce minimum separation from previously spawned vehicles
                 too_close = False
                 for _role, (prev_tf, _idx) in self.spawned_transforms.items():
@@ -314,6 +332,53 @@ class MultiVehicleSpawner:
             rospy.loginfo("%s: spawned at map spawn index %s", role_name, spawn_idx_str)
             self.publish_initial_pose(chosen_transform)
             time.sleep(self.spawn_delay)
+
+    def _augment_spawn_points_with_waypoints(self) -> None:
+        """
+        Populate additional spawn candidates from map waypoints to support custom maps
+        that provide few or no built-in spawn points.
+        """
+        if self.carla_map is None:
+            return
+        try:
+            spacing = max(2.0, float(self.waypoint_spawn_spacing_m))
+        except Exception:
+            spacing = 8.0
+        try:
+            waypoints = self.carla_map.generate_waypoints(spacing)
+        except Exception as exc:
+            rospy.logwarn("generate_waypoints failed: %s", exc)
+            return
+        if not waypoints:
+            return
+        # Use a simple thinning by distance to avoid dense clusters
+        candidates = list(self.spawn_points) if self.spawn_points else []
+        for wp in waypoints:
+            tf = wp.transform
+            # Slight Z lift will be applied again during spawn, but keep here too so initial pose is sensible
+            try:
+                tf.location.z = float(tf.location.z) + float(self.spawn_z_offset_m)
+            except Exception:
+                pass
+            if self._far_from_existing(tf, candidates, self.spawn_min_separation_m * 0.8):
+                candidates.append(tf)
+        self.spawn_points = candidates
+
+    @staticmethod
+    def _far_from_existing(tf: "carla.Transform", existing: List["carla.Transform"], min_dist: float) -> bool:
+        if not existing:
+            return True
+        md = max(0.0, float(min_dist))
+        x = float(tf.location.x)
+        y = float(tf.location.y)
+        z = float(tf.location.z)
+        for etf in existing:
+            dx = x - float(etf.location.x)
+            dy = y - float(etf.location.y)
+            dz = z - float(etf.location.z)
+            if math.sqrt(dx * dx + dy * dy + dz * dz) < md:
+                return False
+        return True
 
     def _enable_autopilot_for_pending(self, _event):
         if not self._autopilot_pending:
