@@ -1,14 +1,16 @@
 #include "perception/model.h"
 #include "perception/perception_node.h"
+#include "ip_camera/rtsp_stream_manager.h"
 #include <rclcpp_components/register_node_macro.hpp>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <algorithm>
+#include <yaml-cpp/yaml.h>
 
 using namespace std::chrono_literals;
 
 PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
-	: Node("perception_node", options), batch_size_(6)
+	: Node("perception_node", options), batch_size_(7)
 {
 	this->declare_parameter<std::string>("pkg_path", "");
 	this->get_parameter("pkg_path", pkg_path_);
@@ -20,143 +22,80 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 		}
 	}
 
-	for(int i = 0; i < batch_size_; i++){
-		auto pub = this->create_publisher<sensor_msgs::msg::Image>(
-			"viz_result/cam" + std::to_string(i+1), 
-			rclcpp::SensorDataQoS()
-		);
-		viz_result_pubs_.emplace_back(pub);
-	}
-	
+	auto qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort();
 	detection_pub_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
 		"detection_info", 
-		rclcpp::QoS(10)
+		qos
 	);
 
 	model_ = std::make_unique<Model>(pkg_path_, batch_size_);
 
-	sub_a_ = std::make_unique<ImgSubscriber>(this, "/ipcam_1/image_raw");
-	sub_b_ = std::make_unique<ImgSubscriber>(this, "/ipcam_2/image_raw");
-	sub_c_ = std::make_unique<ImgSubscriber>(this, "/ipcam_3/image_raw");
-	sub_d_ = std::make_unique<ImgSubscriber>(this, "/ipcam_4/image_raw");
-	sub_e_ = std::make_unique<ImgSubscriber>(this, "/ipcam_5/image_raw");
-	sub_f_ = std::make_unique<ImgSubscriber>(this, "/ipcam_6/image_raw");
+	// Load YAML configuration
+	pkg_path_ = ament_index_cpp::get_package_share_directory("ip_camera");
+	std::string yaml_path = pkg_path_ + "/config/ipcam.yaml";
+	YAML::Node config = YAML::LoadFile(yaml_path);
 
-	// increase queue size to buffer more messages and set a maximum allowed interval
-	sync_ = std::make_shared<Synchronizer>(SyncPolicy(10), *sub_a_, *sub_b_, *sub_c_, *sub_d_, *sub_e_, *sub_f_);
-	// Wait at most 50 ms for matching messages — tune this (20-200ms) depending on jitter
-	sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(0.05));
-	sync_->registerCallback(std::bind(
-		&PerceptionNode::syncCallback, this, 
-		std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, 
-		std::placeholders::_4, std::placeholders::_5, std::placeholders::_6));
+	// Initialize RTSPStreamManager
+	rtsp_manager_ = std::make_unique<RTSPStreamManager>(batch_size_);
 
-	RCLCPP_INFO(this->get_logger(), "PerceptionNode started; listening 6 image topics and feeding model (batch=%d)", batch_size_);
+	for (int i = 8; i < 8 + batch_size_; ++i) {
+		std::string camera_key = "ipcam_" + std::to_string(i);
+		if (config[camera_key]) {
+			std::string ip = config[camera_key]["ros__parameters"]["ip"].as<std::string>();
+			int port = config["/**"]["ros__parameters"]["port"].as<int>();
+			std::string username = config["/**"]["ros__parameters"]["username"].as<std::string>();
+			std::string password = config["/**"]["ros__parameters"]["password"].as<std::string>();
 
-	// init sync rate monitor
-	sync_count_.store(0);
-	sync_start_ = std::chrono::steady_clock::now();
+			std::string rtsp_url = "rtsp://" + username + ":" + password + "@" + ip + ":" + std::to_string(port) + "/stream1";
+			rtsp_manager_->addStream(camera_key, rtsp_url, 10);
+		} else {
+			RCLCPP_WARN(this->get_logger(), "Camera configuration for %s not found in YAML", camera_key.c_str());
+		}
+	}
+
+	RCLCPP_INFO(this->get_logger(), "PerceptionNode started; using RTSPStreamManager for %d streams.", batch_size_);
+
+	// Start processing loop
+	processing_thread_ = std::thread(&PerceptionNode::processStreams, this);
 }
 
-void PerceptionNode::syncCallback(const ImageMsg::ConstSharedPtr& a, const ImageMsg::ConstSharedPtr& b,
-								  const ImageMsg::ConstSharedPtr& c, const ImageMsg::ConstSharedPtr& d,
-								  const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f)
-{
-	// increment sync counter and possibly log rate once per second
-	sync_count_.fetch_add(1, std::memory_order_relaxed);
-	auto now = std::chrono::steady_clock::now();
-	auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - sync_start_).count();
-	if (elapsed >= 1000) {
-		uint64_t cnt = sync_count_.exchange(0);
-		sync_start_ = now;
-		double hz = static_cast<double>(cnt) / (static_cast<double>(elapsed) / 1000.0);
-		RCLCPP_INFO(this->get_logger(), "[Perception] syncCallback called: %lu times in %.3f s -> %.2f Hz", cnt, static_cast<double>(elapsed)/1000.0, hz);
-	}
-
-	// compute header stamp spread among the 4 messages for diagnosis
-	try {
-		rclcpp::Time ta(a->header.stamp);
-		rclcpp::Time tb(b->header.stamp);
-		rclcpp::Time tc(c->header.stamp);
-		rclcpp::Time td(d->header.stamp);
-		rclcpp::Time te(e->header.stamp);
-		rclcpp::Time tf(f->header.stamp);
-		auto na = static_cast<int64_t>(ta.nanoseconds());
-		auto nb = static_cast<int64_t>(tb.nanoseconds());
-		auto nc = static_cast<int64_t>(tc.nanoseconds());
-		auto nd = static_cast<int64_t>(td.nanoseconds());
-		auto ne = static_cast<int64_t>(te.nanoseconds());
-		auto nf = static_cast<int64_t>(tf.nanoseconds());
-		int64_t tmin = std::min({na, nb, nc, nd, ne, nf});
-		int64_t tmax = std::max({na, nb, nc, nd, ne, nf});
-		double delta_ms = static_cast<double>(tmax - tmin) / 1e6;
-		// warn if timestamps among the 4 images differ significantly
-		const double WARN_THRESHOLD_MS = 20.0; // tuneable
-		if (delta_ms > WARN_THRESHOLD_MS) {
-			RCLCPP_WARN(this->get_logger(), "[Perception] header.stamp spread = %.2f ms (min=%ld max=%ld)", delta_ms, tmin, tmax);
+void PerceptionNode::processStreams() {
+	rclcpp::WallRate rate(1000); // target processing cadence
+	const auto per_stream_timeout = std::chrono::milliseconds(5); // per stream wait cap
+	while (rclcpp::ok()) {
+		// Attempt timed retrieval; skip incomplete batches without blocking indefinitely
+		auto frames = rtsp_manager_->getAllFramesWithTimeout(per_stream_timeout);
+		if (frames.size() != batch_size_) {
+			// Not a full batch yet; short sleep to avoid busy spin
+			rate.sleep();
+			continue;
 		}
-	} catch (...) {
-		// ignore any stamp conversion issues
+
+		// for(auto frame: frames){
+		// 	cv::imshow("Frame", frame);
+		// }
+
+		int ret = model_->preprocess(frames);
+		if (ret != 0) {
+			RCLCPP_WARN(this->get_logger(), "Model preprocess returned %d", ret);
+			rate.sleep();
+			continue;
+		}
+		model_->inference();
+		model_->postprocess(detection_msg_);
+		detection_pub_->publish(detection_msg_);
+		// rate.sleep();
+
+		// cv::waitKey(1);
 	}
-
-	std::vector<std::shared_ptr<cv::Mat>> images;
-	images.reserve(6);
-
-	try {
-		auto ca = cv_bridge::toCvCopy(a, "bgr8");
-		auto cb = cv_bridge::toCvCopy(b, "bgr8");
-		auto cc = cv_bridge::toCvCopy(c, "bgr8");
-		auto cd = cv_bridge::toCvCopy(d, "bgr8");
-		auto ce = cv_bridge::toCvCopy(e, "bgr8");
-		auto cf = cv_bridge::toCvCopy(f, "bgr8");
-
-		images.emplace_back(std::make_shared<cv::Mat>(ca->image));
-		images.emplace_back(std::make_shared<cv::Mat>(cb->image));
-		images.emplace_back(std::make_shared<cv::Mat>(cc->image));
-		images.emplace_back(std::make_shared<cv::Mat>(cd->image));
-		images.emplace_back(std::make_shared<cv::Mat>(ce->image));
-		images.emplace_back(std::make_shared<cv::Mat>(cf->image));
-	} catch (const cv_bridge::Exception& e) {
-		RCLCPP_WARN(this->get_logger(), "cv_bridge exception: %s", e.what());
-		return;
-	}
-
-	int ret = model_->preprocess(images);
-	if(ret != 0){
-		RCLCPP_WARN(this->get_logger(), "Model preprocess returned %d", ret);
-		return;
-	}
-
-	model_->inference();
-	model_->postprocess(detection_msg_);
-
-	detection_pub_->publish(detection_msg_);
-
-    publishVizResult(images);
 }
 
-void PerceptionNode::publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs){
-	const auto& detections = model_->getDetections();
-
-	for (size_t b = 0; b < detections.size(); ++b) {
-		cv_bridge::CvImage out_msg;
-		out_msg.encoding = sensor_msgs::image_encodings::BGR8;
-		imgs[b]->copyTo(out_msg.image);
-		out_msg.header.stamp = this->get_clock()->now();
-
-		for (size_t i = 0; i < detections[b].poly4s.size(); ++i) {
-			std::vector<cv::Point> poly = {
-				cv::Point(detections[b].poly4s[i](0, 0), detections[b].poly4s[i](0, 1)),
-				cv::Point(detections[b].poly4s[i](1, 0), detections[b].poly4s[i](1, 1)),
-				cv::Point(detections[b].poly4s[i](2, 0), detections[b].poly4s[i](2, 1)),
-				cv::Point(detections[b].poly4s[i](3, 0), detections[b].poly4s[i](3, 1))
-			};
-			const std::vector<std::vector<cv::Point>> polys{poly};
-			cv::polylines(out_msg.image, polys, true, cv::Scalar(0, 255, 0), 2);
-		}
-
-		auto img_msg = out_msg.toImageMsg();
-		viz_result_pubs_[b]->publish(*img_msg);
+PerceptionNode::~PerceptionNode() {
+	if (rtsp_manager_) {
+		rtsp_manager_->stopAll();
+	}
+	if (processing_thread_.joinable()) {
+		processing_thread_.join();
 	}
 }
 

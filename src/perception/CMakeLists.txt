@@ -20,6 +20,8 @@ find_package(BLAS REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
+find_package(ip_camera REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
 option(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 set(CUDA_NVCC_FLAGS "${CUDA_NVCC_FLAGS} -Xcompiler=-fPIC")
@@ -50,7 +52,6 @@ if(BUILD_TESTING)
   # comment the line when a copyright and license is added to all source files
   set(ament_cmake_copyright_FOUND TRUE)
   # the following line skips cpplint (only works in a git repo)
-  # comment the line when this package is in a git repo and when
   # a copyright and license is added to all source files
   set(ament_cmake_cpplint_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
@@ -68,6 +69,7 @@ target_include_directories(perception_component
   PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/../ip_camera/include> # Add ip_camera include path
 )
 
 ament_target_dependencies(perception_component
@@ -87,6 +89,8 @@ target_link_libraries(perception_component
   cudart
   ${OpenCV_LIBRARIES}
   ${CUDA_LIBRARIES}
+  /home/ctrl/capstone/install/ip_camera/lib/librtsp_stream.so
+  yaml-cpp
 )
 
 rclcpp_components_register_nodes(perception_component
@@ -108,6 +112,40 @@ install(DIRECTORY
   launch
   engine
   DESTINATION share/${PROJECT_NAME} 
+)
+
+add_executable(perception_main src/perception_main.cpp)
+
+ament_target_dependencies(perception_main
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  message_filters
+  cv_bridge
+  ament_index_cpp
+  capstone_interface_pkg
+  ip_camera
+)
+set(RTSP_STREAM_LIB /home/ctrl/capstone/install/ip_camera/lib/librtsp_stream.so)
+if(EXISTS ${RTSP_STREAM_LIB})
+  message(STATUS "Using rtsp_stream at ${RTSP_STREAM_LIB}")
+else()
+  message(WARNING "rtsp_stream library not found at ${RTSP_STREAM_LIB}")
+endif()
+target_link_libraries(perception_main
+  preprocess_cuda
+  nvinfer
+  nvinfer_plugin
+  cudart
+  ${OpenCV_LIBRARIES}
+  ${CUDA_LIBRARIES}
+  perception_component
+  ${RTSP_STREAM_LIB}
+  yaml-cpp
+)
+
+install(TARGETS perception_main
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
 
 ament_package()

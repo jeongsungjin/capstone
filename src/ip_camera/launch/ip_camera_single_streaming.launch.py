@@ -17,7 +17,7 @@ def generate_launch_description():
     ipcamera_node = Node(
         package='ip_camera',
         executable='ipcamera_node',
-        name='ipcam_1',  # 요청: executable 직접 실행
+        name='ipcam_6',  # 요청: executable 직접 실행
         output='screen',
         parameters=[params_file]
     )

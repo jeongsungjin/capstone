@@ -13,6 +13,7 @@
 #include <xtensor/xindex_view.hpp>
 #include <xtensor/xmasked_view.hpp>
 
+#include <algorithm>
 #include <opencv2/cudawarping.hpp>
 
 #include <iostream>
@@ -135,46 +136,81 @@ void Model::inference(){
 
 void Model::postprocess(std_msgs::msg::Float32MultiArray& detection_msg){
     Timer timer("postprocess");
+    constexpr float kConf = 0.30f;
+    constexpr float kNms = 0.20f;
+    constexpr int   kTopk = 50;
 
-    std::vector<int> volumes;  
-    int total_volume = 0;
+    __decodePredictions(kConf, kNms, kTopk);
 
-    for (int l = 0; l < strides_.size(); l++) {
-        int v_reg = samplesCommon::volume(engine_->getTensorShape(name_iter[l][REG]));
-        int v_obj = samplesCommon::volume(engine_->getTensorShape(name_iter[l][OBJ]));
-        int v_cls = samplesCommon::volume(engine_->getTensorShape(name_iter[l][CLS]));
+    const std::size_t num_cams = detections_info_.size();
+    std::cout << num_cams << " cameras' detections to publish." << std::endl;
 
-        volumes.push_back(v_reg);
-        volumes.push_back(v_obj);
-        volumes.push_back(v_cls);
-
-        total_volume += v_reg + v_obj + v_cls;
+    std::size_t max_det = 0;
+    for (const auto& info : detections_info_) {
+        max_det = std::max(max_det, info.scores.size());
     }
 
-    std::cout << "total_volume: " << total_volume << std::endl;
+    constexpr std::size_t feature_len = 16; // [valid, score, tri(6), poly(8)]
 
-    int idx = 0, offset = 0;
-    std::vector<float>(total_volume).swap(detection_msg.data);
+    detection_msg.layout.dim.clear();
+    detection_msg.layout.data_offset = 0;
 
-    for (int l = 0; l < strides_.size(); l++) {
-        float* ptr_reg = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][REG]));
-        float* ptr_obj = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][OBJ]));
-        float* ptr_cls = reinterpret_cast<float*>(buffers_->getHostBuffer(name_iter[l][CLS]));
-
-        // REG
-        memcpy(detection_msg.data.data() + offset, ptr_reg, volumes[idx] * sizeof(float));
-        offset += volumes[idx++];
-        
-        // OBJ
-        memcpy(detection_msg.data.data() + offset, ptr_obj, volumes[idx] * sizeof(float));
-        offset += volumes[idx++];
-
-        // CLS
-        memcpy(detection_msg.data.data() + offset, ptr_cls, volumes[idx] * sizeof(float));
-        offset += volumes[idx++];
+    if (num_cams == 0) {
+        detection_msg.data.clear();
+        return;
     }
 
-    // __decodePredictions();
+    detection_msg.layout.dim.resize(3);
+    detection_msg.layout.dim[0].label = "camera";
+    detection_msg.layout.dim[0].size = static_cast<uint32_t>(num_cams);
+    detection_msg.layout.dim[0].stride = static_cast<uint32_t>(max_det * feature_len);
+
+    detection_msg.layout.dim[1].label = "detection";
+    detection_msg.layout.dim[1].size = static_cast<uint32_t>(max_det);
+    detection_msg.layout.dim[1].stride = static_cast<uint32_t>(feature_len);
+
+    detection_msg.layout.dim[2].label = "feature";
+    detection_msg.layout.dim[2].size = static_cast<uint32_t>(feature_len);
+    detection_msg.layout.dim[2].stride = 1;
+
+    const std::size_t total_values = num_cams * max_det * feature_len;
+    detection_msg.data.assign(total_values, 0.0f);
+
+    if (max_det == 0) {
+        return;
+    }
+
+    const auto write_tri = [&](const auto& tri, std::size_t base_idx) {
+        detection_msg.data[base_idx + 2] = static_cast<float>(tri(0, 0));
+        detection_msg.data[base_idx + 3] = static_cast<float>(tri(0, 1));
+        detection_msg.data[base_idx + 4] = static_cast<float>(tri(1, 0));
+        detection_msg.data[base_idx + 5] = static_cast<float>(tri(1, 1));
+        detection_msg.data[base_idx + 6] = static_cast<float>(tri(2, 0));
+        detection_msg.data[base_idx + 7] = static_cast<float>(tri(2, 1));
+    };
+
+    const auto write_poly = [&](const auto& poly, std::size_t base_idx) {
+        detection_msg.data[base_idx + 8]  = static_cast<float>(poly(0, 0));
+        detection_msg.data[base_idx + 9]  = static_cast<float>(poly(0, 1));
+        detection_msg.data[base_idx + 10] = static_cast<float>(poly(1, 0));
+        detection_msg.data[base_idx + 11] = static_cast<float>(poly(1, 1));
+        detection_msg.data[base_idx + 12] = static_cast<float>(poly(2, 0));
+        detection_msg.data[base_idx + 13] = static_cast<float>(poly(2, 1));
+        detection_msg.data[base_idx + 14] = static_cast<float>(poly(3, 0));
+        detection_msg.data[base_idx + 15] = static_cast<float>(poly(3, 1));
+    };
+
+    for (std::size_t cam = 0; cam < num_cams; ++cam) {
+        const auto& info = detections_info_[cam];
+        const std::size_t det_count = std::min<std::size_t>(info.scores.size(), max_det);
+        for (std::size_t det = 0; det < det_count; ++det) {
+            const std::size_t base = (cam * max_det + det) * feature_len;
+            detection_msg.data[base + 0] = 1.0f;
+            detection_msg.data[base + 1] = info.scores[det];
+            write_tri(info.tri_ptss[det], base);
+            write_poly(info.poly4s[det], base);
+        }
+    }
 }
 
 void Model::__copyLSTMOutputsToInputs(){
@@ -232,7 +268,6 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
 
     std::vector<DetectionInfo> batch_results(batch_size_);
     std::vector<std::vector<cv::Rect2d>> bboxes_for_nms(batch_size_);
-    std::vector<std::vector<float>> scores_for_nms(batch_size_);
 
     for(int l = 0; l < strides_.size(); l++){
         auto reg = __toXTensor(name_iter[l][REG]);
@@ -317,87 +352,89 @@ void Model::__decodePredictions(float conf_th, float nms_iou, int topk){
                 float y1 = static_cast<float>(maxs(1));
 
                 bboxes_for_nms[b].push_back(cv::Rect2d(x0, y0, x1 - x0, y1 - y0));
-                scores_for_nms[b].push_back(static_cast<float>(scores(i)));
             }
         }
     }
 
-    for(int b = 0; b < batch_size_; b++){
-        std::vector<int> batch_detections_indices_;
+    constexpr double contain_thr = 0.7;
+    constexpr double min_area = 20.0;
+    constexpr double min_edge = 3.0;
+    constexpr double eps = 1e-9;
 
-        cv::dnn::NMSBoxes(
-            bboxes_for_nms[b],
-            scores_for_nms[b],
-            conf_th,
-            nms_iou,
-            batch_detections_indices_,
-            1.0f,
-            topk
-        );
+    for (int b = 0; b < batch_size_; ++b) {
+        const auto candidate_count = batch_results[b].scores.size();
+        if (candidate_count == 0) {
+            continue;
+        }
 
-        std::vector<bool> is_valid(batch_detections_indices_.size(), true);
+        std::vector<size_t> order(candidate_count);
+        std::iota(order.begin(), order.end(), static_cast<size_t>(0));
+        std::sort(order.begin(), order.end(), [&](size_t lhs, size_t rhs) {
+            return batch_results[b].scores[lhs] > batch_results[b].scores[rhs];
+        });
 
-        for(auto idx1: batch_detections_indices_){
-            if(!is_valid[idx1]) continue;
-            for(auto idx2: batch_detections_indices_){
-                if(idx1 == idx2) continue;
-                if(!is_valid[idx2]) continue;
+        std::vector<size_t> kept;
+        const int max_keep = (topk > 0) ? std::min(topk, static_cast<int>(candidate_count)) : static_cast<int>(candidate_count);
+        if (max_keep > 0) {
+            kept.reserve(static_cast<size_t>(max_keep));
+        }
 
-                const auto& bbox1 = bboxes_for_nms[b][idx1];
-                const auto& bbox2 = bboxes_for_nms[b][idx2];
+        for (size_t idx : order) {
+            const auto& bboxA = bboxes_for_nms[b][idx];
+            const double areaA = std::max(0.0, bboxA.width) * std::max(0.0, bboxA.height);
+            if (areaA <= eps) {
+                continue;
+            }
 
-                int x1 = std::max(bbox1.x, bbox2.x);
-                int y1 = std::max(bbox1.y, bbox2.y);
-                int x2 = std::min(bbox1.x + bbox1.width,  bbox2.x + bbox2.width);
-                int y2 = std::min(bbox1.y + bbox1.height, bbox2.y + bbox2.height);
+            bool suppress = false;
+            for (size_t kept_idx : kept) {
+                const auto& bboxB = bboxes_for_nms[b][kept_idx];
+                const double x0 = std::max(bboxA.x, bboxB.x);
+                const double y0 = std::max(bboxA.y, bboxB.y);
+                const double x1 = std::min(bboxA.x + bboxA.width, bboxB.x + bboxB.width);
+                const double y1 = std::min(bboxA.y + bboxA.height, bboxB.y + bboxB.height);
+                const double iw = std::max(0.0, x1 - x0);
+                const double ih = std::max(0.0, y1 - y0);
+                const double intersection = iw * ih;
 
-                int interWidth  = std::max(0, x2 - x1);
-                int interHeight = std::max(0, y2 - y1);
-                int interArea   = interWidth * interHeight;
+                const double areaB = std::max(0.0, bboxB.width) * std::max(0.0, bboxB.height);
+                const double union_area = areaA + areaB - intersection;
+                const double iou = union_area > eps ? intersection / union_area : 0.0;
+                const double ios = intersection / std::max(std::min(areaA, areaB), eps);
 
-                // 각 박스의 면적
-                int areaA = bbox1.width * bbox1.height;
-                int areaB = bbox2.width * bbox2.height;
+                if ((nms_iou > 0.0f && iou >= nms_iou) || (contain_thr > 0.0 && ios >= contain_thr)) {
+                    suppress = true;
+                    break;
+                }
+            }
 
-                double minArea = static_cast<double>(std::min(areaA, areaB));
-                double IoS = static_cast<double>(interArea) / minArea;       
-                
-                if(IoS > 0.7){
-                    if(scores_for_nms[b][idx1] >= scores_for_nms[b][idx2]){
-                        is_valid[idx2] = false;
-                    }
-                    
-                    else{
-                        is_valid[idx1] = false;
-                    }
+            if (!suppress) {
+                kept.push_back(idx);
+                if (topk > 0 && static_cast<int>(kept.size()) >= topk) {
+                    break;
                 }
             }
         }
 
-        for(auto idx: batch_detections_indices_){
-            if(!is_valid[idx]) continue;
-
+        for (size_t idx : kept) {
             const auto& poly4 = batch_results[b].poly4s[idx];
-            const auto& score = batch_results[b].scores[idx];
 
-            std::vector<cv::Point2f> pts = {
-                cv::Point2f(poly4(0, 0), poly4(0, 1)),
-                cv::Point2f(poly4(1, 0), poly4(1, 1)),
-                cv::Point2f(poly4(2, 0), poly4(2, 1)),
-                cv::Point2f(poly4(3, 0), poly4(3, 1))
-            };
+            const cv::Point2f p0(poly4(0, 0), poly4(0, 1));
+            const cv::Point2f p1(poly4(1, 0), poly4(1, 1));
+            const cv::Point2f p2(poly4(2, 0), poly4(2, 1));
+            const cv::Point2f p3(poly4(3, 0), poly4(3, 1));
 
-            cv::RotatedRect rect = cv::minAreaRect(pts);
+            const cv::Point2f v01 = p1 - p0;
+            const cv::Point2f v03 = p3 - p0;
+            const double parallelogram_area = std::abs(v01.x * v03.y - v01.y * v03.x);
 
-            float width  = rect.size.width;
-            float height = rect.size.height;
-            float angle = rect.angle;
+            const double e0 = cv::norm(p1 - p0);
+            const double e1 = cv::norm(p2 - p1);
+            const double e2 = cv::norm(p3 - p2);
+            const double e3 = cv::norm(p0 - p3);
+            const double min_edge_len = std::min(std::min(e0, e1), std::min(e2, e3));
 
-            if(width < 3 || height < 3){
-                continue;
-            }
-            
-            if(width * height < 20.0){
+            if (parallelogram_area < min_area || min_edge_len < min_edge) {
                 continue;
             }
 

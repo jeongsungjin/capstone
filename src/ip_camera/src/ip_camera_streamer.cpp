@@ -17,17 +17,18 @@ using namespace std::chrono_literals;
 IPCameraStreamer::IPCameraStreamer(const rclcpp::NodeOptions& options)
     : rclcpp::Node("ip_camera_streamer", options) 
 {
-    initConfig();
     this->declare_parameter<std::string>("topic_name_prefix", "/ipcam_");
     this->get_parameter("topic_name_prefix", camera_config_.topic_name_prefix);
-
+    
     this->declare_parameter<int>("camera_id", 1);
     this->get_parameter("camera_id", camera_config_.camera_id);
-
+    
     // create a simple rclcpp image publisher for now
     image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
         camera_config_.topic_name_prefix + std::to_string(camera_config_.camera_id) + "/image_raw", 
         rclcpp::QoS(1));
+    
+    initConfig();
 
     cv::setNumThreads(1);
 
@@ -65,8 +66,6 @@ void IPCameraStreamer::initConfig() {
             RCLCPP_WARN(this->get_logger(), "Parameter K has unexpected size %zu (expected 9)", K_vec.size());
         }
     }
-    std::cout << "HIHIHIHII!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!1\n";
-
 
     if (!newK_vec.empty()) {
         if (newK_vec.size() == 9) {
@@ -76,8 +75,6 @@ void IPCameraStreamer::initConfig() {
             RCLCPP_WARN(this->get_logger(), "Parameter new_K has unexpected size %zu (expected 9)", newK_vec.size());
         }
     }
-    std::cout << "HIHIHIHII#################################################################\n";
-
 
     if (!dist_vec.empty()) {
         // distortion coefficients can be e.g. 4,5,8 elements; store as 1xN CV_64F
@@ -115,8 +112,8 @@ void IPCameraStreamer::initConfig() {
 
     std::ostringstream cmd;
     cmd << "ffmpeg -rtsp_transport " << camera_config_.transport << " "
-        << "-probesize 5000000 -analyzeduration 10000000 "
-        << "-fflags nobuffer -flags low_delay -i " << stream_url_ << " "
+        << "-probesize 32k -analyzeduration 10000000 "
+        << "-fflags nobuffer+discardcorrupt -flags low_delay -i " << stream_url_ << " "
         << "-vf scale=" << camera_config_.width << ":" << camera_config_.height << " " 
         << "-pix_fmt bgr24 -f rawvideo -fps_mode cfr -r " << publish_rate_ << " "
         << "pipe:1 2>/dev/null";
@@ -155,6 +152,8 @@ void IPCameraStreamer::cameraThread() {
     const int height = camera_config_.height;
     const size_t bytes_per_frame = static_cast<size_t>(width) * static_cast<size_t>(height) * 3;
 
+    std::vector<uint8_t> raw_buffer(bytes_per_frame);
+
     while (running_.load()) {
         FILE* proc = createCameraStream();
         if (!proc) {
@@ -164,22 +163,11 @@ void IPCameraStreamer::cameraThread() {
         }
 
         auto start_time = std::chrono::steady_clock::now();
-        int remaining = 0;
 
         while (running_.load()) {
-            auto ros_now = this->get_clock()->now();
+            size_t remaining = bytes_per_frame;
+            unsigned char* write_ptr = raw_buffer.data();
 
-            auto img = std::make_unique<sensor_msgs::msg::Image>();
-
-            img->width = static_cast<uint32_t>(width);
-            img->height = static_cast<uint32_t>(height);
-            img->step = static_cast<uint32_t>(width * 3);
-            img->encoding = "bgr8";
-
-            img->data.resize(bytes_per_frame);
-
-            remaining = bytes_per_frame;
-            unsigned char* write_ptr = img->data.data();
             while(remaining > 0) {
                 size_t readn = fread(write_ptr, 1, remaining, proc);
                 if (readn == 0) {
@@ -208,34 +196,34 @@ void IPCameraStreamer::cameraThread() {
                 break;
             }
             
-            cv::Mat src_mat(height, width, CV_8UC3, img->data.data());
-            cv::remap(src_mat, dst_mat_, map1_, map2_, cv::INTER_LINEAR);
+            // ---- REMAP ----
+            cv::Mat src(height, width, CV_8UC3, raw_buffer.data());
 
-            // Safely copy dst_mat_ into the message buffer.
-            // Use element-size calculation instead of assuming width*height*3,
-            // and handle non-contiguous mats by copying row-by-row.
-            const size_t bytes_to_copy = static_cast<size_t>(dst_mat_.total()) * dst_mat_.elemSize();
-            uint8_t* dst_ptr = img->data.data();
+            cv::resize(src, src, cv::Size(1536, 864));
+            cv::remap(src, dst_mat_, map1_, map2_, cv::INTER_LINEAR);
 
-            if (dst_mat_.isContinuous()) {
-                std::memcpy(dst_ptr, dst_mat_.data, bytes_to_copy);
-            } else {
-                const size_t row_bytes = static_cast<size_t>(dst_mat_.cols) * dst_mat_.elemSize();
-                for (int r = 0; r < dst_mat_.rows; ++r) {
-                    const uchar* row_ptr = dst_mat_.ptr<uchar>(r);
-                    std::memcpy(dst_ptr + static_cast<size_t>(r) * row_bytes, row_ptr, row_bytes);
-                }
-            }
-            
-            auto stamp = this->now();
-            img->header.stamp = stamp;
+            // ---- PUBLISH RAW BGR IMAGE ----
+            // Use remapped image (dst_mat_) dimensions
+            const int out_width = dst_mat_.cols;
+            const int out_height = dst_mat_.rows;
+            auto img = std::make_unique<sensor_msgs::msg::Image>();
+            img->header.stamp = this->now();
             img->header.frame_id = camera_config_.frame_id;
+            img->height = out_height;
+            img->width = out_width;
+            img->encoding = sensor_msgs::image_encodings::BGR8;
+            img->is_bigendian = false;
+            img->step = static_cast<sensor_msgs::msg::Image::_step_type>(out_width * 3);
+            const size_t data_size = static_cast<size_t>(out_height) * static_cast<size_t>(out_width) * 3;
+            img->data.resize(data_size);
+            std::memcpy(img->data.data(), dst_mat_.data, data_size);
             image_pub_->publish(std::move(img));
         }
 
         pclose(proc);
         std::this_thread::sleep_for(10ms);
     }
+
 }
 
 RCLCPP_COMPONENTS_REGISTER_NODE(IPCameraStreamer)

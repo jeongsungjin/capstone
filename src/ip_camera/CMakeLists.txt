@@ -102,6 +102,42 @@ install(DIRECTORY
 ament_export_dependencies(rclcpp rclcpp_components sensor_msgs cv_bridge OpenCV)
 ###############################################################
 
+###########################
+add_library(rtsp_stream SHARED
+  src/rtsp_stream_queue.cpp
+  src/rtsp_stream_manager.cpp
+)
+
+target_include_directories(rtsp_stream PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
+
+ament_target_dependencies(rtsp_stream
+  rclcpp
+  rclcpp_components
+  sensor_msgs
+  cv_bridge
+  OpenCV
+)
+
+# Link OpenCV libraries
+target_link_libraries(rtsp_stream
+  ${OpenCV_LIBRARIES}
+)
+
+install(TARGETS rtsp_stream
+  EXPORT export_rtsp_stream
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+ament_export_dependencies(rclcpp rclcpp_components sensor_msgs cv_bridge OpenCV)
+ament_export_targets(export_rtsp_stream HAS_LIBRARY_TARGET)
+ament_export_libraries(rtsp_stream)
+###########################
+
 install(DIRECTORY
   config
   launch

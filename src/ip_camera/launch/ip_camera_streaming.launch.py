@@ -13,7 +13,7 @@ def generate_launch_description():
     pkg_share = get_package_share_directory(pkg_name)
     
     offset = 1
-    batch_size = 1
+    batch_size = 14
 
     component_container = ComposableNodeContainer(
         name='ip_camera_container', 
@@ -21,7 +21,7 @@ def generate_launch_description():
         package='rclcpp_components',
         executable='component_container',
         output='screen',
-        
+         
         composable_node_descriptions=[
             ComposableNode(
                 package='ip_camera',

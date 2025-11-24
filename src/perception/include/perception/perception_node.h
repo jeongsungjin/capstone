@@ -11,31 +11,33 @@
 #include <std_msgs/msg/int32.hpp>
 #include <atomic>
 #include <chrono>
+#include <thread>
 
 #include <std_msgs/msg/float32_multi_array.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 
 #include "perception/model.h"
+#include "ip_camera/rtsp_stream_manager.h" // Ensure this path is correct
 
 class PerceptionNode : public rclcpp::Node {
 public:
     explicit PerceptionNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
+    ~PerceptionNode();
 
     void publishVizResult(const std::vector<std::shared_ptr<cv::Mat>>& imgs);
     void publishBEVInfo();
     
-    private:
-    using ImageMsg = sensor_msgs::msg::Image;
+private:
+    using ImageMsg = sensor_msgs::msg::CompressedImage;
     using ImgSubscriber = message_filters::Subscriber<ImageMsg>;
-    using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
+    using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg, ImageMsg>;
     using Synchronizer = message_filters::Synchronizer<SyncPolicy>;
-    void publishCompressedBatch(const std::vector<std::shared_ptr<cv::Mat>>& imgs, const ImageMsg::ConstSharedPtr& ref_stamp);
     
     void syncCallback(const ImageMsg::ConstSharedPtr& a, const ImageMsg::ConstSharedPtr& b,
                       const ImageMsg::ConstSharedPtr& c, const ImageMsg::ConstSharedPtr& d,
-                      const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f);
+                      const ImageMsg::ConstSharedPtr& e, const ImageMsg::ConstSharedPtr& f, const ImageMsg::ConstSharedPtr& g);
 
-    std::unique_ptr<ImgSubscriber> sub_a_, sub_b_, sub_c_, sub_d_, sub_e_, sub_f_;
+    std::unique_ptr<ImgSubscriber> sub_a_, sub_b_, sub_c_, sub_d_, sub_e_, sub_f_, sub_g_;
     std::shared_ptr<Synchronizer> sync_;
 
     // model
@@ -55,6 +57,11 @@ public:
     // syncCallback rate monitoring
     std::atomic<uint64_t> sync_count_{0};
     std::chrono::steady_clock::time_point sync_start_;
+
+    void processStreams(); // Add declaration for processStreams
+
+    std::unique_ptr<RTSPStreamManager> rtsp_manager_; // Add rtsp_manager_ member
+    std::thread processing_thread_; // Add processing_thread_ member
 };
 
 #endif // PERCEPTION_NODE_H
