@@ -165,35 +165,20 @@ class PlatoonManager:
         self._path_arc_length_profile = self._compute_path_arc_length_profile(self._path_points_cache)
         rospy.loginfo(f"platoon_manager: computed arc-length profile, total path length: {self._path_arc_length_profile[-1]:.2f}m")
         
-        # 리더 + 모든 팔로워에 대해, 공유 경로 위에 각 차량 위치를 투영해서
-        # 투영 지점 이후의 순수 경로(sub-path)만을 planned_path_* 로 발행한다.
+        # 리더 + 모든 팔로워에 대해, "동일한" 공유 경로 그대로를 planned_path_* 로 발행한다.
+        # (각 차량의 위치에 따라 sub-path 를 따로 만들지 않고, 2번 차량의 전역 경로를 1,2,3 모두 공유)
         all_platoon_roles = [self.leader_role] + self.follower_roles
-        rospy.loginfo(f"platoon_manager: publishing shared path-based sub-paths for {all_platoon_roles}")
+        rospy.loginfo(f"platoon_manager: publishing shared full path for {all_platoon_roles}")
         
         for role in all_platoon_roles:
-            vehicle_odom = self.odom.get(role)
-            if vehicle_odom is None:
-                # If no odometry yet, publish original shared path as fallback
-                rospy.logwarn(f"platoon_manager: {role} odometry not available, publishing original shared path")
-                pub = self.path_pubs.get(role)
-                if pub is not None:
-                    path_copy = Path()
-                    path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
-                    path_copy.poses = msg.poses
-                    pub.publish(path_copy)
-                    rospy.loginfo(f"platoon_manager: published original shared path to {role}")
-                continue
-
-            # 연결용 직선 웨이포인트 없이, 현재 위치를 공유 경로에 투영한 지점부터 끝까지의 순수 sub-path 생성
-            vehicle_path = self._build_subpath_from_projection(
-                path_points_xy, msg, vehicle_odom, role
-            )
             pub = self.path_pubs.get(role)
-            if pub is not None and vehicle_path:
-                pub.publish(vehicle_path)
-                rospy.loginfo(f"platoon_manager: published sub-path with {len(vehicle_path.poses)} points to {role}")
-            elif vehicle_path is None:
-                rospy.logwarn(f"platoon_manager: failed to build sub-path for {role}")
+            if pub is None:
+                continue
+            path_copy = Path()
+            path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
+            path_copy.poses = msg.poses
+            pub.publish(path_copy)
+            rospy.loginfo(f"platoon_manager: published shared full path ({len(path_copy.poses)} points) to {role}")
 
     def _build_subpath_from_projection(
         self, path_points: List[Tuple[float, float]], shared_path: Path, odom: Odometry, role: str
@@ -355,13 +340,13 @@ class PlatoonManager:
     
     def _update_all_follower_paths(self, _evt=None) -> None:
         """주기적으로 리더/팔로워의 planned_path_* 를 갱신.
-        - 공유 경로(self.shared_global_path)가 있을 때, 각 차량 현재 위치를 공유 경로에 투영해
-          투영 지점 이후의 순수 sub-path 를 다시 만들어준다.
+        현재는 2번 차량의 전역 경로 전체를 그대로 공유하므로, 여기서는
+        단순히 공유 경로가 있을 때 최근 버전을 다시 발행해주는 역할만 수행한다.
         """
         if self.shared_global_path is None or not self.shared_global_path.poses:
             return
         
-        # Rebuild path cache and arc-length profile if needed
+        # Arc-length 캐시가 없다면 생성 (간격 계산용)
         if self._path_points_cache is None or self._path_arc_length_profile is None:
             self._path_points_cache = []
             for p in self.shared_global_path.poses:
@@ -371,20 +356,15 @@ class PlatoonManager:
                 self._path_points_cache.append((x, y, yaw))
             self._path_arc_length_profile = self._compute_path_arc_length_profile(self._path_points_cache)
         
-        path_points = [(p.pose.position.x, p.pose.position.y) for p in self.shared_global_path.poses]
         all_platoon_roles = [self.leader_role] + self.follower_roles
-        
         for role in all_platoon_roles:
-            vehicle_odom = self.odom.get(role)
-            if vehicle_odom is None:
-                continue
-            
-            vehicle_path = self._build_subpath_from_projection(
-                path_points, self.shared_global_path, vehicle_odom, role
-            )
             pub = self.path_pubs.get(role)
-            if pub is not None and vehicle_path:
-                pub.publish(vehicle_path)
+            if pub is None:
+                continue
+            path_copy = Path()
+            path_copy.header = Header(stamp=rospy.Time.now(), frame_id=self.shared_global_path.header.frame_id)
+            path_copy.poses = self.shared_global_path.poses
+            pub.publish(path_copy)
 
     # ----------------- Spacing control -----------------
     def _tick(self, _evt) -> None:

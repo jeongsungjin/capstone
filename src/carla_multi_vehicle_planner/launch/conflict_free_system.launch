@@ -150,14 +150,16 @@
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
     <param name="desired_gap_m" value="10.0" />
     <param name="teleport_on_start" value="true" />
-    <!-- Conservative PD gains for smooth spacing at low speed (2 m/s, 6 m gap) -->
-    <param name="kp_gap" value="0.15" />
-    <param name="kd_gap" value="0.20" />
-    <param name="kp_gap_close" value="0.30" />
-    <param name="kd_gap_close" value="0.30" />
-    <!-- Ignore small gap / relative-speed noise -->
-    <param name="gap_deadband_m" value="1.0" />
-    <param name="rel_speed_deadband" value="0.3" />
+    <!-- Real-car friendly, 부드러운 간격 제어를 위한 보수적인 PD 게인 (2 m/s, 10 m gap) -->
+    <param name="kp_gap" value="0.08" />
+    <param name="kd_gap" value="0.15" />
+    <param name="kp_gap_close" value="0.12" />
+    <param name="kd_gap_close" value="0.20" />
+    <!-- 작은 오차/상대속도는 무시하여 과도한 진동 방지 -->
+    <param name="gap_deadband_m" value="0.5" />
+    <param name="rel_speed_deadband" value="0.1" />
+    <!-- 가/감속 rate 제한 (m/s^2) -->
+    <param name="accel_limit_mps2" value="0.5" />
     <param name="max_speed" value="2.0" />
   </node>
 

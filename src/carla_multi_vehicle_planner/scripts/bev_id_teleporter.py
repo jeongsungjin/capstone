@@ -4,8 +4,6 @@ import math
 import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import numpy as np
-
 import rospy
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
@@ -127,38 +125,14 @@ class BevIdTeleporter:
 		self.yaw_path_weight: float = float(rospy.get_param("~yaw_path_weight", 0.1))
 		self.yaw_stability_alpha: float = float(rospy.get_param("~yaw_stability_alpha", 0.3))
 		self.only_correct_yaw_during_alignment: bool = bool(rospy.get_param("~only_correct_yaw_during_alignment", True))
-		# Kalman filter configuration
-		self.kf_enabled: bool = bool(rospy.get_param("~kf_enabled", True))
-		self.kf_default_dt: float = float(rospy.get_param("~kf_default_dt", 0.05))
-		self.kf_max_dt: float = float(rospy.get_param("~kf_max_dt", 0.3))
-		self.kf_process_noise_pos: float = float(rospy.get_param("~kf_process_noise_pos", 0.3))
-		self.kf_process_noise_vel: float = float(rospy.get_param("~kf_process_noise_vel", 0.5))
-		self.kf_process_noise_yaw_deg: float = float(rospy.get_param("~kf_process_noise_yaw_deg", 15.0))
-		self.kf_process_noise_yaw_rate_deg: float = float(rospy.get_param("~kf_process_noise_yaw_rate_deg", 20.0))
-		self.kf_measurement_noise_pos: float = float(rospy.get_param("~kf_measurement_noise_pos", 0.1))
-		self.kf_measurement_noise_yaw_deg: float = float(rospy.get_param("~kf_measurement_noise_yaw_deg", 45.0))
-		self.kf_init_pos_std: float = float(rospy.get_param("~kf_init_pos_std", 1.0))
-		self.kf_init_vel_std: float = float(rospy.get_param("~kf_init_vel_std", 1.0))
-		self.kf_init_yaw_deg_std: float = float(rospy.get_param("~kf_init_yaw_deg_std", 45.0))
-		self.kf_init_yaw_rate_deg_std: float = float(rospy.get_param("~kf_init_yaw_rate_deg_std", 60.0))
-		self.kf_meas_reject_distance_m: float = float(rospy.get_param("~kf_meas_reject_distance_m", 10.0))
-		self.kf_meas_reject_yaw_deg: float = float(rospy.get_param("~kf_meas_reject_yaw_deg", 25.0))
-		# Control input for Kalman filter prediction (optional)
-		self.kf_use_control_input: bool = bool(rospy.get_param("~kf_use_control_input", True))
-		self.kf_control_timeout_sec: float = float(rospy.get_param("~kf_control_timeout_sec", 0.5))
-		self.kf_wheelbase_m: float = float(rospy.get_param("~kf_wheelbase_m", 2.7))  # Vehicle wheelbase for bicycle model
-		# Optional forward prediction horizon (seconds) for teleport target, relative to current time
-		# e.g., 1.0이면 "1초 뒤 위치" 칼만 예측값을 텔레포트에 사용
-		self.kf_prediction_horizon_sec: float = float(rospy.get_param("~kf_prediction_horizon_sec", 0.3))
-		# Motion-based yaw estimation (칼만과 독립적으로 런치 파라미터로만 제어)
+		# Motion-based yaw estimation (런치 파라미터로만 제어)
 		# - launch 에서 주는 motion_yaw_enabled 값 그대로 사용
 		self.motion_yaw_enabled: bool = bool(rospy.get_param("~motion_yaw_enabled", True))
-		# Tuned for 10-20Hz perception (0.05-0.1s) at 2m/s vehicle speed
-		# min_distance: 0.1-0.2m per frame at 2m/s → 0.15m threshold
-		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.15))
-		# timeout: allow 3-7 frame misses (0.3-0.7s at 10-20Hz) → 0.7s
-		self.motion_yaw_max_timeout_sec: float = float(rospy.get_param("~motion_yaw_max_timeout_sec", 0.7))
-		# max_jump: reasonable for 2m/s speed changes → 35deg
+		# 27Hz, 2m/s 기준: 프레임당 ~0.07m 이동 → 1~2프레임 이동 누적만으로도 yaw 추정 가능
+		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.07))
+		# 히스토리 윈도우: 최근 0.5~0.7초(약 15~20프레임) 좌표를 써서 "전반적인 진행 방향"을 본다
+		self.motion_yaw_window_sec: float = float(rospy.get_param("~motion_yaw_window_sec", 1.0))
+		# max_jump: 한 번에 허용하는 yaw 변화량 (deg) – 너무 크면 노이즈로 간주
 		self.motion_yaw_max_jump_deg: float = float(rospy.get_param("~motion_yaw_max_jump_deg", 35.0))
 
 		# Height / waypoint snapping
@@ -220,39 +194,11 @@ class BevIdTeleporter:
 		self._filtered_yaws: Dict[int, float] = {}
 		self._filtered_yaw_stamp: Dict[int, float] = {}
 		self._roles_initialized: Set[str] = set()
-		self._kf_states: Dict[str, Dict[str, Any]] = {}
 		# Previous position for motion-based yaw estimation (role -> (x, y, timestamp, yaw))
 		self._prev_position: Dict[str, Tuple[float, float, float, float]] = {}
-		# Control commands for Kalman filter prediction (role -> (speed, steering_angle, timestamp))
-		self._kf_control_cmds: Dict[str, Tuple[float, float, float]] = {}
-		yaw_init_var = math.radians(self.kf_init_yaw_deg_std) ** 2
-		yaw_rate_init_var = math.radians(self.kf_init_yaw_rate_deg_std) ** 2
-		self._kf_H = np.array(
-			[
-				[1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-				[0.0, 1.0, 0.0, 0.0, 0.0, 0.0],
-				[0.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-			],
-			dtype=float,
-		)
-		self._kf_I = np.eye(6, dtype=float)
-		self._kf_init_cov = np.diag(
-			[
-				self.kf_init_pos_std ** 2,
-				self.kf_init_pos_std ** 2,
-				self.kf_init_vel_std ** 2,
-				self.kf_init_vel_std ** 2,
-				yaw_init_var,
-				yaw_rate_init_var,
-			]
-		)
-		self._kf_R = np.diag(
-			[
-				self.kf_measurement_noise_pos ** 2,
-				self.kf_measurement_noise_pos ** 2,
-				math.radians(self.kf_measurement_noise_yaw_deg) ** 2,
-			]
-		)
+		# Short history of positions for motion yaw (role -> List[(x, y, timestamp)])
+		self._motion_history: Dict[str, List[Tuple[float, float, float]]] = {}
+		# Kalman filter 관련 내부 상태는 더 이상 사용하지 않음
 		# Periodic republish of tracking_ok so monitoring tools see fresh messages
 		self.tracking_status_rate_hz: float = float(rospy.get_param("~tracking_status_rate_hz", 20.0))
 		self._tracking_status_timer = None
@@ -269,10 +215,7 @@ class BevIdTeleporter:
 			self._set_tracking_status(role, False, force=True)
 			pose_topic = f"/bev_tracking_pose/{role}"
 			self.bev_pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1, latch=True)
-			# Subscribe to control commands for Kalman filter prediction (if enabled)
-			if self.kf_use_control_input:
-				control_topic = f"/carla/{role}/vehicle_control_cmd"
-				rospy.Subscriber(control_topic, AckermannDrive, self._control_cmd_cb, callback_args=role, queue_size=1)
+			# Kalman 기반 제어입력 예측은 사용하지 않으므로 control_cmd 구독은 생략
 		self.sub = rospy.Subscriber(self.topic_name, BEVInfo, self._bev_cb, queue_size=1)
 		rospy.loginfo(
 			"bev_id_teleporter ready: topic=%s, roles=%s (max=%d)",
@@ -384,22 +327,19 @@ class BevIdTeleporter:
 			return
 		self._initial_alignment_complete = True
 		rospy.loginfo("Initial alignment complete: %s", reason)
+		# 초기 정렬이 끝나면, 이후 매칭에서는 색상 정보를 사용하지 않고
+		# 순수하게 좌표/헤딩 기반(cost matrix)으로만 role-id 연결을 유지한다.
+		if self.enable_color_matching:
+			self.enable_color_matching = False
+			rospy.loginfo("Color-based matching disabled after initial alignment; using geometry-only matching.")
 
 	def _set_role_initialized(self, role: str) -> None:
 		if role in self._roles_initialized:
 			return
 		self._roles_initialized.add(role)
 
-	def _control_cmd_cb(self, msg: AckermannDrive, role: str) -> None:
-		"""Callback for vehicle control commands. Stores control input for Kalman filter prediction."""
-		if not self.kf_use_control_input:
-			return
-		with self._lock:
-			timestamp = float(rospy.Time.now().to_sec())
-			speed = float(msg.speed)
-			steering_angle = float(msg.steering_angle)
-			self._kf_control_cmds[role] = (speed, steering_angle, timestamp)
-	
+	# Kalman filter 관련 콜백은 더 이상 사용하지 않음
+
 	def _yaw_corrections_active(self) -> bool:
 		if not self.only_correct_yaw_during_alignment:
 			return True
@@ -485,201 +425,7 @@ class BevIdTeleporter:
 		alpha = max(0.0, min(1.0, self.yaw_stability_alpha))
 		return (1.0 - alpha) * bev_yaw_deg + alpha * target
 
-	def _kf_force_state(self, role: str, x: float, y: float, yaw_rad: float, stamp: float) -> None:
-		if not self.kf_enabled:
-			return
-		state_vec = np.zeros((6, 1), dtype=float)
-		state_vec[0, 0] = float(x)
-		state_vec[1, 0] = float(y)
-		state_vec[4, 0] = normalize_angle(float(yaw_rad))
-		self._kf_states[role] = {
-			"x": state_vec,
-			"P": np.array(self._kf_init_cov, copy=True),
-			"stamp": float(stamp),
-		}
-
-	def _kf_process_noise(self, dt: float) -> np.ndarray:
-		dt = max(1e-3, float(dt))
-		pos_var = (self.kf_process_noise_pos * dt) ** 2
-		vel_var = (self.kf_process_noise_vel) ** 2
-		yaw_var = (math.radians(self.kf_process_noise_yaw_deg) * dt) ** 2
-		yaw_rate_var = math.radians(self.kf_process_noise_yaw_rate_deg) ** 2
-		return np.diag([pos_var, pos_var, vel_var, vel_var, yaw_var, yaw_rate_var])
-
-	def _kf_predict_state(self, role: str, stamp: float) -> None:
-		if not self.kf_enabled:
-			return
-		state = self._kf_states.get(role)
-		if state is None:
-			return
-		last_stamp = state.get("stamp")
-		if last_stamp is None:
-			dt = self.kf_default_dt
-		else:
-			dt = float(stamp) - float(last_stamp)
-			if dt <= 1e-6:
-				dt = self.kf_default_dt
-		if self.kf_max_dt > 0.0:
-			dt = min(self.kf_max_dt, max(dt, 1e-3))
-		else:
-			dt = max(dt, 1e-3)
-		F = np.array(
-			[
-				[1.0, 0.0, dt, 0.0, 0.0, 0.0],
-				[0.0, 1.0, 0.0, dt, 0.0, 0.0],
-				[0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-				[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-				[0.0, 0.0, 0.0, 0.0, 1.0, dt],
-				[0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-			],
-			dtype=float,
-		)
-		state["x"] = F @ state["x"]
-		
-		# Apply control input if available and enabled
-		if self.kf_use_control_input:
-			with self._lock:
-				control_cmd = self._kf_control_cmds.get(role)
-			if control_cmd is not None:
-				cmd_speed, cmd_steering, cmd_timestamp = control_cmd
-				# Check if control command is recent enough
-				if (stamp - cmd_timestamp) <= self.kf_control_timeout_sec:
-					current_yaw = float(state["x"][4, 0])
-					# Update velocity from control command
-					# vx = speed * cos(yaw), vy = speed * sin(yaw)
-					state["x"][2, 0] = float(cmd_speed) * math.cos(current_yaw)
-					state["x"][3, 0] = float(cmd_speed) * math.sin(current_yaw)
-					# Update yaw rate from steering command (bicycle model)
-					# yaw_rate = (v * tan(steering)) / wheelbase
-					if abs(float(cmd_speed)) > 1e-3 and self.kf_wheelbase_m > 1e-3:
-						yaw_rate_cmd = (float(cmd_speed) * math.tan(float(cmd_steering))) / self.kf_wheelbase_m
-						state["x"][5, 0] = yaw_rate_cmd
-		
-		state["x"][4, 0] = normalize_angle(float(state["x"][4, 0]))
-		state["P"] = F @ state["P"] @ F.T + self._kf_process_noise(dt)
-		state["P"] = 0.5 * (state["P"] + state["P"].T)
-		state["stamp"] = float(stamp)
-
-	def _kf_predict_ahead_state(self, role: str, horizon_sec: float) -> Optional[Tuple[float, float, float]]:
-		"""
-		현재 칼만 상태를 기준으로 horizon_sec 뒤의 (x, y, yaw_rad) 예측값을 계산하되,
-		내부 상태(self._kf_states)는 변경하지 않고 리턴만 한다.
-		"""
-		if not self.kf_enabled:
-			return None
-		state = self._kf_states.get(role)
-		if state is None:
-			return None
-		dt = max(1e-3, float(horizon_sec))
-		F = np.array(
-			[
-				[1.0, 0.0, dt, 0.0, 0.0, 0.0],
-				[0.0, 1.0, 0.0, dt, 0.0, 0.0],
-				[0.0, 0.0, 1.0, 0.0, 0.0, 0.0],
-				[0.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-				[0.0, 0.0, 0.0, 0.0, 1.0, dt],
-				[0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
-			],
-			dtype=float,
-		)
-		x_vec = F @ state["x"]
-
-		# 제어입력을 horizon 동안 유지된다고 가정한 간단한 예측 보정 (선속/조향 기반)
-		if self.kf_use_control_input:
-			with self._lock:
-				control_cmd = self._kf_control_cmds.get(role)
-			if control_cmd is not None:
-				cmd_speed, cmd_steering, cmd_timestamp = control_cmd
-				now = float(rospy.Time.now().to_sec())
-				if (now - cmd_timestamp) <= self.kf_control_timeout_sec:
-					current_yaw = float(x_vec[4, 0])
-					x_vec[2, 0] = float(cmd_speed) * math.cos(current_yaw)
-					x_vec[3, 0] = float(cmd_speed) * math.sin(current_yaw)
-					if abs(float(cmd_speed)) > 1e-3 and self.kf_wheelbase_m > 1e-3:
-						yaw_rate_cmd = (float(cmd_speed) * math.tan(float(cmd_steering))) / self.kf_wheelbase_m
-						x_vec[5, 0] = yaw_rate_cmd
-
-		x_vec[4, 0] = normalize_angle(float(x_vec[4, 0]))
-		return float(x_vec[0, 0]), float(x_vec[1, 0]), float(x_vec[4, 0])
-
-	def _kf_should_reject_measurement(self, role: str, meas_x: float, meas_y: float, meas_yaw: float) -> bool:
-		if not self.kf_enabled:
-			return False
-		state = self._kf_states.get(role)
-		if state is None:
-			return False
-		pred_x = float(state["x"][0, 0])
-		pred_y = float(state["x"][1, 0])
-		dist = math.hypot(meas_x - pred_x, meas_y - pred_y)
-		if self.kf_meas_reject_distance_m > 0.0 and dist > self.kf_meas_reject_distance_m:
-			rospy.logwarn_throttle(
-				1.0,
-				"KF measurement reject for %s: dist %.1fm > %.1fm",
-				role,
-				dist,
-				self.kf_meas_reject_distance_m,
-			)
-			return True
-		if self.kf_meas_reject_yaw_deg > 0.0:
-			pred_yaw = float(state["x"][4, 0])
-			dyaw = abs(math.degrees(normalize_angle(meas_yaw - pred_yaw)))
-			if dyaw > self.kf_meas_reject_yaw_deg:
-				rospy.logwarn_throttle(
-					1.0,
-					"KF measurement reject for %s: yaw delta %.1f° > %.1f°",
-					role,
-					dyaw,
-					self.kf_meas_reject_yaw_deg,
-				)
-				return True
-		return False
-
-	def _kf_update_state(self, role: str, meas_x: float, meas_y: float, meas_yaw: float) -> None:
-		if not self.kf_enabled:
-			return
-		state = self._kf_states.get(role)
-		if state is None:
-			return
-		z = np.array([[float(meas_x)], [float(meas_y)], [normalize_angle(float(meas_yaw))]], dtype=float)
-		x_vec = state["x"]
-		innovation = z - self._kf_H @ x_vec
-		innovation[2, 0] = normalize_angle(float(innovation[2, 0]))
-		S = self._kf_H @ state["P"] @ self._kf_H.T + self._kf_R
-		try:
-			S_inv = np.linalg.inv(S)
-		except np.linalg.LinAlgError:
-			rospy.logwarn_throttle(5.0, "KF update skipped for %s due to singular matrix", role)
-			return
-		K = state["P"] @ self._kf_H.T @ S_inv
-		x_vec = x_vec + K @ innovation
-		x_vec[4, 0] = normalize_angle(float(x_vec[4, 0]))
-		P = (self._kf_I - K @ self._kf_H) @ state["P"]
-		state["P"] = 0.5 * (P + P.T)
-		state["x"] = x_vec
-
-	def _kf_fuse_measurement(
-		self,
-		role: str,
-		meas_x: float,
-		meas_y: float,
-		meas_yaw: float,
-		stamp: float,
-	) -> Tuple[float, float, float, bool]:
-		if not self.kf_enabled:
-			return meas_x, meas_y, meas_yaw, False
-		if role not in self._kf_states:
-			self._kf_force_state(role, meas_x, meas_y, meas_yaw, stamp)
-			return meas_x, meas_y, meas_yaw, True
-		self._kf_predict_state(role, stamp)
-		used = False
-		if not self._kf_should_reject_measurement(role, meas_x, meas_y, meas_yaw):
-			self._kf_update_state(role, meas_x, meas_y, meas_yaw)
-			used = True
-		state = self._kf_states.get(role)
-		if state is None:
-			return meas_x, meas_y, meas_yaw, used
-		yaw_est = normalize_angle(float(state["x"][4, 0]))
-		return float(state["x"][0, 0]), float(state["x"][1, 0]), yaw_est, used
+	# Kalman filter 관련 메서드들은 제거됨 (모션 기반 yaw + raw 위치만 사용)
 
 	def _compute_yaw_from_motion(
 		self,
@@ -696,45 +442,88 @@ class BevIdTeleporter:
 		if not self.motion_yaw_enabled:
 			return None
 		
-		prev_data = self._prev_position.get(role)
-		if prev_data is None:
-			# No previous position, store current position and return None
-			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
-			return None
-		
-		# 여기서 prev_data는 (x, y, timestamp, yaw) 형태의 튜플입니다.
-		prev_x, prev_y, prev_timestamp, prev_yaw_rad = prev_data
-		rospy.loginfo("prev_x: %.1f, prev_y: %.1f, prev_timestamp: %.1f, prev_yaw_rad: %.1f", prev_x, prev_y, prev_timestamp, math.degrees(prev_yaw_rad))
-		# Check timeout
-		dt = timestamp - prev_timestamp
-		rospy.loginfo("[Motion Yaw] %s: dt=%.3fs (timeout=%.3fs)", role, dt, self.motion_yaw_max_timeout_sec)
-		if dt > self.motion_yaw_max_timeout_sec:
-			# Previous position too old, update and return None
-			rospy.logwarn("[Motion Yaw] %s: Timeout! Updating prev_position", role)
-			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
-			return None
-		
-		# Compute displacement
-		dx = x - prev_x
-		dy = y - prev_y
-		dist = math.hypot(dx, dy)
-		rospy.loginfo("[Motion Yaw] %s: dist=%.3fm (min=%.3fm), dx=%.3f, dy=%.3f", role, dist, self.motion_yaw_min_distance_m, dx, dy)
-		
-		# Check minimum distance
-		if dist < self.motion_yaw_min_distance_m:
-			# Not enough movement, keep previous position timestamp but return None
-			# (don't update position to avoid accumulating small errors)
-			rospy.loginfo("[Motion Yaw] %s: Distance too small (%.3fm < %.3fm), skipping", role, dist, self.motion_yaw_min_distance_m)
-			return None
-		
-		# Compute heading from motion
+		# 0) 히스토리에 현재 좌표 추가 및 윈도우 내로 정리
+		hist = self._motion_history.get(role)
+		if hist is None:
+			hist = []
+		hist.append((x, y, timestamp))
+		# 시간 기준 윈도우 자르기
+		window = max(0.0, float(self.motion_yaw_window_sec))
+		if window > 1e-3:
+			while len(hist) >= 2 and (timestamp - hist[0][2]) > window:
+				hist.pop(0)
+		self._motion_history[role] = hist
 
-		motion_yaw_rad = math.atan2(dy, dx)
+		# 최소한 2개 이상의 포인트가 있어야 yaw 계산 가능
+		if len(hist) < 2:
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
+		
+		# 직전 yaw (모션 yaw 필터 기준) 가져오기 – 없으면 현재 yaw 를 기준으로 사용
+		prev_state = self._prev_position.get(role)
+		if prev_state is None:
+			prev_yaw_rad = current_yaw_rad
+		else:
+			_, _, _, prev_yaw_rad = prev_state
+		
+		# 1) 히스토리 전체의 "전반적인 이동 벡터" 계산
+		total_dx = 0.0
+		total_dy = 0.0
+		total_dist = 0.0
+		for i in range(len(hist) - 1):
+			x1, y1, t1 = hist[i]
+			x2, y2, t2 = hist[i + 1]
+			dx = x2 - x1
+			dy = y2 - y1
+			seg = math.hypot(dx, dy)
+			if seg < 1e-6:
+				continue
+			total_dx += dx
+			total_dy += dy
+			total_dist += seg
+		
+		if total_dist < self.motion_yaw_min_distance_m:
+			# 전체 윈도우에서도 이동이 너무 작으면 모션 yaw 적용하지 않음
+			rospy.loginfo(
+				"[Motion Yaw] %s: total_dist too small (%.3fm < %.3fm), skipping history-based yaw",
+				role,
+				total_dist,
+				self.motion_yaw_min_distance_m,
+			)
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
+		
+		# Compute heading from aggregated motion
+		motion_yaw_rad = math.atan2(total_dy, total_dx)
 		motion_yaw_rad = normalize_angle(motion_yaw_rad)
-		rospy.loginfo("Motion yaw!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!: %.1f°", math.degrees(motion_yaw_rad))
+		rospy.loginfo(
+			"[Motion Yaw] %s: history-based yaw = %.1f° (dist=%.3fm, N=%d)",
+			role,
+			math.degrees(motion_yaw_rad),
+			total_dist,
+			len(hist),
+		)
 
+		# 1) 진행 방향이 이전 yaw 기준으로 "역방향(뒤쪽)" 인지 체크
+		#    - 이전 yaw 기준 전방 단위벡터와 현재 이동 방향 벡터의 내적이 음수이면
+		#      진행 방향이 90도 이상 반대 → 노이즈로 간주하고 모션 yaw 를 적용하지 않는다.
+		fwd_x = math.cos(prev_yaw_rad)
+		fwd_y = math.sin(prev_yaw_rad)
+		dir_x = total_dx / total_dist
+		dir_y = total_dy / total_dist
+		dot = fwd_x * dir_x + fwd_y * dir_y  # cos(theta)
+		if dot < 0.0:
+			rospy.logwarn_throttle(
+				2.0,
+				"[Motion Yaw] %s: detected backwards motion (dot=%.3f), skipping motion yaw",
+				role,
+				dot,
+			)
+			# 위치/타임스탬프는 최신 값으로 갱신하되 yaw 는 perception 기준 유지
+			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+			return None
 
-		# Check for large yaw jumps (might indicate outlier or teleport)
+		# 2) yaw 점프 크기가 비정상적으로 큰 경우도 노이즈로 처리
 		yaw_diff = abs(normalize_angle(motion_yaw_rad - prev_yaw_rad))
 		max_jump_rad = math.radians(self.motion_yaw_max_jump_deg)
 		if yaw_diff > max_jump_rad and yaw_diff < (2.0 * math.pi - max_jump_rad):
@@ -864,7 +653,7 @@ class BevIdTeleporter:
 		det_id = sample.get("id")
 
 		if self._apply_transform(actor, tf, role=role, det_id=det_id):
-			self._kf_force_state(role, x, y, yaw_rad_applied, float(rospy.Time.now().to_sec()))
+			# 칼만 필터 제거: 상태 강제 세팅은 더 이상 수행하지 않음
 			if det_id is not None:
 				try:
 					det_int = int(det_id)
@@ -981,7 +770,9 @@ class BevIdTeleporter:
 					row.append(big)
 				else:
 					cost = self.w_pos * dist + self.w_yaw * ang
-					if self.enable_color_matching and self.role_color_map:
+					# 색상 매칭은 "초기 정렬 단계"에서만 사용하고,
+					# 초기 정렬이 완료된 이후에는 좌표/헤딩 정보만으로 매칭을 유지한다.
+					if (not self._initial_alignment_complete) and self.enable_color_matching and self.role_color_map:
 						det_color = colors[idx] if idx < len(colors) else ""
 						cost = self._apply_color_hint(role, det_color, cost, big)
 					row.append(min(cost, big))
@@ -1089,7 +880,7 @@ class BevIdTeleporter:
 							available_roles.remove(role)
 					else:
 						role = available_roles.pop(0)
-						self.id_to_role[vid] = role
+					self.id_to_role[vid] = role
 				assigned.append((vid, role))
 		return assigned
 
@@ -1412,14 +1203,11 @@ class BevIdTeleporter:
 				x_raw = float(cxs[idx])
 				y_raw = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				x, y, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x_raw, y_raw, yaw_rad, now_sec)
-				# Optional forward prediction for teleport target (예: 1초 뒤 위치)
-				if self.kf_enabled and self.kf_prediction_horizon_sec > 0.0:
-					ahead = self._kf_predict_ahead_state(role, self.kf_prediction_horizon_sec)
-					if ahead is not None:
-						x, y, fused_yaw_rad = ahead
-				# Motion-based yaw estimation when Kalman filter is off
-				if not self.kf_enabled and self.motion_yaw_enabled:
+				# 칼만 필터 제거: raw BEV 위치/각도 + (옵션) 모션 yaw만 사용
+				x = x_raw
+				y = y_raw
+				fused_yaw_rad = yaw_rad
+				if self.motion_yaw_enabled:
 					motion_yaw_rad = self._compute_yaw_from_motion(role, x, y, fused_yaw_rad, now_sec)
 					if motion_yaw_rad is not None:
 						fused_yaw_rad = motion_yaw_rad
@@ -1484,14 +1272,11 @@ class BevIdTeleporter:
 				x_raw = float(cxs[idx])
 				y_raw = float(cys[idx])
 				yaw_rad = det_yaws_rad[idx] if idx < len(det_yaws_rad) else 0.0
-				x, y, fused_yaw_rad, _ = self._kf_fuse_measurement(role, x_raw, y_raw, yaw_rad, now_sec)
-				# Optional forward prediction for teleport target
-				if self.kf_enabled and self.kf_prediction_horizon_sec > 0.0:
-					ahead = self._kf_predict_ahead_state(role, self.kf_prediction_horizon_sec)
-					if ahead is not None:
-						x, y, fused_yaw_rad = ahead
-				# Motion-based yaw estimation when Kalman filter is off
-				if not self.kf_enabled and self.motion_yaw_enabled:
+				# 칼만 필터 제거: raw BEV 위치/각도 + (옵션) 모션 yaw만 사용
+				x = x_raw
+				y = y_raw
+				fused_yaw_rad = yaw_rad
+				if self.motion_yaw_enabled:
 					motion_yaw_rad = self._compute_yaw_from_motion(role, x, y, fused_yaw_rad, now_sec)
 					if motion_yaw_rad is not None:
 						fused_yaw_rad = motion_yaw_rad

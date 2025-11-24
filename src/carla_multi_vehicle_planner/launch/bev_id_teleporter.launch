@@ -11,8 +11,8 @@
   <!-- Optional color hints per vehicle (used for Hungarian matching assistance) -->
   <arg name="vehicle_1_color" default="yellow" />
   <arg name="vehicle_2_color" default="green" />
-  <arg name="vehicle_3_color" default="purple" />
-  <arg name="vehicle_4_color" default="white" />
+  <arg name="vehicle_3_color" default="red" />
+  <arg name="vehicle_4_color" default="purple" />
   <arg name="vehicle_5_color" default="" />
   <arg name="vehicle_6_color" default="" />
   <arg name="enable_color_matching" default="true" />
@@ -59,27 +59,8 @@
   <arg name="yaw_stability_alpha" default="0.6" />
   <arg name="only_correct_yaw_during_alignment" default="true" />
 
-  <!-- Kalman / motion-based yaw 제어 -->
-  <arg name="kf_enabled" default="false" />
-  <!-- 칼만과 독립적으로 모션 기반 yaw 사용 여부를 토글할 수 있게 노출 -->
+  <!-- Motion-based yaw 제어 -->
   <arg name="motion_yaw_enabled" default="false" />
-  <arg name="kf_default_dt" default="0.05" />
-  <arg name="kf_max_dt" default="0.2" />
-  <arg name="kf_process_noise_pos" default="0.5" />
-  <arg name="kf_process_noise_vel" default="1.0" />
-  <arg name="kf_process_noise_yaw_deg" default="12.0" />
-  <arg name="kf_process_noise_yaw_rate_deg" default="30.0" />
-  <arg name="kf_measurement_noise_pos" default="0.25" />
-  <arg name="kf_measurement_noise_yaw_deg" default="6.0" />
-  <arg name="kf_init_pos_std" default="1.0" />
-  <arg name="kf_init_vel_std" default="1.0" />
-  <arg name="kf_init_yaw_deg_std" default="45.0" />
-  <arg name="kf_init_yaw_rate_deg_std" default="90.0" />
-  <arg name="kf_meas_reject_distance_m" default="20.0" />
-  <arg name="kf_meas_reject_yaw_deg" default="999.0" />
-
-  <!-- 지연 보상을 위한 칼만 forward prediction horizon (초) -->
-  <arg name="kf_prediction_horizon_sec" default="0.0" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
@@ -133,24 +114,8 @@
     <param name="yaw_path_weight" value="$(arg yaw_path_weight)" />
     <param name="yaw_stability_alpha" value="$(arg yaw_stability_alpha)" />
     <param name="only_correct_yaw_during_alignment" value="$(arg only_correct_yaw_during_alignment)" />
-    <!-- Kalman / motion yaw -->
-    <param name="kf_enabled" value="$(arg kf_enabled)" />
+    <!-- Motion yaw -->
     <param name="motion_yaw_enabled" value="$(arg motion_yaw_enabled)" />
-    <param name="kf_default_dt" value="$(arg kf_default_dt)" />
-    <param name="kf_max_dt" value="$(arg kf_max_dt)" />
-    <param name="kf_process_noise_pos" value="$(arg kf_process_noise_pos)" />
-    <param name="kf_process_noise_vel" value="$(arg kf_process_noise_vel)" />
-    <param name="kf_process_noise_yaw_deg" value="$(arg kf_process_noise_yaw_deg)" />
-    <param name="kf_process_noise_yaw_rate_deg" value="$(arg kf_process_noise_yaw_rate_deg)" />
-    <param name="kf_measurement_noise_pos" value="$(arg kf_measurement_noise_pos)" />
-    <param name="kf_measurement_noise_yaw_deg" value="$(arg kf_measurement_noise_yaw_deg)" />
-    <param name="kf_init_pos_std" value="$(arg kf_init_pos_std)" />
-    <param name="kf_init_vel_std" value="$(arg kf_init_vel_std)" />
-    <param name="kf_init_yaw_deg_std" value="$(arg kf_init_yaw_deg_std)" />
-    <param name="kf_init_yaw_rate_deg_std" value="$(arg kf_init_yaw_rate_deg_std)" />
-    <param name="kf_meas_reject_distance_m" value="$(arg kf_meas_reject_distance_m)" />
-    <param name="kf_meas_reject_yaw_deg" value="$(arg kf_meas_reject_yaw_deg)" />
-    <param name="kf_prediction_horizon_sec" value="$(arg kf_prediction_horizon_sec)" />
     <!-- Initial alignment params -->
     <param name="enable_initial_alignment" value="$(arg enable_initial_alignment)" />
     <param name="initial_alignment_timeout_sec" value="$(arg initial_alignment_timeout_sec)" />
