@@ -31,8 +31,12 @@ class ClickReplanPathVisualizer:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 4))
         self.life_time = float(rospy.get_param("~life_time", 10.0))  # seconds to keep path visible
         self.override_to_path_window = float(rospy.get_param("~override_to_path_window", 3.0))
-        self.thickness = float(rospy.get_param("~thickness", 0.4))
+        self.thickness = float(rospy.get_param("~thickness", 0.2))
         self.redraw_period = float(rospy.get_param("~redraw_period", 0.5))  # seconds; keep lines alive until finished
+        # Visual intensity controls
+        self.brightness_scale = float(rospy.get_param("~brightness_scale", 0.0))  # 0.0..1.0 → closer to white
+        self.intensity_scale = float(rospy.get_param("~intensity_scale", 0.1))  # 0.0..1.0 → darker
+        self.life_multiplier = float(rospy.get_param("~life_multiplier", 1.2))  # line life relative to redraw period
         # Constant altitude mode (legacy)
         self.altitude_z = float(rospy.get_param("~z", 0.5))
         # Road-elevation following mode
@@ -75,8 +79,8 @@ class ClickReplanPathVisualizer:
         # Periodic redraw to persist visualization until finished signal
         rospy.Timer(rospy.Duration(max(0.05, self.redraw_period)), self._timer_cb)
 
-        rospy.loginfo("path_visualization: ready (life_time=%.1fs, window=%.1fs, redraw=%.2fs)",
-                      self.life_time, self.override_to_path_window, self.redraw_period)
+        rospy.loginfo("path_visualization: ready (life_time=%.1fs, window=%.1fs, redraw=%.2fs, life_mult=%.2f)",
+                      self.life_time, self.override_to_path_window, self.redraw_period, self.life_multiplier)
 
     def _selected_cb(self, msg: String):
         role = (msg.data or "").strip()
@@ -132,10 +136,14 @@ class ClickReplanPathVisualizer:
             pts = paths.get(role)
             if not pts or len(pts) < 2:
                 continue
-            self._draw_path(role, pts, life=self.redraw_period * 1.2)
+            self._draw_path(role, pts, life=max(0.01, self.redraw_period * max(0.1, self.life_multiplier)))
 
     def _draw_path(self, role: str, pts: List[Tuple[float, float]], life: float):
-        color = self.colors[(int(role.rsplit("_", 1)[-1]) - 1) % len(self.colors)]
+        color = self._color_for_role(role)
+        if self.intensity_scale < 1.0:
+            color = self._darken(color, self.intensity_scale)
+        if self.brightness_scale > 0.0:
+            color = self._brighten(color, self.brightness_scale)
         if self.z_follow_road:
             carla_map = self.world.get_map()
             def loc_with_road_z(x, y):
@@ -152,6 +160,43 @@ class ClickReplanPathVisualizer:
                 p1 = carla.Location(x=pts[i][0], y=pts[i][1], z=self.altitude_z)
                 p2 = carla.Location(x=pts[i + 1][0], y=pts[i + 1][1], z=self.altitude_z)
                 self.world.debug.draw_line(p1, p2, thickness=self.thickness, color=color, life_time=life)
+
+    def _color_for_role(self, role: str) -> "carla.Color":
+        try:
+            idx = (int(role.rsplit("_", 1)[-1]) - 1) % len(self.colors)
+        except Exception:
+            idx = 0
+        return self.colors[idx]
+
+    @staticmethod
+    def _brighten(color: "carla.Color", scale: float) -> "carla.Color":
+        """
+        Scale color towards white for higher perceived brightness.
+        scale in [0,1]: 0=no change, 1=white.
+        """
+        s = max(0.0, min(1.0, float(scale)))
+        r = int(color.r + s * (255 - color.r))
+        g = int(color.g + s * (255 - color.g))
+        b = int(color.b + s * (255 - color.b))
+        r = 0 if r < 0 else (255 if r > 255 else r)
+        g = 0 if g < 0 else (255 if g > 255 else g)
+        b = 0 if b < 0 else (255 if b > 255 else b)
+        return carla.Color(r=r, g=g, b=b)
+
+    @staticmethod
+    def _darken(color: "carla.Color", scale: float) -> "carla.Color":
+        """
+        Multiply color intensity to make it darker.
+        scale in [0,1]: 1=no change, 0=black.
+        """
+        s = max(0.0, min(1.0, float(scale)))
+        r = int(color.r * s)
+        g = int(color.g * s)
+        b = int(color.b * s)
+        r = 0 if r < 0 else (255 if r > 255 else r)
+        g = 0 if g < 0 else (255 if g > 255 else g)
+        b = 0 if b < 0 else (255 if b > 255 else b)
+        return carla.Color(r=r, g=g, b=b)
 
 
 def main():
