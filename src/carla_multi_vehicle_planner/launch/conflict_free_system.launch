@@ -42,16 +42,11 @@
     <!-- Replanning only when close to destination -->
     <param name="replan_remaining_m" value="60.0" />
     <param name="replan_interval" value="1.0" />
-    <!-- Force outer lane for specific vehicles (comma-separated, e.g., "ego_vehicle_2") -->
-    <!-- Outer lane filtering is applied ONLY outside safety area (intersections) to allow turns -->
-    <param name="force_outer_lane_roles" value="ego_vehicle_2" />
-    <!-- Optional: 사용자 편집 글로벌 루트 YAML을 목적지 후보 세트로 사용 (ON/OFF) -->
-    <param name="use_custom_goal_points" value="true" />
-    <param name="custom_goal_points_file"
-           value="$(find carla_multi_vehicle_planner)/scripts/config/edited_global_route.yaml" />
-    <!-- Optional: 전역 경로에서 특정 영역에 lateral offset 적용 -->
-    <param name="offset_regions_file"
-           value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
+    <!-- [LEGACY REMOVED] force_outer_lane_roles / custom_goal_points / offset_regions 기능 비활성화 -->
+    <param name="force_outer_lane_roles" value="" />
+    <param name="use_custom_goal_points" value="false" />
+    <param name="custom_goal_points_file" value="" />
+    <param name="offset_regions_file" value="" />
     <!-- 플래투닝 차량도 일반 동적 경로계획을 사용하도록 fixed loop / planner 내부 platoon 모드 비활성화 -->
     <param name="fixed_loop_path_file" value="" />
     <param name="platoon_enable" value="false" />
@@ -111,7 +106,7 @@
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />
     <!-- Safety stop defaults; tune as needed -->
-    <param name="enable_safety_stop" value="true" />
+    <param name="enable_safety_stop" value="false" />
     <param name="safety_x_min" value="-18.0" />
     <param name="safety_x_max" value="18.0" />
     <param name="safety_y_min" value="-35.0" />

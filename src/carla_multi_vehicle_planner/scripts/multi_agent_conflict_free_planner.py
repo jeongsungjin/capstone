@@ -74,12 +74,9 @@ class MultiAgentConflictFreePlanner:
         self.replan_interval = float(rospy.get_param("~replan_interval", 1.0))
         self.replan_remaining_m = float(rospy.get_param("~replan_remaining_m", 50.0))
         
-        # Force outer lane for specific roles (comma-separated, e.g., "ego_vehicle_2,ego_vehicle_3")
-        outer_lane_roles_str = str(rospy.get_param("~force_outer_lane_roles", "")).strip()
+        # [LEGACY REMOVED] force_outer_lane_roles: 예전 외곽 차선 강제 기능 비활성화
+        # launch 에 force_outer_lane_roles 파라미터가 남아있더라도, 내부에서는 사용하지 않는다.
         self.force_outer_lane_roles = set()
-        if outer_lane_roles_str:
-            self.force_outer_lane_roles = {role.strip() for role in outer_lane_roles_str.split(",") if role.strip()}
-            rospy.loginfo("force_outer_lane_roles: %s", self.force_outer_lane_roles)
         
         # Fixed loop path / platoon-specific planning 모드는 비활성화 (플래투닝 차량도 모두 일반 동적 경로계획 사용)
         self.fixed_loop_path_file = ""
@@ -110,27 +107,18 @@ class MultiAgentConflictFreePlanner:
         self.heading_compat_deg = float(rospy.get_param("~heading_compat_deg", 45.0))
         self.heading_compat_dist_m = float(rospy.get_param("~heading_compat_dist_m", 8.0))
 
-        # 사용자가 편집한 글로벌 루트 YAML(예: carla_global_route_editor.py 결과)을
-        # "동적 전역 경로 계획의 후보 목적지(웨이포인트 집합)" 및
-        # "GlobalRoutePlanner 경로의 기하 보정(waypoint 위치 미세 조정)"에 사용할 수 있도록 하는 옵션
-        # use_custom_goal_points: on/off 스위치
-        self.use_custom_goal_points: bool = bool(
-            rospy.get_param("~use_custom_goal_points", False)
-        )
-        self.custom_goal_points_file = rospy.get_param("~custom_goal_points_file", "")
-        # carla.Location 리스트로 보관 (도로 위로 snap 된 위치)
+        # [LEGACY REMOVED] edited_global_route / path_offset_regions 기반 기하 수정 기능 비활성화
+        # - use_custom_goal_points: 목적지/기하를 YAML 로 정의하던 오래된 기능
+        # - offset_regions: 특정 영역에서 전역 경로를 lateral/X/Y 로 보정하던 기능
+        # 현재 코드는 순수 GRP 기반 경로만 사용하고, 이 옵션들은 모두 무시한다.
+        self.use_custom_goal_points: bool = False
+        self.custom_goal_points_file = ""
         self.custom_goal_locs: List[carla.Location] = []
-        # 기하 보정을 위한 (grid cell -> (x, y)) 맵
-        # GlobalRoutePlanner 가 생성하는 route 의 waypoint 들을, 이 좌표들로 미세 수정할 때 사용
         self.custom_geom_points: Dict[Tuple[int, int], Tuple[float, float]] = {}
-
-        # 전역 경로에서 특정 영역에만 좌우 / X / Y 오프셋을 적용하기 위한 영역 설정 파일 (선택)
-        # carla_path_offset_region_editor.py 로 생성한 path_offset_regions.yaml 사용
-        self.offset_regions_file = rospy.get_param("~offset_regions_file", "")
-        # 각 영역: {x_min, x_max, y_min, y_max, offset_lateral_m, offset_x_m, offset_y_m}
+        
+        self.offset_regions_file = ""
         self.offset_regions: List[Dict[str, float]] = []
-        # 영역 경계에서 오프셋을 부드럽게 0으로 줄여가는 blending 폭 (m)
-        self.offset_blend_width_m = float(rospy.get_param("~offset_blend_width_m", 5.0))
+        self.offset_blend_width_m = 0.0
 
         # Visualisation
         self.enable_visualization = bool(rospy.get_param("~enable_visualization", True))
@@ -163,13 +151,7 @@ class MultiAgentConflictFreePlanner:
         if not self.spawn_points:
             raise RuntimeError("No spawn points available in CARLA map")
 
-        # 커스텀 목적지 후보 로드 (옵션 on 이고 파일이 지정된 경우)
-        if self.use_custom_goal_points and self.custom_goal_points_file:
-            self._load_custom_goal_points(self.custom_goal_points_file)
-
-        # 좌우 오프셋 영역 로드 (있다면)
-        if self.offset_regions_file:
-            self._load_offset_regions(self.offset_regions_file)
+        # [LEGACY REMOVED] 커스텀 목적지/기하 및 오프셋 영역 로드는 더 이상 사용하지 않음
 
         # State
         self.vehicles: List[carla.Actor] = []
@@ -328,46 +310,6 @@ class MultiAgentConflictFreePlanner:
                 rospy.logwarn("%s: destination sampling failed", role)
                 continue
             
-            # For platoon vehicles: use outer lane everywhere (including intersections)
-            # This prevents turning inside intersections by forcing outer lane usage
-            if role in self.force_outer_lane_roles:
-                # Apply outer lane filtering everywhere (including intersections)
-                # This forces the vehicle to use outer lane even inside intersections,
-                # effectively preventing turns and making it go around
-                route = self._filter_route_to_outer_lane(route, skip_intersections=False)
-                if not route or len(route) < 2:
-                    rospy.logwarn("%s: outer lane filtering produced invalid route", role)
-                    continue
-                points = self._route_to_points(route)
-                if len(points) < 2:
-                    rospy.logwarn("%s: outer lane route produced insufficient points", role)
-                    continue
-
-            # For platoon vehicles: check if route goes through intersection AFTER outer lane filtering
-            if role in self.force_outer_lane_roles:
-                if self._route_goes_through_intersection(route):
-                    rospy.logwarn("%s: route still goes through intersection after outer lane filtering, retrying", role)
-                    # Retry to find a route that avoids intersection
-                    success = False
-                    for retry in range(5):
-                        d2, r2, p2 = self._sample_destination_route(start_wp, role)
-                        if d2 is None or not r2 or len(p2) < 2:
-                            continue
-                        # Apply outer lane filtering
-                        r2 = self._filter_route_to_outer_lane(r2, skip_intersections=False)
-                        if not r2 or len(r2) < 2:
-                            continue
-                        p2 = self._route_to_points(r2)
-                        if len(p2) < 2:
-                            continue
-                        # Check if this route avoids intersection
-                        if not self._route_goes_through_intersection(r2):
-                            dest_index, route, points = d2, r2, p2
-                            success = True
-                            break
-                    if not success:
-                        rospy.logwarn("%s: could not find route avoiding intersection, using best-effort path", role)
-            
             # Conflict filtering: avoid overlapping initial horizon with already planned ones
             ok_points = self._filter_conflicts(route, taken_keys)
             if not ok_points:
@@ -377,17 +319,6 @@ class MultiAgentConflictFreePlanner:
                     d2, r2, p2 = self._sample_destination_route(start_wp, role)
                     if d2 is None or not r2 or len(p2) < 2:
                         continue
-                    # For platoon vehicles: apply outer lane filtering and check intersection
-                    if role in self.force_outer_lane_roles:
-                        r2 = self._filter_route_to_outer_lane(r2, skip_intersections=False)
-                        if not r2 or len(r2) < 2:
-                            continue
-                        p2 = self._route_to_points(r2)
-                        if len(p2) < 2:
-                            continue
-                        # Prefer routes that avoid intersection
-                        if self._route_goes_through_intersection(r2) and attempts < 5:
-                            continue
                     ok_points = self._filter_conflicts(r2, taken_keys)
                     if ok_points:
                         dest_index, route, points = d2, r2, p2
@@ -777,24 +708,7 @@ class MultiAgentConflictFreePlanner:
             x = loc.x
             y = loc.y
 
-            # 사용자가 편집한 글로벌 루트 YAML 좌표로 waypoint 위치를 미세 조정
-            # (같은 grid cell 에 대응되는 edited_global_route 점이 있으면 그 좌표로 치환)
-            if self.use_custom_goal_points and self.custom_geom_points:
-                key = (int(round(x / geom_res)), int(round(y / geom_res)))
-                override = self.custom_geom_points.get(key)
-                if override is not None:
-                    x, y = override
-
-            # 2) 선택된 offset 영역에 있는 경우 lateral/X/Y offset 적용
-            if self.offset_regions:
-                off_lat, off_x, off_y = self._get_offsets_for_point(x, y)
-                if abs(off_lat) > 1e-4 or abs(off_x) > 1e-4 or abs(off_y) > 1e-4:
-                    # 차량 진행 방향 기준 좌/우 법선으로 lateral 적용
-                    yaw = math.radians(wp.transform.rotation.yaw)
-                    nx = -math.sin(yaw)
-                    ny = math.cos(yaw)
-                    x += nx * off_lat + off_x
-                    y += ny * off_lat + off_y
+        # [LEGACY REMOVED] edited_global_route / offset_regions 기반 기하 보정은 더 이상 적용하지 않음
 
             curr = (x, y)
             if last is None:
@@ -928,70 +842,11 @@ class MultiAgentConflictFreePlanner:
         return route
     
     def _filter_route_to_outer_lane(self, route: List[Tuple], skip_intersections: bool = True) -> List[Tuple]:
-        """Filter route to use only outer lane waypoints (largest absolute lane_id).
+        """[LEGACY REMOVED] 예전 outer-lane 전용 필터는 더 이상 사용하지 않는다.
         
-        This helps avoid intersections by staying on the outer lane.
-        Uses CARLA's waypoint API to find the outermost lane at each waypoint location.
-        
-        Args:
-            route: List of (waypoint, road_option) tuples
-            skip_intersections: If True, skip filtering inside safety area (allows turns in intersections)
+        현재는 입력 route 를 그대로 반환하는 no-op 이다.
         """
-        if not route or len(route) < 2:
-            return route
-        
-        filtered = []
-        for wp, road_option in route:
-            # Skip filtering if inside safety area (intersection) and skip_intersections is True
-            if skip_intersections and self._is_in_safety_area(wp.transform.location):
-                # Keep original waypoint inside intersection to allow turns
-                filtered.append((wp, road_option))
-                continue
-            
-            # Find outermost lane by checking adjacent lanes
-            # CARLA: lane_id positive = forward direction, negative = backward
-            # Larger absolute value = outer lane
-            outer_wp = wp
-            max_lane_id_abs = abs(wp.lane_id)
-            current_wp = wp
-            
-            # Try to get right lane (outer lane for right-hand traffic)
-            # Keep going right until we reach the outermost lane
-            for _ in range(5):  # Maximum 5 lane changes (safety limit)
-                try:
-                    right_wp = current_wp.get_right_lane()
-                    if right_wp is None or right_wp.lane_type != carla.LaneType.Driving:
-                        break
-                    if abs(right_wp.lane_id) > max_lane_id_abs:
-                        outer_wp = right_wp
-                        max_lane_id_abs = abs(right_wp.lane_id)
-                        current_wp = right_wp
-                    else:
-                        break
-                except Exception:
-                    break
-            
-            # Also check left lane in case we're on the wrong side
-            # But prioritize right lane (outer lane for right-hand traffic)
-            current_wp = wp
-            for _ in range(5):
-                try:
-                    left_wp = current_wp.get_left_lane()
-                    if left_wp is None or left_wp.lane_type != carla.LaneType.Driving:
-                        break
-                    if abs(left_wp.lane_id) > max_lane_id_abs:
-                        # Only use left lane if it's truly outer (shouldn't happen in RHT)
-                        outer_wp = left_wp
-                        max_lane_id_abs = abs(left_wp.lane_id)
-                        current_wp = left_wp
-                    else:
-                        break
-                except Exception:
-                    break
-            
-            filtered.append((outer_wp, road_option))
-        
-        return filtered
+        return route
     
     def _route_goes_through_intersection(self, route: List[Tuple]) -> bool:
         """Check if route goes through intersection (safety area).

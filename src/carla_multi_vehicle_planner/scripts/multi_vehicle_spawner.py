@@ -30,7 +30,7 @@ except ImportError as exc:
 
 
 DEFAULT_MODEL_MAP: List[str] = [
-    "vehicle.vehicle.pinkxycar",   # ego_vehicle_1
+    "vehicle.vehicle.yellowxycar",   # ego_vehicle_1
     "vehicle.vehicle.greenxycar",     # ego_vehicle_2
     "vehicle.vehicle.purplexycar",  # ego_vehicle_3
     "vehicle.vehicle.yellowxycar",  # ego_vehicle_4
