@@ -6,6 +6,10 @@
 #include <ament_index_cpp/get_package_share_directory.hpp>
 #include <algorithm>
 #include <yaml-cpp/yaml.h>
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
+#include <unordered_map>
 
 using namespace std::chrono_literals;
 
@@ -38,7 +42,7 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 	// Initialize RTSPStreamManager
 	rtsp_manager_ = std::make_unique<RTSPStreamManager>(batch_size_);
 
-	for (int i = 8; i < 8 + batch_size_; ++i) {
+	for (int i = 1; i < 9; ++i) {
 		std::string camera_key = "ipcam_" + std::to_string(i);
 		if (config[camera_key]) {
 			std::string ip = config[camera_key]["ros__parameters"]["ip"].as<std::string>();
@@ -46,8 +50,54 @@ PerceptionNode::PerceptionNode(const rclcpp::NodeOptions& options)
 			std::string username = config["/**"]["ros__parameters"]["username"].as<std::string>();
 			std::string password = config["/**"]["ros__parameters"]["password"].as<std::string>();
 
+			YAML::Node params = config[camera_key]["ros__parameters"];
+			cv::Mat K, newK, dist;
+			cv::Size img_size(0,0);
+			cv::Rect roi(0,0,0,0);
+
+			if (params["size"]) {
+				auto v = params["size"].as<std::vector<int>>();
+				if (v.size() >= 2) img_size = cv::Size(v[0], v[1]);
+			}
+			if (params["roi"]) {
+				auto v = params["roi"].as<std::vector<int>>();
+				if (v.size() >= 4) roi = cv::Rect(v[0], v[1], v[2], v[3]);
+			}
+			if (params["K"]) {
+				auto v = params["K"].as<std::vector<double>>();
+				if (v.size() == 9) {
+					K = cv::Mat(3,3,CV_64F);
+					for (int r=0; r<3; ++r)
+						for (int c=0; c<3; ++c)
+							K.at<double>(r,c) = v[r*3+c];
+				}
+			}
+			if (params["new_K"]) {
+				auto v = params["new_K"].as<std::vector<double>>();
+				if (v.size() == 9) {
+					newK = cv::Mat(3,3,CV_64F);
+					for (int r=0; r<3; ++r)
+						for (int c=0; c<3; ++c)
+							newK.at<double>(r,c) = v[r*3+c];
+				}
+			}
+			if (params["dist"]) {
+				auto v = params["dist"].as<std::vector<double>>();
+				if (!v.empty()) {
+					dist = cv::Mat(1, static_cast<int>(v.size()), CV_64F);
+					for (int j=0; j<static_cast<int>(v.size()); ++j)
+						dist.at<double>(0,j) = v[j];
+				}
+			}
+
+			cv::Mat useNewK = newK.empty() ? K : newK;
+			cv::Mat map1, map2;
+			cv::initUndistortRectifyMap(K, dist, cv::Mat(), useNewK, img_size, CV_32FC1, map1, map2);
+			RCLCPP_INFO(this->get_logger(), "Undistort maps ready for %s (size=%dx%d, dist_len=%d)",
+				camera_key.c_str(), img_size.width, img_size.height, dist.cols);
+
 			std::string rtsp_url = "rtsp://" + username + ":" + password + "@" + ip + ":" + std::to_string(port) + "/stream1";
-			rtsp_manager_->addStream(camera_key, rtsp_url, 10);
+			rtsp_manager_->addStream(camera_key, rtsp_url, map1, map2, 10);
 		} else {
 			RCLCPP_WARN(this->get_logger(), "Camera configuration for %s not found in YAML", camera_key.c_str());
 		}
@@ -71,8 +121,8 @@ void PerceptionNode::processStreams() {
 			continue;
 		}
 
-		// for(auto frame: frames){
-		// 	cv::imshow("Frame", frame);
+		// for(size_t i = 0; i < frames.size(); ++i){
+		// 	cv::imshow("Frame" + std::to_string(i), *frames[i]);
 		// }
 
 		int ret = model_->preprocess(frames);

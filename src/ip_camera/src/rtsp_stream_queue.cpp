@@ -3,8 +3,8 @@
 #include <cstdio>
 #include <cstring>
 
-RTSPStreamQueue::RTSPStreamQueue(const std::string& rtsp_url, size_t max_queue_size)
-    : rtsp_url_(rtsp_url), max_queue_size_(max_queue_size) {}
+RTSPStreamQueue::RTSPStreamQueue(const std::string& rtsp_url, cv::Mat map1, cv::Mat map2, size_t max_queue_size)
+    : rtsp_url_(rtsp_url), map1_(map1), map2_(map2), max_queue_size_(max_queue_size) {}
 
 RTSPStreamQueue::~RTSPStreamQueue() {
     stop();

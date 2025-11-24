@@ -8,7 +8,7 @@ RTSPStreamManager::~RTSPStreamManager() {
     stopAll();
 }
 
-bool RTSPStreamManager::addStream(const std::string& stream_id, const std::string& rtsp_url, size_t max_queue_size) {
+bool RTSPStreamManager::addStream(const std::string& stream_id, const std::string& rtsp_url, cv::Mat map1, cv::Mat map2, size_t max_queue_size) {
     std::lock_guard<std::mutex> lock(manager_mutex_);
     if (streams_.size() >= max_streams_) {
         return false; // 최대 스트림 수 초과
@@ -17,8 +17,9 @@ bool RTSPStreamManager::addStream(const std::string& stream_id, const std::strin
         return false; // 이미 존재하는 스트림 ID
     }
 
-    auto stream = std::make_shared<RTSPStreamQueue>(rtsp_url, max_queue_size);
+    auto stream = std::make_shared<RTSPStreamQueue>(rtsp_url, map1, map2, max_queue_size);
     streams_[stream_id] = stream;
+    stream_order_.push_back(stream_id);
     stream->start();
     return true;
 }
@@ -32,6 +33,8 @@ bool RTSPStreamManager::removeStream(const std::string& stream_id) {
 
     it->second->stop();
     streams_.erase(it);
+    // remove from order list
+    stream_order_.erase(std::remove(stream_order_.begin(), stream_order_.end(), stream_id), stream_order_.end());
     return true;
 }
 
@@ -47,15 +50,17 @@ std::vector<uint8_t> RTSPStreamManager::getFrame(const std::string& stream_id) {
 
 void RTSPStreamManager::startAll() {
     std::lock_guard<std::mutex> lock(manager_mutex_);
-    for (auto& [id, stream] : streams_) {
-        stream->start();
+    for (const auto& id : stream_order_) {
+        auto it = streams_.find(id);
+        if (it != streams_.end()) it->second->start();
     }
 }
 
 void RTSPStreamManager::stopAll() {
     std::lock_guard<std::mutex> lock(manager_mutex_);
-    for (auto& [id, stream] : streams_) {
-        stream->stop();
+    for (const auto& id : stream_order_) {
+        auto it = streams_.find(id);
+        if (it != streams_.end()) it->second->stop();
     }
 }
 
@@ -65,8 +70,9 @@ std::vector<std::shared_ptr<cv::Mat>> RTSPStreamManager::getAllFrames() {
     {
         std::lock_guard<std::mutex> lock(manager_mutex_);
         queues.reserve(streams_.size());
-        for (auto &kv : streams_) {
-            queues.push_back(kv.second);
+        for (const auto& id : stream_order_) {
+            auto it = streams_.find(id);
+            if (it != streams_.end()) queues.push_back(it->second);
         }
     }
     std::vector<std::shared_ptr<cv::Mat>> frames;
@@ -89,8 +95,9 @@ std::vector<std::shared_ptr<cv::Mat>> RTSPStreamManager::getAllFramesWithTimeout
     {
         std::lock_guard<std::mutex> lock(manager_mutex_);
         queues.reserve(streams_.size());
-        for (auto &kv : streams_) {
-            queues.push_back(kv.second);
+        for (const auto& id : stream_order_) {
+            auto it = streams_.find(id);
+            if (it != streams_.end()) queues.push_back(it->second);
         }
     }
     std::vector<std::shared_ptr<cv::Mat>> frames;
@@ -101,8 +108,15 @@ std::vector<std::shared_ptr<cv::Mat>> RTSPStreamManager::getAllFramesWithTimeout
             continue; // timeout or no frame
         }
         cv::Mat decoded = cv::imdecode(frame_data, cv::IMREAD_COLOR);
+        cv::resize(decoded, decoded, cv::Size(1536, 864));
+        
+        // std::cout << "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@" << std::endl;
+        // std::cout << "Decoded frame size: " << decoded.cols << "x" << decoded.rows << std::endl;
+
         if (!decoded.empty()) {
-            frames.emplace_back(std::make_shared<cv::Mat>(std::move(decoded)));
+            cv::Mat undistorted;
+            cv::remap(decoded, undistorted, q->map1_, q->map2_, cv::INTER_LINEAR);
+            frames.emplace_back(std::make_shared<cv::Mat>(std::move(undistorted)));
         }
     }
     return frames;

@@ -10,9 +10,11 @@
 #include <atomic>
 #include <chrono>
 
+#include <opencv2/opencv.hpp>
+
 class RTSPStreamQueue {
 public:
-    explicit RTSPStreamQueue(const std::string& rtsp_url, size_t max_queue_size);
+    explicit RTSPStreamQueue(const std::string& rtsp_url, cv::Mat map1, cv::Mat map2, size_t max_queue_size);
     ~RTSPStreamQueue();
 
     void start();
@@ -23,6 +25,9 @@ public:
     std::vector<uint8_t> getFrameWaitFor(std::chrono::milliseconds timeout);
     // Non-blocking version: returns front frame or empty if none
     std::vector<uint8_t> getFrameNonBlocking();
+
+    cv::Mat map1_;
+    cv::Mat map2_;
 
 private:
     void streamThread();
