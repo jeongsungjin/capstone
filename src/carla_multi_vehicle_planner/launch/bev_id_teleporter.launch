@@ -59,7 +59,10 @@
   <arg name="yaw_stability_alpha" default="0.6" />
   <arg name="only_correct_yaw_during_alignment" default="true" />
 
+  <!-- Kalman / motion-based yaw 제어 -->
   <arg name="kf_enabled" default="false" />
+  <!-- 칼만과 독립적으로 모션 기반 yaw 사용 여부를 토글할 수 있게 노출 -->
+  <arg name="motion_yaw_enabled" default="false" />
   <arg name="kf_default_dt" default="0.05" />
   <arg name="kf_max_dt" default="0.2" />
   <arg name="kf_process_noise_pos" default="0.5" />
@@ -130,7 +133,9 @@
     <param name="yaw_path_weight" value="$(arg yaw_path_weight)" />
     <param name="yaw_stability_alpha" value="$(arg yaw_stability_alpha)" />
     <param name="only_correct_yaw_during_alignment" value="$(arg only_correct_yaw_during_alignment)" />
+    <!-- Kalman / motion yaw -->
     <param name="kf_enabled" value="$(arg kf_enabled)" />
+    <param name="motion_yaw_enabled" value="$(arg motion_yaw_enabled)" />
     <param name="kf_default_dt" value="$(arg kf_default_dt)" />
     <param name="kf_max_dt" value="$(arg kf_max_dt)" />
     <param name="kf_process_noise_pos" value="$(arg kf_process_noise_pos)" />

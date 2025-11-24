@@ -150,13 +150,9 @@ class BevIdTeleporter:
 		# Optional forward prediction horizon (seconds) for teleport target, relative to current time
 		# e.g., 1.0이면 "1초 뒤 위치" 칼만 예측값을 텔레포트에 사용
 		self.kf_prediction_horizon_sec: float = float(rospy.get_param("~kf_prediction_horizon_sec", 0.3))
-		# Motion-based yaw estimation (when Kalman filter is off)
-		motion_yaw_enabled_param = rospy.get_param("~motion_yaw_enabled", None)
-		# If not explicitly set, enable when KF is disabled
-		if motion_yaw_enabled_param is None:
-			self.motion_yaw_enabled: bool = not self.kf_enabled
-		else:
-			self.motion_yaw_enabled: bool = bool(motion_yaw_enabled_param)
+		# Motion-based yaw estimation (칼만과 독립적으로 런치 파라미터로만 제어)
+		# - launch 에서 주는 motion_yaw_enabled 값 그대로 사용
+		self.motion_yaw_enabled: bool = bool(rospy.get_param("~motion_yaw_enabled", True))
 		# Tuned for 10-20Hz perception (0.05-0.1s) at 2m/s vehicle speed
 		# min_distance: 0.1-0.2m per frame at 2m/s → 0.15m threshold
 		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.15))

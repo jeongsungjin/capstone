@@ -42,11 +42,13 @@
     <!-- Replanning only when close to destination -->
     <param name="replan_remaining_m" value="60.0" />
     <param name="replan_interval" value="1.0" />
-    <!-- [LEGACY REMOVED] force_outer_lane_roles / custom_goal_points / offset_regions 기능 비활성화 -->
+    <!-- [LEGACY REMOVED] force_outer_lane_roles / custom_goal_points 는 사용하지 않음 -->
     <param name="force_outer_lane_roles" value="" />
     <param name="use_custom_goal_points" value="false" />
     <param name="custom_goal_points_file" value="" />
-    <param name="offset_regions_file" value="" />
+    <!-- path_offset_regions.yaml 기반 path offset 은 현재도 사용하는 기능 -->
+    <param name="offset_regions_file"
+           value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
     <!-- 플래투닝 차량도 일반 동적 경로계획을 사용하도록 fixed loop / planner 내부 platoon 모드 비활성화 -->
     <param name="fixed_loop_path_file" value="" />
     <param name="platoon_enable" value="false" />

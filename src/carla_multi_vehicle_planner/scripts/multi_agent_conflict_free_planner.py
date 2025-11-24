@@ -107,18 +107,18 @@ class MultiAgentConflictFreePlanner:
         self.heading_compat_deg = float(rospy.get_param("~heading_compat_deg", 45.0))
         self.heading_compat_dist_m = float(rospy.get_param("~heading_compat_dist_m", 8.0))
 
-        # [LEGACY REMOVED] edited_global_route / path_offset_regions 기반 기하 수정 기능 비활성화
-        # - use_custom_goal_points: 목적지/기하를 YAML 로 정의하던 오래된 기능
-        # - offset_regions: 특정 영역에서 전역 경로를 lateral/X/Y 로 보정하던 기능
-        # 현재 코드는 순수 GRP 기반 경로만 사용하고, 이 옵션들은 모두 무시한다.
+        # [LEGACY REMOVED] edited_global_route 기반 custom_goal_points 는 더 이상 사용하지 않음
+        #   - 목적지/기하를 YAML 로 완전히 대체하던 옛 기능
         self.use_custom_goal_points: bool = False
         self.custom_goal_points_file = ""
         self.custom_goal_locs: List[carla.Location] = []
         self.custom_geom_points: Dict[Tuple[int, int], Tuple[float, float]] = {}
         
-        self.offset_regions_file = ""
+        # path_offset_regions.yaml 기반 offset 은 현재도 사용하는 기능이므로 유지
+        #   - 특정 영역에서 전역 경로를 lateral/X/Y 로 미세 조정
+        self.offset_regions_file = rospy.get_param("~offset_regions_file", "")
         self.offset_regions: List[Dict[str, float]] = []
-        self.offset_blend_width_m = 0.0
+        self.offset_blend_width_m = float(rospy.get_param("~offset_blend_width_m", 5.0))
 
         # Visualisation
         self.enable_visualization = bool(rospy.get_param("~enable_visualization", True))
@@ -151,7 +151,9 @@ class MultiAgentConflictFreePlanner:
         if not self.spawn_points:
             raise RuntimeError("No spawn points available in CARLA map")
 
-        # [LEGACY REMOVED] 커스텀 목적지/기하 및 오프셋 영역 로드는 더 이상 사용하지 않음
+        # 커스텀 목적지/기하는 사용하지 않고, offset 영역만 로드
+        if self.offset_regions_file:
+            self._load_offset_regions(self.offset_regions_file)
 
         # State
         self.vehicles: List[carla.Actor] = []
@@ -707,8 +709,17 @@ class MultiAgentConflictFreePlanner:
             loc = wp.transform.location
             x = loc.x
             y = loc.y
-
-        # [LEGACY REMOVED] edited_global_route / offset_regions 기반 기하 보정은 더 이상 적용하지 않음
+            
+            # 1) path_offset_regions 기반 X/Y/lateral offset 적용
+            if self.offset_regions:
+                off_lat, off_x, off_y = self._get_offsets_for_point(x, y)
+                if abs(off_lat) > 1e-4 or abs(off_x) > 1e-4 or abs(off_y) > 1e-4:
+                    # 차량 진행 방향 기준 좌/우 법선으로 lateral 적용
+                    yaw = math.radians(wp.transform.rotation.yaw)
+                    nx = -math.sin(yaw)
+                    ny = math.cos(yaw)
+                    x += nx * off_lat + off_x
+                    y += ny * off_lat + off_y
 
             curr = (x, y)
             if last is None:
