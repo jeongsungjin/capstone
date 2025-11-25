@@ -32,12 +32,12 @@ class CamPerspective:
 
         # Default BEV view parameters (matching prior behavior)
         self.auto_height = bool(rospy.get_param("~spectator_auto_height", False))
-        self.min_height = float(rospy.get_param("~spectator_min_height", 65.0))
+        self.min_height = float(rospy.get_param("~spectator_min_height", 55.0))
         self.base_height = float(rospy.get_param("~spectator_height", 185.0))
         self.bev_yaw_deg = float(rospy.get_param("~spectator_yaw_deg", -90.0))
-        self.bev_pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -60.0))
-        self.offset_x = float(rospy.get_param("~spectator_offset_x", -12.0))
-        self.offset_y = float(rospy.get_param("~spectator_offset_y", 95.0))
+        self.bev_pitch_deg = float(rospy.get_param("~spectator_pitch_deg", -70.0))
+        self.offset_x = float(rospy.get_param("~spectator_offset_x", 0.0))
+        self.offset_y = float(rospy.get_param("~spectator_offset_y", 55.0))
         self.view_right_m = float(rospy.get_param("~spectator_view_right_m", 0.0))
         self.view_up_m = float(rospy.get_param("~spectator_view_up_m", 0.0))
         self.lock_rate_hz = float(rospy.get_param("~lock_rate_hz", 5.0))
@@ -70,14 +70,14 @@ class CamPerspective:
             {"name": "goal3", "x":   0.000, "y": -30.000, "yaw": float(rospy.get_param("~goal3_yaw_deg", -90.0))},
             {"name": "goal4", "x":  43.090, "y": -53.940, "yaw": float(rospy.get_param("~goal4_yaw_deg", -90.0))},
             {"name": "goal5", "x":  58.250, "y": -37.830, "yaw": float(rospy.get_param("~goal5_yaw_deg", -90.0))},
-            {"name": "goal6", "x":  42.520, "y":  -6.030,  "yaw": float(rospy.get_param("~goal6_yaw_deg", -90.0))},
+            {"name": "goal6", "x":  28.34, "y":  -6.030,  "yaw": float(rospy.get_param("~goal6_yaw_deg", -90.0))},
             {"name": "goal7", "x": -35.870, "y":  -2.040,  "yaw": float(rospy.get_param("~goal7_yaw_deg", -90.0))},
             {"name": "goal8", "x":  20.000, "y":  -1.750,  "yaw": float(rospy.get_param("~goal8_yaw_deg", -90.0))},
         ]
         # Optional per-destination camera overrides (position + orientation)
         # Defaults for per-destination camera overrides (so launch params are optional)
         _override_defaults = {
-            1: {"use_cam": True, "cam_x":   1.650, "cam_y":  2.810, "cam_z": 80.0, "cam_yaw_deg": 220.0, "cam_pitch_deg": -35.0},
+            1: {"use_cam": True, "cam_x":   42.520, "cam_y": 10.800, "cam_z": 80.0, "cam_yaw_deg": 220.0, "cam_pitch_deg": -35.0},
             2: {"use_cam": True, "cam_x":  -41.980, "cam_y": 1.460, "cam_z": 70.0, "cam_yaw_deg":  -90.0, "cam_pitch_deg": -40.0},
             3: {"use_cam": True, "cam_x":   0.000, "cam_y":  6.180, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},
             4: {"use_cam": True, "cam_x":  43.090, "cam_y": -21.460, "cam_z": 60.0, "cam_yaw_deg": -90.0, "cam_pitch_deg": -50.0},

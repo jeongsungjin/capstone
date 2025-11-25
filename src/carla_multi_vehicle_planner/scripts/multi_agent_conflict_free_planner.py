@@ -152,6 +152,7 @@ class MultiAgentConflictFreePlanner:
             raise RuntimeError("No spawn points available in CARLA map")
 
         # 커스텀 목적지/기하는 사용하지 않고, offset 영역만 로드
+        # 이것을 비활성화 한다면 영역 경로 좌표 오프셋은 적용되지 않을것~~!!
         if self.offset_regions_file:
             self._load_offset_regions(self.offset_regions_file)
 
@@ -543,11 +544,18 @@ class MultiAgentConflictFreePlanner:
             rospy.logwarn("%s: override goal off-lane; ignoring", role)
             return
 
-        route = self.route_planner.trace_route(start_wp.transform.location, goal_wp.transform.location)
+        try:
+            route = self.route_planner.trace_route(start_wp.transform.location, goal_wp.transform.location)
+        except Exception as exc:
+            rospy.logwarn("%s: override route trace threw exception (no path?): %s", role, exc)
+            route = None
         print(f"route: {route}")
         if not route or len(route) < 2:
-            rospy.logwarn("%s: override route trace failed", role)
-            return
+            # Fall back to straight-line snapped pseudo route
+            route = self._synthesize_route_by_snapping(start_wp.transform.location, goal_wp.transform.location)
+            if not route or len(route) < 2:
+                rospy.logwarn("%s: override route trace failed (and fallback synthesis failed)", role)
+                return
         
         # Filter route to outer lane if required for this role
         # For platoon vehicles: use outer lane everywhere (including intersections) to prevent turns
@@ -777,6 +785,39 @@ class MultiAgentConflictFreePlanner:
             prev = loc
         return total
 
+    def _synthesize_route_by_snapping(self, start_loc: "carla.Location", dest_loc: "carla.Location", step_m: float = 2.0) -> Optional[List[Tuple]]:
+        """
+        GlobalRoutePlanner 가 경로를 찾지 못할 때, 시작-목적지 직선을 일정 간격으로 샘플링하고
+        각 샘플을 도로로 snap 하여 의사 경로를 생성한다.
+        """
+        try:
+            total = float(start_loc.distance(dest_loc))
+        except Exception:
+            return None
+        step = max(0.5, float(step_m))
+        num_steps = max(2, int(total / step))
+        snapped: List[Tuple] = []
+        last_xy: Optional[Tuple[float, float]] = None
+        for i in range(num_steps + 1):
+            ratio = float(i) / float(num_steps)
+            x = start_loc.x + (dest_loc.x - start_loc.x) * ratio
+            y = start_loc.y + (dest_loc.y - start_loc.y) * ratio
+            loc = carla.Location(x=x, y=y, z=0.5)
+            try:
+                wp = self.carla_map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+            except Exception:
+                wp = self.carla_map.get_waypoint(loc, project_to_road=True)
+            if wp is None:
+                continue
+            wloc = wp.transform.location
+            curr_xy = (float(wloc.x), float(wloc.y))
+            if last_xy is None or math.hypot(curr_xy[0] - last_xy[0], curr_xy[1] - last_xy[1]) > 0.2:
+                snapped.append((wp, None))
+                last_xy = curr_xy
+        if len(snapped) < 2:
+            return None
+        return snapped
+
     def _store_path_geometry(self, role: str, points: List[Tuple[float, float]]) -> None:
         if not points or len(points) < 2:
             self.vehicle_path_s.pop(role, None)
@@ -910,9 +951,17 @@ class MultiAgentConflictFreePlanner:
             euclid = start_loc.distance(dest_loc)
             if euclid < self.min_destination_distance or euclid > self.max_destination_distance * 1.5:
                 continue
-            route = self.route_planner.trace_route(start_loc, dest_loc)
+            try:
+                route = self.route_planner.trace_route(start_loc, dest_loc)
+            except Exception as exc:
+                # 단방향/비연결 그래프에서 경로가 없으면 astar 가 예외를 던질 수 있음 → 재시도 or fallback
+                rospy.logdebug("trace_route exception on attempt %d: %s", attempts, exc)
+                route = None
             if not route or len(route) < 2:
-                continue
+                # Try fallback synthetic route
+                route = self._synthesize_route_by_snapping(start_loc, dest_loc)
+                if not route or len(route) < 2:
+                    continue
             
             # For platoon vehicles: STRICTLY avoid routes that go through intersections
             if avoid_intersections and self._route_goes_through_intersection(route):
@@ -939,9 +988,15 @@ class MultiAgentConflictFreePlanner:
             euclid = start_loc.distance(dest_loc)
             if euclid < max(5.0, self.min_destination_distance * 0.5) or euclid > max(self.max_destination_distance * 2.0, self.min_destination_distance + 10.0):
                 continue
-            route = self.route_planner.trace_route(start_loc, dest_loc)
+            try:
+                route = self.route_planner.trace_route(start_loc, dest_loc)
+            except Exception as exc:
+                rospy.logdebug("trace_route exception in fallback for dest_index=%d: %s", dest_index, exc)
+                route = None
             if not route or len(route) < 2:
-                continue
+                route = self._synthesize_route_by_snapping(start_loc, dest_loc)
+                if not route or len(route) < 2:
+                    continue
             points = self._route_to_points(route)
             if len(points) < 2:
                 continue
