@@ -183,10 +183,13 @@ class MultiAgentConflictFreePlanner:
 
         # Publishers per role
         self.path_publishers: Dict[str, rospy.Publisher] = {}
+        self.ui_path_publishers: Dict[str, rospy.Publisher] = {}
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+            ui_topic = f"/global_path_ui_{role}"
+            self.ui_path_publishers[role] = rospy.Publisher(ui_topic, Path, queue_size=1, latch=True)
 
         # Finished event publisher (override goal reached)
         self.finished_pub = rospy.Publisher("/override_goal_finished", String, queue_size=10)
@@ -356,6 +359,14 @@ class MultiAgentConflictFreePlanner:
             self.vehicle_paths[role] = points
             self._store_path_geometry(role, points)
             self._publish_path(points, role)
+
+            # UI용 원본 경로 퍼블리시 (오프셋 적용 전)
+            try:
+                ui_points = self._route_to_points_raw(route)
+                if ui_points and len(ui_points) >= 2:
+                    self._publish_ui_path(ui_points, role)
+            except Exception:
+                pass
 
             # Update conflict keys for next vehicles
             self._accumulate_conflict_keys(route, taken_keys)
@@ -578,6 +589,14 @@ class MultiAgentConflictFreePlanner:
             return
         points = self._ensure_path_starts_at_vehicle(points, front_xy)
 
+        # UI용 원본 경로 퍼블리시 (오프셋 적용 전)
+        try:
+            ui_points = self._route_to_points_raw(route)
+            if ui_points and len(ui_points) >= 2:
+                self._publish_ui_path(ui_points, role)
+        except Exception:
+            pass
+
         self.vehicle_paths[role] = points
         self._store_path_geometry(role, points)
         self._publish_path(points, role)
@@ -784,6 +803,39 @@ class MultiAgentConflictFreePlanner:
                 total += loc.distance(prev)
             prev = loc
         return total
+    
+    def _route_to_points_raw(self, route: List[Tuple]) -> List[Tuple[float, float]]:
+        """오프셋 적용 없이 순수 경로 포인트만 생성 (시각화/UI 용)."""
+        waypoints = [item[0] for item in route]
+        if not waypoints:
+            return []
+        pts: List[Tuple[float, float]] = []
+        last: Optional[Tuple[float, float]] = None
+        for wp in waypoints:
+            loc = wp.transform.location
+            x = loc.x
+            y = loc.y
+            curr = (x, y)
+            if last is None:
+                pts.append(curr)
+                last = curr
+                continue
+            seg = math.hypot(curr[0] - last[0], curr[1] - last[1])
+            if seg < 1e-3:
+                continue
+            steps = max(1, int(seg // self.path_sampling))
+            for step in range(1, steps + 1):
+                ratio = min(1.0, (step * self.path_sampling) / seg)
+                interp = (
+                    last[0] + (curr[0] - last[0]) * ratio,
+                    last[1] + (curr[1] - last[1]) * ratio,
+                )
+                if not pts or math.hypot(interp[0] - pts[-1][0], interp[1] - pts[-1][1]) > 0.05:
+                    pts.append(interp)
+            if math.hypot(curr[0] - pts[-1][0], curr[1] - pts[-1][1]) > 0.05:
+                pts.append(curr)
+            last = curr
+        return pts
 
     def _synthesize_route_by_snapping(self, start_loc: "carla.Location", dest_loc: "carla.Location", step_m: float = 2.0) -> Optional[List[Tuple]]:
         """
@@ -1223,6 +1275,21 @@ class MultiAgentConflictFreePlanner:
 
     def _publish_path(self, path_points: List[Tuple[float, float]], role: str) -> None:
         publisher = self.path_publishers.get(role)
+        if publisher is None:
+            return
+        header = Header(stamp=rospy.Time.now(), frame_id="map")
+        msg = Path(header=header)
+        for x, y in path_points:
+            pose = PoseStamped()
+            pose.header = header
+            pose.pose.position.x = x
+            pose.pose.position.y = y
+            pose.pose.orientation.w = 1.0
+            msg.poses.append(pose)
+        publisher.publish(msg)
+    
+    def _publish_ui_path(self, path_points: List[Tuple[float, float]], role: str) -> None:
+        publisher = self.ui_path_publishers.get(role)
         if publisher is None:
             return
         header = Header(stamp=rospy.Time.now(), frame_id="map")

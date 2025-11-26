@@ -870,15 +870,16 @@ class MultiVehicleController:
 
     def _path_cb(self, msg, role):
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
-        self.states[role]["path"] = points
-        # Store original Path message for collision detection (includes yaw information)
-        self.states[role]["path_msg"] = msg
-        self.states[role]["current_index"] = 0
         s_profile, total_len = self._compute_path_profile(points)
-        self.states[role]["s_profile"] = s_profile
-        self.states[role]["path_length"] = total_len
-        self.states[role]["progress_s"] = 0.0
-        self.states[role]["remaining_distance"] = total_len if total_len > 0.0 else None
+        # Assign in a tight block to reduce race with control loop
+        st = self.states[role]
+        st["path"] = points
+        st["path_msg"] = msg  # original for yaw/collision checks
+        st["current_index"] = 0
+        st["s_profile"] = s_profile
+        st["path_length"] = total_len
+        st["progress_s"] = 0.0
+        st["remaining_distance"] = total_len if total_len > 0.0 else None
         # rospy.loginfo(f"{role}: received path with {len(points)} points")
 
     def _odom_cb(self, msg, role):
@@ -1158,7 +1159,8 @@ class MultiVehicleController:
         path = state["path"]
         position = state["position"]
         orientation = state["orientation"]
-        if not path or position is None or orientation is None:
+        # Strong guard against empty/too-short path or missing pose
+        if not path or len(path) < 2 or position is None or orientation is None:
             return None, None
 
         x = position.x
@@ -1172,6 +1174,10 @@ class MultiVehicleController:
         if self.target_select_by_arclength and state.get("s_profile"):
             # Choose the point whose arc-length >= s_now + lookahead_distance
             s_profile = state["s_profile"]
+            # Guard against race: if s_profile length mismatches path, recompute quickly
+            if len(s_profile) != len(path):
+                s_profile, _ = self._compute_path_profile(path)
+                state["s_profile"] = s_profile
             s_now = float(state.get("progress_s", 0.0))
             s_target = s_now + float(effective_lookahead)
             # Binary search could be used; linear scan is fine for typical sizes
@@ -1181,6 +1187,11 @@ class MultiVehicleController:
                     target_idx = i
                     break
             if target_idx is None:
+                target_idx = len(path) - 1
+            # Final clamp to avoid IndexError on races
+            if target_idx < 0 or target_idx >= len(path):
+                if not path:
+                    return None, None
                 target_idx = len(path) - 1
             tx, ty = path[target_idx]
             target = (tx, ty)

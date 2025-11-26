@@ -59,6 +59,10 @@ class PlatoonManager:
         # Arc-length profile for path-based gap calculation
         self._path_arc_length_profile: Optional[List[float]] = None
         self._path_points_cache: Optional[List[Tuple[float, float, float]]] = None  # (x, y, yaw)
+        self._leader_odom_ready: bool = False
+        self._initial_shared_publish_done: bool = False
+        self._initial_republish_count = int(rospy.get_param("~initial_republish_count", 3))
+        self._initial_republish_delay = float(rospy.get_param("~initial_republish_delay", 0.2))
 
         # Publishers
         # 리더 + 모든 팔로워(1,2,3)에 대해 동일한 공유 경로 기반 planned_path_* 를 발행한다.
@@ -165,20 +169,38 @@ class PlatoonManager:
         self._path_arc_length_profile = self._compute_path_arc_length_profile(self._path_points_cache)
         rospy.loginfo(f"platoon_manager: computed arc-length profile, total path length: {self._path_arc_length_profile[-1]:.2f}m")
         
-        # 리더 + 모든 팔로워에 대해, "동일한" 공유 경로 그대로를 planned_path_* 로 발행한다.
-        # (각 차량의 위치에 따라 sub-path 를 따로 만들지 않고, 2번 차량의 전역 경로를 1,2,3 모두 공유)
+        # 리더 ODOM이 준비되기 전에는 공유 경로 퍼블리시를 지연하고, 준비 후에 일괄 발행/재발행
+        if not self._leader_odom_ready:
+            rospy.logwarn("platoon_manager: leader odometry not ready yet; deferring shared path publish")
+            return
+        self._publish_shared_path_to_all(initial_burst=True)
+
+    def _publish_shared_path_to_all(self, initial_burst: bool = False) -> None:
+        """공유 경로를 리더/팔로워 모두에게 발행. 초기에는 짧게 여러번 재발행하여 레이스를 완화."""
+        if self.shared_global_path is None or not self.shared_global_path.poses:
+            return
         all_platoon_roles = [self.leader_role] + self.follower_roles
         rospy.loginfo(f"platoon_manager: publishing shared full path for {all_platoon_roles}")
-        
-        for role in all_platoon_roles:
-            pub = self.path_pubs.get(role)
-            if pub is None:
-                continue
-            path_copy = Path()
-            path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
-            path_copy.poses = msg.poses
-            pub.publish(path_copy)
-            rospy.loginfo(f"platoon_manager: published shared full path ({len(path_copy.poses)} points) to {role}")
+        def _do_publish(_evt=None):
+            for role in all_platoon_roles:
+                pub = self.path_pubs.get(role)
+                if pub is None:
+                    continue
+                # 모든 차량에 대해 2번 차량의 전역 경로를 그대로 공유
+                path_copy = Path()
+                path_copy.header = Header(stamp=rospy.Time.now(), frame_id=self.shared_global_path.header.frame_id)
+                path_copy.poses = self.shared_global_path.poses
+                pub.publish(path_copy)
+                rospy.loginfo(f"platoon_manager: published shared full path ({len(path_copy.poses)} points) to {role}")
+        # 첫 발행
+        _do_publish()
+        # 초기 레이스 완화: 지정 횟수만큼 재발행
+        if initial_burst and not self._initial_shared_publish_done:
+            cnt = max(0, self._initial_republish_count)
+            delay = max(0.0, self._initial_republish_delay)
+            for i in range(cnt):
+                rospy.Timer(rospy.Duration(delay * (i + 1)), _do_publish, oneshot=True)
+            self._initial_shared_publish_done = True
 
     def _build_subpath_from_projection(
         self, path_points: List[Tuple[float, float]], shared_path: Path, odom: Odometry, role: str
@@ -205,8 +227,30 @@ class PlatoonManager:
 
         proj_index, proj_t, proj_dist = proj_result
 
-        # 투영 거리가 너무 멀면(예: 완전히 다른 도로), 그대로 전체 경로 사용
+        # 투영 거리가 너무 멀면(예: 완전히 다른 도로), 연결 구간을 합성해 sub-path 앞에 붙인다.
         if proj_dist > self.path_connection_max_dist_m:
+            conn_wps = self._generate_connection_waypoints((px, py), path_points, proj_index, proj_t, proj_dist)
+            if conn_wps:
+                # build connection + subpath
+                start_idx = proj_index if proj_t <= 0.5 else min(proj_index + 1, len(shared_path.poses) - 1)
+                new_path = Path()
+                new_path.header = Header(stamp=rospy.Time.now(), frame_id=shared_path.header.frame_id)
+                # connection waypoints first
+                for cx, cy, _cyaw in conn_wps:
+                    pose = PoseStamped()
+                    pose.header = new_path.header
+                    pose.pose.position.x = cx
+                    pose.pose.position.y = cy
+                    pose.pose.orientation.w = 1.0
+                    new_path.poses.append(pose)
+                # then subpath along shared path
+                for i in range(start_idx, len(shared_path.poses)):
+                    new_path.poses.append(shared_path.poses[i])
+                # if still too short fallback to full
+                if len(new_path.poses) >= 10:
+                    rospy.logwarn_throttle(2.0, f"platoon_manager: {role} far from path (dist={proj_dist:.1f}m), using connection+subpath ({len(new_path.poses)} pts)")
+                    return new_path
+            # fallback to full path if connection synthesis failed or too short
             path_copy = Path()
             path_copy.header = Header(stamp=rospy.Time.now(), frame_id=shared_path.header.frame_id)
             path_copy.poses = shared_path.poses
@@ -337,6 +381,12 @@ class PlatoonManager:
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         self.odom[role] = msg
+        if role == self.leader_role and not self._leader_odom_ready:
+            self._leader_odom_ready = True
+            rospy.loginfo("platoon_manager: leader odometry is now available")
+            # 리더 ODOM 준비되면 공유 경로가 있다면 즉시 발행(+초기 재발행)
+            if self.shared_global_path is not None and self.shared_global_path.poses:
+                self._publish_shared_path_to_all(initial_burst=True)
     
     def _update_all_follower_paths(self, _evt=None) -> None:
         """주기적으로 리더/팔로워의 planned_path_* 를 갱신.

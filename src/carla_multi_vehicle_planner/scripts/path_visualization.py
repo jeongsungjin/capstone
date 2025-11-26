@@ -35,7 +35,7 @@ class ClickReplanPathVisualizer:
         self.redraw_period = float(rospy.get_param("~redraw_period", 0.5))  # seconds; keep lines alive until finished
         # Visual intensity controls
         self.brightness_scale = float(rospy.get_param("~brightness_scale", 0.0))  # 0.0..1.0 → closer to white
-        self.intensity_scale = float(rospy.get_param("~intensity_scale", 0.1))  # 0.0..1.0 → darker
+        self.intensity_scale = float(rospy.get_param("~intensity_scale", 1.0))  # 0.0..1.0 → darker
         self.life_multiplier = float(rospy.get_param("~life_multiplier", 1.2))  # line life relative to redraw period
         # Constant altitude mode (legacy)
         self.altitude_z = float(rospy.get_param("~z", 0.5))
@@ -74,7 +74,8 @@ class ClickReplanPathVisualizer:
         for i in range(1, self.num_vehicles + 1):
             role = f"ego_vehicle_{i}"
             rospy.Subscriber(f"/override_goal/{role}", PoseStamped, self._override_cb, callback_args=role, queue_size=1)
-            rospy.Subscriber(f"/global_path_{role}", Path, self._path_cb, callback_args=role, queue_size=1)
+            # UI 시각화는 오프셋 적용 전 경로를 구독
+            rospy.Subscriber(f"/global_path_ui_{role}", Path, self._path_cb, callback_args=role, queue_size=1)
 
         # Periodic redraw to persist visualization until finished signal
         rospy.Timer(rospy.Duration(max(0.05, self.redraw_period)), self._timer_cb)
