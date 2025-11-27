@@ -1,21 +1,31 @@
 <launch>
-  <arg name="num_vehicles" default="6" />
+  <!-- 선택 색상 리스트 기반 동적 차량 수 -->
+  <arg name="color_list" default="" />
+  <arg name="num_vehicles" default="$(eval (len([c for c in arg('color_list').split(',') if c.strip()]) if arg('color_list') != '' else 6))" />
   <arg name="bind_ip" default="0.0.0.0" />
 
   <!-- Per-vehicle network args (override as needed). Up to 6 vehicles supported -->
   <arg name="vehicle_1_ip" default="10.10.103.105" /> <!-- 노랑  -->
   <arg name="vehicle_2_ip" default="10.10.103.107" /> <!-- 초록 -->
   <arg name="vehicle_3_ip" default="10.10.103.115" /> <!-- 발강 -->
-  <arg name="vehicle_4_ip" default="10.10.103.106" /> <!-- 힌색 -->
-  <arg name="vehicle_5_ip" default="10.10.103.113" /> <!-- 분홍 -->
-  <arg name="vehicle_6_ip" default="10.10.103.112" />
+  <arg name="vehicle_4_ip" default="10.10.103.113" /> <!-- 분홍 -->
+  <arg name="vehicle_5_ip" default="10.10.103.106" /> <!-- 힌색 -->
+  <arg name="vehicle_6_ip" default="10.10.103.112" /> 
+  <!-- 색상별 IP 매핑(선호). color_list를 사용할 때 아래 맵이 적용됨 -->
+  <arg name="ip_yellow" default="10.10.103.105" />
+  <arg name="ip_green" default="10.10.103.107" />
+  <arg name="ip_red" default="10.10.103.115" />
+  <arg name="ip_white" default="10.10.103.106" />
+  <arg name="ip_pink" default="10.10.103.113" />
+  <arg name="ip_purple" default="10.10.103.112" />
+  
   <!-- Vehicle color hints (used by BEV teleporter via shared args) -->
-  <arg name="vehicle_1_color" default="yellow" />
-  <arg name="vehicle_2_color" default="green" />
-  <arg name="vehicle_3_color" default="red" />
-  <arg name="vehicle_4_color" default="white" />
-  <arg name="vehicle_5_color" default="pink" />
-  <arg name="vehicle_6_color" default="purple" />
+  <arg name="vehicle_1_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[0])" />
+  <arg name="vehicle_2_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[1])" />
+  <arg name="vehicle_3_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[2])" />
+  <arg name="vehicle_4_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[3])" />
+  <arg name="vehicle_5_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[4])" />
+  <arg name="vehicle_6_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[5])" />
 
   <node pkg="carla_multi_vehicle_planner" type="udp_ackermann_sender.py" name="udp_ackermann_sender" output="screen">
     <param name="bind_ip" value="$(arg bind_ip)" />
@@ -31,17 +41,17 @@
     <param name="vehicles/ego_vehicle_6/topic" value="/carla/ego_vehicle_6/vehicle_control_cmd" />
 
     <!-- Network destinations -->
-    <param name="vehicles/ego_vehicle_1/dest_ip" value="$(arg vehicle_1_ip)" />
+    <param name="vehicles/ego_vehicle_1/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_1_color'), arg('vehicle_1_ip')))" />
     <param name="vehicles/ego_vehicle_1/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_2/dest_ip" value="$(arg vehicle_2_ip)" />
+    <param name="vehicles/ego_vehicle_2/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_2_color'), arg('vehicle_2_ip')))" />
     <param name="vehicles/ego_vehicle_2/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_3/dest_ip" value="$(arg vehicle_3_ip)" />
+    <param name="vehicles/ego_vehicle_3/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_3_color'), arg('vehicle_3_ip')))" />
     <param name="vehicles/ego_vehicle_3/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_4/dest_ip" value="$(arg vehicle_4_ip)" />
+    <param name="vehicles/ego_vehicle_4/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_4_color'), arg('vehicle_4_ip')))" />
     <param name="vehicles/ego_vehicle_4/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_5/dest_ip" value="$(arg vehicle_5_ip)" />
+    <param name="vehicles/ego_vehicle_5/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_5_color'), arg('vehicle_5_ip')))" />
     <param name="vehicles/ego_vehicle_5/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_6/dest_ip" value="$(arg vehicle_6_ip)" />
+    <param name="vehicles/ego_vehicle_6/dest_ip" value="$(eval {'yellow': arg('ip_yellow'), 'green': arg('ip_green'), 'red': arg('ip_red'), 'white': arg('ip_white'), 'pink': arg('ip_pink'), 'purple': arg('ip_purple')}.get(arg('vehicle_6_color'), arg('vehicle_6_ip')))" />
     <param name="vehicles/ego_vehicle_6/dest_port" value="5555" />
 
     <!-- Per-vehicle calibration (defaults). Override as needed per car. -->
@@ -50,7 +60,7 @@
     <param name="vehicles/ego_vehicle_1/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_1/angle_invert" value="false" />
     <param name="vehicles/ego_vehicle_1/angle_center_rad" value="-0.00" />
-    <param name="vehicles/ego_vehicle_1/speed_scale" value="1.5" />
+    <param name="vehicles/ego_vehicle_1/speed_scale" value="1.0" />
     <param name="vehicles/ego_vehicle_1/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_1/force_min_speed_on_zero" value="false" />
     <param name="vehicles/ego_vehicle_1/zero_speed_value" value="1.0" />
@@ -70,7 +80,7 @@
     <param name="vehicles/ego_vehicle_3/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_3/angle_invert" value="false" />
     <param name="vehicles/ego_vehicle_3/angle_center_rad" value="-0.00" />
-    <param name="vehicles/ego_vehicle_3/speed_scale" value="1.0" />
+    <param name="vehicles/ego_vehicle_3/speed_scale" value="0.5" />
     <param name="vehicles/ego_vehicle_3/speed_min_abs" value="1.0" />
     <param name="vehicles/ego_vehicle_3/force_min_speed_on_zero" value="false" />
     <param name="vehicles/ego_vehicle_3/zero_speed_value" value="1.0" />
@@ -85,12 +95,12 @@
     <param name="vehicles/ego_vehicle_4/force_min_speed_on_zero" value="false" />
     <param name="vehicles/ego_vehicle_4/zero_speed_value" value="1" />
 
-    <param name="vehicles/ego_vehicle_5/angle_scale" value="1.0" />
+    <param name="vehicles/ego_vehicle_5/angle_scale" value="0.5" />
     <param name="vehicles/ego_vehicle_5/angle_clip" value="50" />
     <param name="vehicles/ego_vehicle_5/angle_min_abs" value="0" />
     <param name="vehicles/ego_vehicle_5/angle_invert" value="false" />
     <param name="vehicles/ego_vehicle_5/angle_center_rad" value="0.0" />
-    <param name="vehicles/ego_vehicle_5/speed_scale" value="1.0" />
+    <param name="vehicles/ego_vehicle_5/speed_scale" value="0.8" />
     <param name="vehicles/ego_vehicle_5/speed_min_abs" value="1" />
     <param name="vehicles/ego_vehicle_5/force_min_speed_on_zero" value="false" />
     <param name="vehicles/ego_vehicle_5/zero_speed_value" value="1" />

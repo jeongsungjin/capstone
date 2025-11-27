@@ -134,7 +134,7 @@ regions:
     - -20.0
   offset_lateral_m: 1.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 3.0
 - id: r7
   center:
   - 16.0
@@ -154,7 +154,7 @@ regions:
     - -20.0
   offset_lateral_m: 1.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 4.0
 - id: r8
   center:
   - -24.0

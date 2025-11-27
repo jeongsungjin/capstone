@@ -47,7 +47,7 @@ class MultiVehicleController:
         self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
         self.wheelbase = rospy.get_param("~wheelbase", 2.7)
         self.max_steer = rospy.get_param("~max_steer", 1.0)
-        self.target_speed = rospy.get_param("~target_speed", 3.0)
+        self.target_speed = rospy.get_param("~target_speed", 2.0)
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
         # Vehicle dimensions for path-based collision detection
         self.vehicle_length = float(rospy.get_param("~vehicle_length", 6.0))
@@ -64,7 +64,7 @@ class MultiVehicleController:
         # Region-based control gains
         self.regions_config_file = rospy.get_param("~regions_config_file", "/home/jamie/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
         self.default_speed_gain = float(rospy.get_param("~default_speed_gain", 1.0))
-        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.7))
+        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.5))
         self.regions: List[Dict] = []
         if self.regions_config_file:
             self._load_regions_config()

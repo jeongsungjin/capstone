@@ -1,5 +1,6 @@
 <launch>
   <arg name="num_vehicles" default="6" />
+  <arg name="color_list" default="" />
   <arg name="udp_ip" default="0.0.0.0" />
   <arg name="udp_port" default="9001" />
 
@@ -15,11 +16,13 @@
   <node pkg="carla_multi_vehicle_planner" type="udp_recv.py" name="udp_goal_bridge" output="screen">
     <param name="udp_ip" value="$(arg udp_ip)" />
     <param name="udp_port" value="$(arg udp_port)" />
+    <param name="color_list" value="$(arg color_list)" />
   </node>
 
   <!-- Replan path visualization in CARLA world -->
   <node pkg="carla_multi_vehicle_planner" type="path_visualization.py" name="path_visualization" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="color_list" value="$(arg color_list)" />
   </node>
 </launch>
 

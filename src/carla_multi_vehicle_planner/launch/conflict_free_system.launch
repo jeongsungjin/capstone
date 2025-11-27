@@ -1,5 +1,7 @@
 <launch>
   <arg name="num_vehicles" default="3" />
+  <!-- 상위 런치에서 color_list를 넘길 수 있도록 인자 추가 -->
+  <arg name="color_list" default="" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="enable_platooning" default="false" />
@@ -14,6 +16,8 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
+    <!-- 색상 리스트가 주어졌다면 해당 색상 순서의 모델들을 사용 -->
+    <param name="vehicle_models" value="$(eval ','.join(['vehicle.vehicle.' + c.strip() + 'xycar' for c in arg('color_list').split(',') if c.strip()]))" />
     <param name="spawn_delay" value="1.5" />
     <!-- Randomized spawn settings -->
     <param name="randomize_spawn" value="true" />

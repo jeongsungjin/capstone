@@ -60,7 +60,7 @@
   <arg name="only_correct_yaw_during_alignment" default="true" />
 
   <!-- Motion-based yaw 제어 -->
-  <arg name="motion_yaw_enabled" default="false" />
+  <arg name="motion_yaw_enabled" default="true" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"

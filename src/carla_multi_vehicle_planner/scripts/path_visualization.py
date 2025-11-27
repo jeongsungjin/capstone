@@ -58,15 +58,32 @@ class ClickReplanPathVisualizer:
         # roles currently redrawn until finished event
         self.active_roles: Dict[str, bool] = {}
 
-        # Color palette (RGB) – match bev_visualizer/networkx settings
-        self.colors = [
-            carla.Color(r=255, g=255, b=0),      # 1: yellow
-            carla.Color(r=0, g=255, b=0),      # 2: green
-            carla.Color(r=255, g=0, b=0),       # 3: red
-            carla.Color(r=128, g=0, b=128),    # 4: purple
-            carla.Color(r=255, g=192, b=203),    # 5: pink
-            carla.Color(r=255, g=255, b=255),    # 6: white
+        # Color palette (RGB) – canonical mapping
+        self._color_map = {
+            "yellow": carla.Color(r=255, g=255, b=0),
+            "green": carla.Color(r=0, g=255, b=0),
+            "red": carla.Color(r=255, g=0, b=0),
+            "purple": carla.Color(r=128, g=0, b=128),
+            "pink": carla.Color(r=255, g=192, b=203),
+            "white": carla.Color(r=255, g=255, b=255),
+        }
+        # Default index-based colors (legacy fallback)
+        self._default_colors = [
+            self._color_map["yellow"],
+            self._color_map["green"],
+            self._color_map["red"],
+            self._color_map["purple"],
+            self._color_map["pink"],
+            self._color_map["white"],
         ]
+        # Optional: honor color_list order so UI path colors match spawned vehicle colors
+        raw_colors = str(rospy.get_param("~color_list", "")).strip()
+        active_colors = [c.strip().lower() for c in raw_colors.split(",") if c.strip()] if raw_colors else []
+        if active_colors:
+            self._role_colors = [self._color_map.get(c, self._default_colors[i % len(self._default_colors)])
+                                 for i, c in enumerate(active_colors)]
+        else:
+            self._role_colors = []
 
         # Subs
         rospy.Subscriber("/selected_vehicle", String, self._selected_cb)
@@ -164,10 +181,12 @@ class ClickReplanPathVisualizer:
 
     def _color_for_role(self, role: str) -> "carla.Color":
         try:
-            idx = (int(role.rsplit("_", 1)[-1]) - 1) % len(self.colors)
+            idx = max(0, int(role.rsplit("_", 1)[-1]) - 1)
         except Exception:
             idx = 0
-        return self.colors[idx]
+        if self._role_colors:
+            return self._role_colors[idx % len(self._role_colors)]
+        return self._default_colors[idx % len(self._default_colors)]
 
     @staticmethod
     def _brighten(color: "carla.Color", scale: float) -> "carla.Color":

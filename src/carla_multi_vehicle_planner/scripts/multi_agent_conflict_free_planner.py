@@ -153,8 +153,8 @@ class MultiAgentConflictFreePlanner:
 
         # 커스텀 목적지/기하는 사용하지 않고, offset 영역만 로드
         # 이것을 비활성화 한다면 영역 경로 좌표 오프셋은 적용되지 않을것~~!!
-        if self.offset_regions_file:
-            self._load_offset_regions(self.offset_regions_file)
+        # if self.offset_regions_file:
+        #     self._load_offset_regions(self.offset_regions_file)
 
         # State
         self.vehicles: List[carla.Actor] = []
