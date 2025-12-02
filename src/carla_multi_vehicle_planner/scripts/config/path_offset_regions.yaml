@@ -20,7 +20,7 @@ regions:
     - -49.6
   - - -60.0
     - -44.0    
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r2
@@ -44,7 +44,7 @@ regions:
     - -52.0
   - - -36.0
     - -44.0 
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r3
@@ -68,7 +68,7 @@ regions:
     - -49.6
   - - -32.0
     - -52.0 
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r4
@@ -88,7 +88,7 @@ regions:
     - -32.0
   - - -32.0
     - -32.0 
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.8
   offset_y_m: 0.0
 - id: r5
@@ -112,7 +112,7 @@ regions:
     - -28.0
   - - -22.8
     - -29.2 
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r6
@@ -132,9 +132,9 @@ regions:
     - -28.0
   - - -12.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 3.0
+  offset_y_m: -3.0
 - id: r7
   center:
   - 16.0
@@ -152,9 +152,9 @@ regions:
     - -28.0
   - - -4.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 4.0
+  offset_y_m: -2.0
 - id: r8
   center:
   - -24.0
@@ -172,9 +172,9 @@ regions:
     - -28.0
   - - 12.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: -2.0
 - id: r9
   center:
   - 28.0
@@ -192,9 +192,9 @@ regions:
     - -28.0
   - - 20.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: -2.0
 - id: r10
   center:
   - 42.0
@@ -216,9 +216,9 @@ regions:
     - -32.0  
   - - 22.8
     - -29.2
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: -0.0
+  offset_y_m: -2.0
 - id: r11
   center:
   - -48.0
@@ -236,7 +236,7 @@ regions:
     - -40.0
   - - 32.0
     - -40.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r12
@@ -258,7 +258,7 @@ regions:
     - -52.0
   - - 26.4
     - -49.6
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: -0.0
   offset_y_m: 0.0
 - id: r13
@@ -282,7 +282,7 @@ regions:
     - -52.0
   - - 48.0
     - -44.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: -0.0
   offset_y_m: 0.0
 - id: r14
@@ -306,7 +306,7 @@ regions:
     - -49.6
   - - 52.0
     - -52.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r15
@@ -326,9 +326,11 @@ regions:
     - -32.0
   - - 52.0
     - -32.0
-  offset_lateral_m: 1.0
-  offset_x_m: 0.0
+  offset_lateral_m: 0.0
+  offset_x_m: 2.0
   offset_y_m: 0.0
+  speed_gain: 1.0
+  steering_gain: 0.5
 - id: r16
   center:
   - 2.0
@@ -346,9 +348,11 @@ regions:
     - -24.0
   - - 52.0
     - -24.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
+  speed_gain: 1.0
+  steering_gain: 0.5
 - id: r17
   center:
   - 2.0
@@ -366,9 +370,11 @@ regions:
     - -16.0
   - - 52.0
     - -16.0
-  offset_lateral_m: 1.0
-  offset_x_m: 0.0
+  offset_lateral_m: 0.0
+  offset_x_m: 3.0
   offset_y_m: 0.0
+  speed_gain: 1.0
+  steering_gain: 0.5
 - id: r18
   center:
   - 2.0
@@ -386,9 +392,11 @@ regions:
     - -8.0
   - - 52.0
     - -8.0
-  offset_lateral_m: 1.0
-  offset_x_m: 0.0
+  offset_lateral_m: 0.0
+  offset_x_m: 3.0
   offset_y_m: 0.0
+  speed_gain: 1.0
+  steering_gain: 0.5
 - id: r19
   center:
   - 2.0
@@ -410,9 +418,9 @@ regions:
     - 2.4
   - - 60.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 2.0
 - id: r20
   center:
   - 2.0
@@ -430,9 +438,9 @@ regions:
     - 4.0
   - - 40.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 2.0
 - id: r21
   center:
   - 2.0
@@ -450,9 +458,9 @@ regions:
     - 4.0
   - - 32.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 2.0
 - id: r22
   center:
   - 2.0
@@ -470,9 +478,9 @@ regions:
     - 4.0
   - - 24.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 2.0
 - id: r23
   center:
   - 2.0
@@ -490,9 +498,13 @@ regions:
     - 4.0
   - - 16.0
     - -4.0
-  offset_lateral_m: 1.0
+  - - 12.0
+    - 4.0
+  - - 12.0
+    - -4.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 2.0
 - id: r24
   center:
   - 2.0
@@ -510,9 +522,9 @@ regions:
     - 4.0
   - - -24.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: 3.0
 - id: r25
   center:
   - 2.0
@@ -530,7 +542,7 @@ regions:
     - 4.0
   - - -32.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r26
@@ -550,14 +562,14 @@ regions:
     - 4.0
   - - -40.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r27
   center:
   - 2.0
   - -17.0
-  points:
+  points: 
   - - -40.0
     - 4.0
   - - -40.0
@@ -570,7 +582,7 @@ regions:
     - 4.0
   - - -48.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r28
@@ -594,7 +606,7 @@ regions:
     - -5.2
   - - -48.0
     - -4.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r29
@@ -614,7 +626,7 @@ regions:
     - -16.0
   - - -52.0
     - -16.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r30
@@ -634,7 +646,7 @@ regions:
     - -24.0
   - - -52.0
     - -24.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r31
@@ -654,7 +666,7 @@ regions:
     - -32.0
   - - -52.0
     - -32.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r32
@@ -674,7 +686,7 @@ regions:
     - -40.0
   - - -52.0
     - -40.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r33
@@ -690,7 +702,7 @@ regions:
     - -12.0
   - - 0.0
     - 0.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r34
@@ -706,7 +718,7 @@ regions:
     - 0.0
   - - 0.0
     - 0.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r35
@@ -722,7 +734,7 @@ regions:
     - 12.0
   - - 0.0
     - 0.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r36
@@ -738,7 +750,7 @@ regions:
     - 0.0
   - - 0.0
     - 0.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r37
@@ -758,7 +770,7 @@ regions:
     - -16.0
   - - -4.0
     - -16.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r38
@@ -778,7 +790,7 @@ regions:
     - -16.0
   - - 4.0
     - -16.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 - id: r39
@@ -800,9 +812,9 @@ regions:
     - -24.0
   - - -4.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
-  offset_y_m: 0.0
+  offset_y_m: -1.0
 - id: r40
   center:
   - 2.0
@@ -822,7 +834,7 @@ regions:
     - -24.0
   - - 4.0
     - -20.0
-  offset_lateral_m: 1.0
+  offset_lateral_m: 0.0
   offset_x_m: 0.0
   offset_y_m: 0.0
 description: Regions for geometric offset along global paths. offset_lateral_m is

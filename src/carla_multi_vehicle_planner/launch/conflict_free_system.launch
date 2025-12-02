@@ -122,6 +122,8 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />
+    <!-- Use unified regions file for both offsets and control gains -->
+    <param name="regions_config_file" value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="false" />
     <param name="safety_x_min" value="-18.0" />

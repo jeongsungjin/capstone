@@ -5,7 +5,7 @@ import threading
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import rospy
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, Path
 from std_msgs.msg import Bool
 from geometry_msgs.msg import PoseStamped
 from ackermann_msgs.msg import AckermannDrive
@@ -129,16 +129,27 @@ class BevIdTeleporter:
 		# - launch 에서 주는 motion_yaw_enabled 값 그대로 사용
 		self.motion_yaw_enabled: bool = bool(rospy.get_param("~motion_yaw_enabled", True))
 		# 27Hz, 2m/s 기준: 프레임당 ~0.07m 이동 → 1~2프레임 이동 누적만으로도 yaw 추정 가능
-		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.07))
+		self.motion_yaw_min_distance_m: float = float(rospy.get_param("~motion_yaw_min_distance_m", 0.05))
 		# 히스토리 윈도우: 최근 0.5~0.7초(약 15~20프레임) 좌표를 써서 "전반적인 진행 방향"을 본다
-		self.motion_yaw_window_sec: float = float(rospy.get_param("~motion_yaw_window_sec", 1.0))
+		self.motion_yaw_window_sec: float = float(rospy.get_param("~motion_yaw_window_sec", 0.5))
 		# max_jump: 한 번에 허용하는 yaw 변화량 (deg) – 너무 크면 노이즈로 간주
-		self.motion_yaw_max_jump_deg: float = float(rospy.get_param("~motion_yaw_max_jump_deg", 35.0))
+		self.motion_yaw_max_jump_deg: float = float(rospy.get_param("~motion_yaw_max_jump_deg", 30.0))
+		# 추가 제어: 히스토리 최대 샘플 수, 반대 진행 지속 허용, 점프 지속 허용, 이전 yaw 노후화
+		self.motion_yaw_max_samples: int = int(rospy.get_param("~motion_yaw_max_samples", 20))
+		self.motion_yaw_allow_backwards: bool = bool(rospy.get_param("~motion_yaw_allow_backwards", True))
+		self.motion_yaw_flip_persist_sec: float = float(rospy.get_param("~motion_yaw_flip_persist_sec", 0.3))
+		self.motion_yaw_jump_persist_sec: float = float(rospy.get_param("~motion_yaw_jump_persist_sec", 0.3))
+		self.motion_yaw_stale_sec: float = float(rospy.get_param("~motion_yaw_stale_sec", 0.8))
+		# Path heading flip
+		self.path_yaw_flip_enabled: bool = bool(rospy.get_param("~path_yaw_flip_enabled", True))
+		self.path_yaw_flip_threshold_deg: float = float(rospy.get_param("~path_yaw_flip_threshold_deg", 50.0))
 
 		# Height / waypoint snapping
 		self.snap_to_waypoint_height: bool = bool(rospy.get_param("~snap_to_waypoint_height", True))
 		self.default_z: float = float(rospy.get_param("~default_z", 0.5))
 		self.z_offset: float = float(rospy.get_param("~z_offset", 0.0))
+		# 언덕/경사면에서 떠오르는 문제 방지: XY도 차선 waypoint로 스냅
+		self.snap_xy_to_waypoint: bool = bool(rospy.get_param("~snap_xy_to_waypoint", True))
 		# Teleport safety
 		self.max_teleport_distance_m: float = float(rospy.get_param("~max_teleport_distance_m", 20.0))
 		self.teleport_yaw_gate_deg: float = float(rospy.get_param("~teleport_yaw_gate_deg", 150.0))
@@ -186,6 +197,9 @@ class BevIdTeleporter:
 		self.id_to_role: Dict[int, str] = {}
 		self.role_to_id: Dict[str, int] = {}
 		self.role_state: Dict[str, Dict[str, object]] = {role: {"pos": None, "yaw": None, "stamp": None} for role in []}
+		self.role_path_points: Dict[str, List[Tuple[float, float]]] = {}
+		self.role_last_color: Dict[str, str] = {}
+		self.role_path_points: Dict[str, List[Tuple[float, float]]] = {}
 		self.role_last_switch: Dict[str, float] = {}
 		self.id_last_seen: Dict[int, float] = {}
 		self.role_tracking_ok: Dict[str, bool] = {}
@@ -215,6 +229,17 @@ class BevIdTeleporter:
 			self._set_tracking_status(role, False, force=True)
 			pose_topic = f"/bev_tracking_pose/{role}"
 			self.bev_pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1, latch=True)
+			# Subscribe planned path for heading-based yaw flip
+			try:
+				from nav_msgs.msg import Path as _Path  # scoped import safety
+				rospy.Subscriber(f"/planned_path_{role}", _Path, self._planned_path_cb, callback_args=role, queue_size=1)
+			except Exception:
+				pass
+			# Subscribe planned path for heading estimation
+			try:
+				rospy.Subscriber(f"/planned_path_{role}", Path, self._planned_path_cb, callback_args=role, queue_size=1)
+			except Exception:
+				pass
 			# Kalman 기반 제어입력 예측은 사용하지 않으므로 control_cmd 구독은 생략
 		self.sub = rospy.Subscriber(self.topic_name, BEVInfo, self._bev_cb, queue_size=1)
 		rospy.loginfo(
@@ -399,7 +424,7 @@ class BevIdTeleporter:
 		if not self._yaw_corrections_active():
 			return bev_yaw_deg
 		wp_yaw: Optional[float] = None
-		path_yaw = self._get_path_heading(role)
+		path_yaw = self._get_path_heading(role, x, y)
 		if self.carla_map is not None:
 			try:
 				loc = carla.Location(x=float(x), y=float(y), z=0.5)
@@ -452,6 +477,10 @@ class BevIdTeleporter:
 		if window > 1e-3:
 			while len(hist) >= 2 and (timestamp - hist[0][2]) > window:
 				hist.pop(0)
+		# 샘플 수 제한
+		max_samples = max(2, int(self.motion_yaw_max_samples))
+		while len(hist) > max_samples:
+			hist.pop(0)
 		self._motion_history[role] = hist
 
 		# 최소한 2개 이상의 포인트가 있어야 yaw 계산 가능
@@ -496,6 +525,7 @@ class BevIdTeleporter:
 		# Compute heading from aggregated motion
 		motion_yaw_rad = math.atan2(total_dy, total_dx)
 		motion_yaw_rad = normalize_angle(motion_yaw_rad)
+		window_duration = hist[-1][2] - hist[0][2] if len(hist) >= 2 else 0.0
 		rospy.loginfo(
 			"[Motion Yaw] %s: history-based yaw = %.1f° (dist=%.3fm, N=%d)",
 			role,
@@ -513,43 +543,125 @@ class BevIdTeleporter:
 		dir_y = total_dy / total_dist
 		dot = fwd_x * dir_x + fwd_y * dir_y  # cos(theta)
 		if dot < 0.0:
-			rospy.logwarn_throttle(
-				2.0,
-				"[Motion Yaw] %s: detected backwards motion (dot=%.3f), skipping motion yaw",
-				role,
-				dot,
+			# 지속적으로 반대 진행이 관찰되면 yaw 반전을 허용
+			allow_flip = (
+				self.motion_yaw_allow_backwards
+				and window_duration >= max(0.0, float(self.motion_yaw_flip_persist_sec))
+				and total_dist >= max(0.2, float(self.motion_yaw_min_distance_m) * 2.0)
 			)
-			# 위치/타임스탬프는 최신 값으로 갱신하되 yaw 는 perception 기준 유지
-			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
-			return None
+			if not allow_flip:
+				rospy.logwarn_throttle(
+					2.0,
+					"[Motion Yaw] %s: backwards motion (dot=%.3f) – holding yaw (persist %.2fs, dist %.2fm)",
+					role,
+					dot,
+					window_duration,
+					total_dist,
+				)
+				# 위치/타임스탬프는 최신 값으로 갱신하되 yaw 는 perception 기준 유지
+				self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+				return None
 
 		# 2) yaw 점프 크기가 비정상적으로 큰 경우도 노이즈로 처리
 		yaw_diff = abs(normalize_angle(motion_yaw_rad - prev_yaw_rad))
 		max_jump_rad = math.radians(self.motion_yaw_max_jump_deg)
 		if yaw_diff > max_jump_rad and yaw_diff < (2.0 * math.pi - max_jump_rad):
-			# Large jump detected, use current yaw from perception
-			rospy.logwarn_throttle(
-				2.0,
-				"Motion yaw jump for %s: %.1f° (using perception yaw)",
-				role,
-				math.degrees(yaw_diff),
+			# 큰 점프일 때도, 모션이 충분히 지속되었거나 이전 yaw 가 오래되면 업데이트 허용
+			prev_ts = prev_state[2] if prev_state is not None else timestamp
+			stale = (timestamp - float(prev_ts)) >= max(0.0, float(self.motion_yaw_stale_sec))
+			persist_ok = (
+				window_duration >= max(0.0, float(self.motion_yaw_jump_persist_sec))
+				and total_dist >= max(0.2, float(self.motion_yaw_min_distance_m) * 2.0)
 			)
-			self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
-			return None
+			if not (persist_ok or stale):
+				rospy.logwarn_throttle(
+					2.0,
+					"Motion yaw jump for %s: %.1f° – holding (persist %.2fs, dist %.2fm, stale=%s)",
+					role,
+					math.degrees(yaw_diff),
+					window_duration,
+					total_dist,
+					str(stale),
+				)
+				self._prev_position[role] = (x, y, timestamp, current_yaw_rad)
+				return None
 		
 		# Update previous position
 		self._prev_position[role] = (x, y, timestamp, motion_yaw_rad)
 		
 		return motion_yaw_rad
 	
-	def _get_path_heading(self, role: str) -> Optional[float]:
-		state = self.role_state.get(role)
-		if not state:
+	def _get_path_heading(self, role: str, x: float, y: float) -> Optional[float]:
+		points = self.role_path_points.get(role)
+		if not points or len(points) < 2:
 			return None
-		yaw = state.get("yaw")
-		if yaw is None:
+		px = float(x)
+		py = float(y)
+		best_dist_sq = float("inf")
+		best_idx = -1
+		# Find nearest segment to (x,y)
+		for i in range(len(points) - 1):
+			x1, y1 = points[i]
+			x2, y2 = points[i + 1]
+			dx = x2 - x1
+			dy = y2 - y1
+			seg_len_sq = dx * dx + dy * dy
+			if seg_len_sq < 1e-6:
+				continue
+			t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+			if t < 0.0:
+				qx, qy = x1, y1
+			elif t > 1.0:
+				qx, qy = x2, y2
+			else:
+				qx, qy = x1 + t * dx, y1 + t * dy
+			dist_sq = (px - qx) * (px - qx) + (py - qy) * (py - qy)
+			if dist_sq < best_dist_sq:
+				best_dist_sq = dist_sq
+				best_idx = i
+		if best_idx < 0:
 			return None
-		return math.degrees(float(yaw))
+		x1, y1 = points[best_idx]
+		x2, y2 = points[best_idx + 1]
+		return math.degrees(math.atan2(y2 - y1, x2 - x1))
+
+	def _planned_path_cb(self, msg: Path, role: str) -> None:
+		try:
+			pts: List[Tuple[float, float]] = []
+			for p in msg.poses:
+				pts.append((float(p.pose.position.x), float(p.pose.position.y)))
+			self.role_path_points[role] = pts
+		except Exception:
+			pass
+
+	def _maybe_flip_yaw_with_path(self, role: str, x: float, y: float, yaw_rad: float) -> float:
+		if not self.path_yaw_flip_enabled:
+			return yaw_rad
+		path_yaw_deg = self._get_path_heading(role, x, y)
+		if path_yaw_deg is None:
+			return yaw_rad
+		path_yaw_rad = math.radians(float(path_yaw_deg))
+		delta = abs(normalize_angle(yaw_rad - path_yaw_rad))
+		role_color = self.role_last_color.get(role) or self.role_color_map.get(role, "")
+		# if role_color == "pink":
+		rospy.loginfo("[PathFlip] %s color=%s delta=%.1f° (path=%.1f° det=%.1f°)",
+						role, role_color or "?", math.degrees(delta), path_yaw_deg, math.degrees(yaw_rad))
+		
+		thresh = math.radians(max(0.0, min(180.0, self.path_yaw_flip_threshold_deg)))
+		if delta > thresh:
+			flipped = normalize_angle(yaw_rad + math.pi)
+			rospy.loginfo_throttle(
+				1.0,
+				"[PathFlip] %s color=%s at (%.1f, %.1f): yaw %.1f° -> %.1f° (path %.1f°)",
+				role, role_color or "?",
+				float(x),
+				float(y),
+				math.degrees(yaw_rad),
+				math.degrees(flipped),
+				path_yaw_deg,
+			)
+			return flipped
+		return yaw_rad
 
 	def _accumulate_initial_alignment_samples(
 		self,
@@ -644,10 +756,13 @@ class BevIdTeleporter:
 		pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 		x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
 
+		# Path-based flip if opposite to planned path direction
 		yaw_rad_applied = math.radians(yaw_deg)
-		z = self._pick_height(x, y)
-
-		location = carla.Location(x=x, y=y, z=z)
+		yaw_rad_applied = self._maybe_flip_yaw_with_path(role, x, y, yaw_rad_applied)
+		yaw_deg = math.degrees(yaw_rad_applied)
+		# 언덕/경사면에서 공중 부상 방지: waypoint 기준으로 XY/Z 보정
+		x_g, y_g, z_g = self._pick_ground_pose(x, y)
+		location = carla.Location(x=x_g, y=y_g, z=z_g)
 		rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 		tf = carla.Transform(location=location, rotation=rotation)
 		det_id = sample.get("id")
@@ -970,13 +1085,36 @@ class BevIdTeleporter:
 			wp = self.carla_map.get_waypoint(
 				carla.Location(x=float(x), y=float(y), z=0.0),
 				project_to_road=True,
-				lane_type=carla.LaneType.Any,
+				lane_type=carla.LaneType.Driving,
 			)
 			if wp is not None:
 				return float(wp.transform.location.z) + self.z_offset
 		except Exception:
 			pass
 		return self.default_z + self.z_offset
+
+	def _pick_ground_pose(self, x: float, y: float) -> Tuple[float, float, float]:
+		"""
+		(x, y, z)를 도로 waypoint에 맞춰 보정한다.
+		- snap_to_waypoint_height 가 False 이면 z는 default_z+z_offset, x/y는 그대로 유지
+		- snap_xy_to_waypoint 가 True 이면 x/y도 waypoint 위치로 스냅하여 경사면에서 공중에 뜨는 문제를 방지
+		"""
+		if not self.carla_map:
+			return x, y, self.default_z + self.z_offset
+		try:
+			wp = self.carla_map.get_waypoint(
+				carla.Location(x=float(x), y=float(y), z=0.0),
+				project_to_road=True,
+				lane_type=carla.LaneType.Driving,
+			)
+		except Exception:
+			wp = None
+		if wp is None:
+			return x, y, (self.default_z + self.z_offset)
+		z = float(wp.transform.location.z) + self.z_offset if self.snap_to_waypoint_height else (self.default_z + self.z_offset)
+		if self.snap_xy_to_waypoint:
+			return float(wp.transform.location.x), float(wp.transform.location.y), z
+		return x, y, z
 
 	def _input_yaw_to_rad(self, yaw_val: float) -> float:
 		if self.yaw_in_degrees:
@@ -1214,8 +1352,18 @@ class BevIdTeleporter:
 				yaw_deg = math.degrees(fused_yaw_rad)
 				if self.yaw_blend_enabled:
 					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
+				# Cache last detected color for role (for logging)
+				try:
+					if idx < len(det_colors):
+						self.role_last_color[role] = self._normalize_color(det_colors[idx])
+				except Exception:
+					pass
 				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
+				# Path-based flip if opposite to planned path direction
+				yaw_rad_applied = math.radians(yaw_deg)
+				yaw_rad_applied = self._maybe_flip_yaw_with_path(role, x, y, yaw_rad_applied)
+				yaw_deg = math.degrees(yaw_rad_applied)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
@@ -1248,7 +1396,9 @@ class BevIdTeleporter:
 				if role in tracking_ok_map:
 					tracking_ok_map[role] = False
 				z = self._pick_height(x, y)
-				location = carla.Location(x=x, y=y, z=z)
+				# 언덕/경사면에서 공중 부상 방지: waypoint 기준으로 XY/Z 보정
+				_, _, z_g = self._pick_ground_pose(x, y)
+				location = carla.Location(x=x, y=y, z=z_g)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
 				if self._apply_transform(actor, tf, role=role, det_id=vid):
@@ -1285,6 +1435,10 @@ class BevIdTeleporter:
 					yaw_deg = self._blend_yaw_sources(role, x, y, yaw_deg)
 				pose_snap = self.snap_to_spawn_pose_initial and role not in self._initial_alignment_done_roles
 				x, y, yaw_deg = self._apply_spawn_snap(role, x, y, yaw_deg, pose_snap)
+				# Path-based flip if opposite to planned path direction
+				yaw_rad_applied = math.radians(yaw_deg)
+				yaw_rad_applied = self._maybe_flip_yaw_with_path(role, x, y, yaw_rad_applied)
+				yaw_deg = math.degrees(yaw_rad_applied)
 				actor = self._resolve_actor_for_role(role)
 				if actor is None:
 					continue
@@ -1314,7 +1468,9 @@ class BevIdTeleporter:
 				if role in tracking_ok_map:
 					tracking_ok_map[role] = False
 				z = self._pick_height(x, y)
-				location = carla.Location(x=x, y=y, z=z)
+				# 언덕/경사면에서 공중 부상 방지: waypoint 기준으로 XY/Z 보정
+				x_g, y_g, z_g = self._pick_ground_pose(x, y)
+				location = carla.Location(x=x_g, y=y_g, z=z_g)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
 				if self._apply_transform(actor, tf, role=role, det_id=vid):

@@ -61,10 +61,14 @@ class MultiVehicleController:
         self.path_collision_threshold = float(rospy.get_param("~path_collision_threshold", 4.0))  # meters (considering vehicle size)
         # Target selection policy: use arc-length along path (preserves waypoint order)
         self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
-        # Region-based control gains
-        self.regions_config_file = rospy.get_param("~regions_config_file", "/home/jamie/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
+        # Region-based control gains (unified with path offset regions)
+        # Default to path_offset_regions.yaml so one file controls offsets + gains
+        self.regions_config_file = rospy.get_param(
+            "~regions_config_file",
+            "scripts/config/path_offset_regions.yaml",
+        )
         self.default_speed_gain = float(rospy.get_param("~default_speed_gain", 1.0))
-        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.5))
+        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 1.0))
         self.regions: List[Dict] = []
         if self.regions_config_file:
             self._load_regions_config()
@@ -288,16 +292,51 @@ class MultiVehicleController:
         except Exception as e:
             rospy.logwarn_throttle(5.0, f"Error checking point in rectangle: {e}")
             return False
+
+    def _point_in_polygon(self, px: float, py: float, points: List[List[float]]) -> bool:
+        """
+        Ray casting algorithm for point-in-polygon.
+        points: list of [x, y] vertices in order (closed or open).
+        """
+        try:
+            n = len(points)
+            if n < 3:
+                return False
+            inside = False
+            x = float(px)
+            y = float(py)
+            for i in range(n):
+                x1 = float(points[i][0])
+                y1 = float(points[i][1])
+                x2 = float(points[(i + 1) % n][0])
+                y2 = float(points[(i + 1) % n][1])
+                # Check if edge crosses horizontal ray to the right of point
+                # ((y1 > y) != (y2 > y)) ensures y between y1 and y2
+                if ((y1 > y) != (y2 > y)):
+                    # Compute x coordinate of intersection of edge with the ray at y
+                    x_int = x1 + (y - y1) * (x2 - x1) / max(1e-9, (y2 - y1))
+                    if x_int > x:
+                        inside = not inside
+            return inside
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"Error checking point in polygon: {e}")
+            return False
     
     def _get_region_gains(self, x: float, y: float, role: Optional[str] = None) -> Tuple[float, float]:
         """Get speed and steering gains for current position.
 
         Also emits a clear debug log indicating which region (if any) the vehicle is in.
         """
-        # Check each region (first match wins)
+        # Check each region (first match wins). Supports either:
+        # - polygon regions with 'points': [[x, y], ...]
+        # - rectangle regions with 'corners': {top_left, top_right, bottom_right, bottom_left}
         for region in self.regions:
-            corners = region.get("corners", {})
-            if self._point_in_rectangle(x, y, corners):
+            matched = False
+            if "points" in region and region["points"]:
+                matched = self._point_in_polygon(x, y, region.get("points", []))
+            elif "corners" in region and region["corners"]:
+                matched = self._point_in_rectangle(x, y, region.get("corners", {}))
+            if matched:
                 speed_gain = float(region.get("speed_gain", self.default_speed_gain))
                 steering_gain = float(region.get("steering_gain", self.default_steering_gain))
                 region_id = region.get("id", "unknown")
