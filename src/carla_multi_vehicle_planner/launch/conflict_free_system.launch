@@ -1,20 +1,35 @@
 <launch>
   <arg name="num_vehicles" default="3" />
+  <!-- 상위 런치에서 color_list를 넘길 수 있도록 인자 추가 -->
+  <arg name="color_list" default="" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="enable_platooning" default="false" />
   <!-- 수동 RViz 목표 재계획 기능 온/오프 -->
   <arg name="enable_manual_goal" default="true" />
   <!-- BEV 파이프라인이 없을 때 컨트롤러 tracking hold를 끌 수 있도록 노출 -->
-  <arg name="enable_bev_tracking_hold" default="false" />
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_tracking_hold" default="true" />
+  <arg name="enable_bev_pipeline" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
     <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
+    <!-- 색상 리스트가 주어졌다면 해당 색상 순서의 모델들을 사용 -->
+    <param name="vehicle_models" value="$(eval ','.join(['vehicle.vehicle.' + c.strip() + 'xycar' for c in arg('color_list').split(',') if c.strip()]))" />
     <param name="spawn_delay" value="1.5" />
+    <!-- Randomized spawn settings -->
+    <param name="randomize_spawn" value="true" />
+    <!-- Optional: make randomness reproducible -->
+    <!-- <param name="spawn_seed" value="12345" /> -->
+    <!-- Ensure sufficient separation if spawn points are close -->
+    <param name="spawn_min_separation_m" value="8.0" />
+    <!-- Allow waypoint-based fallback when map has few spawn points -->
+    <param name="use_waypoint_spawn_fallback" value="true" />
+    <param name="waypoint_spawn_spacing_m" value="8.0" />
+    <!-- Keep heading aligned to lane -->
+    <param name="align_spawn_heading" value="true" />
     <!-- Optional: spawn-time platoon alignment -->
     <param name="platoon_enable" value="$(arg enable_platooning)" />
     <param name="platoon_leader" value="ego_vehicle_1" />
@@ -34,11 +49,11 @@
     <param name="start_k_candidates" value="80" />
     <param name="start_search_radius" value="5.0" />
     <param name="start_search_radius_max" value="20.0" />
-    <param name="start_heading_deg" value="70.0" />
+    <param name="start_heading_deg" value="85.0" />
     <param name="start_join_max_gap_m" value="6.0" />
     <param name="conflict_horizon_m" value="40.0" />
     <param name="conflict_key_resolution" value="1.0" />
-    <param name="heading_compat_deg" value="75.0" />
+    <param name="heading_compat_deg" value="180.0" />
     <!-- Replanning only when close to destination -->
     <param name="replan_remaining_m" value="60.0" />
     <param name="replan_interval" value="1.0" />
@@ -107,6 +122,8 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />
+    <!-- Use unified regions file for both offsets and control gains -->
+    <param name="regions_config_file" value="$(find carla_multi_vehicle_planner)/scripts/config/path_offset_regions.yaml" />
     <!-- Safety stop defaults; tune as needed -->
     <param name="enable_safety_stop" value="false" />
     <param name="safety_x_min" value="-18.0" />

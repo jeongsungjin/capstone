@@ -1,10 +1,13 @@
 <launch>
   <!-- Top-level unified args -->
-  <arg name="num_vehicles" default="3" />
+  <!-- color_list: 쉼표로 구분된 색상 목록. 예) \"red,pink\" -->
+  <arg name="color_list" default="" />
+  <!-- color_list가 주어지면 그 길이를 num_vehicles로 사용, 없으면 기본 3 -->
+  <arg name="num_vehicles" default="$(eval (len([c for c in arg('color_list').split(',') if c.strip()]) if arg('color_list') != '' else 3))" />
   <arg name="enable_platooning" default="false" />
 
   <!-- Toggle BEV pipeline (inference + teleporter); also drives controller tracking hold -->
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_pipeline" default="true" />
   <!-- Waypoint-based yaw guarding -->
   <arg name="use_waypoint_heading_guard" default="false" />
   <arg name="waypoint_heading_window_deg" default="30.0" />
@@ -19,12 +22,12 @@
   <arg name="yaw_path_weight" default="0.3" />
   <arg name="yaw_stability_alpha" default="0.6" />
   <!-- Vehicle color hints (used for Hungarian matching assist) -->
-  <arg name="vehicle_1_color" default="yellow" />
-  <arg name="vehicle_2_color" default="green" />
-  <arg name="vehicle_3_color" default="red" />
-  <arg name="vehicle_4_color" default="purple" />
-  <arg name="vehicle_5_color" default="" />
-  <arg name="vehicle_6_color" default="" />
+  <arg name="vehicle_1_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[0])" />
+  <arg name="vehicle_2_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[1])" />
+  <arg name="vehicle_3_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[2])" />
+  <arg name="vehicle_4_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[3])" />
+  <arg name="vehicle_5_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[4])" />
+  <arg name="vehicle_6_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[5])" />
   <arg name="enable_color_matching" default="true" />
   <arg name="color_gate_on_mismatch" default="true" />
   <arg name="color_match_bonus" default="4.0" />
@@ -108,6 +111,7 @@
   <include file="$(find carla_multi_vehicle_planner)/launch/conflict_free_system.launch">
     <arg name="enable_platooning" value="$(arg enable_platooning)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="color_list" value="$(arg color_list)" />
     <arg name="enable_manual_goal" default="false" />
     <!-- When BEV pipeline disabled, also disable controller's tracking hold -->
     <arg name="enable_bev_tracking_hold" value="$(arg enable_bev_pipeline)" />
@@ -118,6 +122,7 @@
   <!-- 3.5) UI: camera, shutdown, UDP goal bridge, path visualization -->
   <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="color_list" value="$(arg color_list)" />
     <!-- Optionally override:
          <arg name="udp_ip" value="0.0.0.0" />
          <arg name="udp_port" value="9001" />
@@ -134,7 +139,7 @@
   </node>
 
   <!-- 4) UDP Ackermann senders to real cars (role -> IP mapping kept in that launch) -->
-  <!-- <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
+  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
     <arg name="vehicle_1_color" value="$(arg vehicle_1_color)" />
     <arg name="vehicle_2_color" value="$(arg vehicle_2_color)" />
@@ -142,7 +147,7 @@
     <arg name="vehicle_4_color" value="$(arg vehicle_4_color)" />
     <arg name="vehicle_5_color" value="$(arg vehicle_5_color)" />
     <arg name="vehicle_6_color" value="$(arg vehicle_6_color)" />
-  </include> -->
+  </include>
 </launch>
 
 

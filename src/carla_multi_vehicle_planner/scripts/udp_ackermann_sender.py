@@ -72,10 +72,11 @@ class RCCarUdpSender:
                 "seq": 0,
             }
             rospy.Subscriber(topic, AckermannDrive, self._cb, callback_args=role, queue_size=10)
-            # rospy.loginfo(
-            #     f"[RC-UDP] ready: {role} topic={topic} -> {dest_ip}:{dest_port} "
-            #     f"mode={'float(rad)' if self.send_angle_as_float else 'int(scaled)'} scale={angle_scale} clip={angle_clip} min_abs={angle_min_abs} invert={angle_invert}"
-            # )
+            rospy.loginfo(
+                f"[RC-UDP] ready: {role} topic={topic} -> {dest_ip}:{dest_port} "
+                f"mode={'float(rad)' if self.send_angle_as_float else 'int(scaled)'} "
+                f"scale={angle_scale} clip={angle_clip} min_abs={angle_min_abs} invert={angle_invert}"
+            )
 
             # init cache and order
             self.cache[role] = {"steer": 0.0, "speed": 0.0, "stamp": rospy.Time(0)}
@@ -137,7 +138,8 @@ class RCCarUdpSender:
             xy_speed = max(-50, min(50, xy_speed))
             # Per-role throttle
             if self.log_throttle_sec <= 0.0 or (now - self._last_log.get(role, rospy.Time(0))).to_sec() >= self.log_throttle_sec:
-                rospy.loginfo(f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed}")
+                di, dp = v.get("dest", ("", 0))
+                rospy.loginfo(f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp}")
                 self._last_log[role] = now
             pkt = struct.pack(self.pkt_fmt, float(send_angle), xy_speed, int(v["seq"]) & 0xFFFFFFFF)
         else:
@@ -157,7 +159,8 @@ class RCCarUdpSender:
                 xy_speed = (1 if sp >= 0.0 else -1) * abs(z)
             xy_speed = max(-50, min(50, xy_speed))
             if self.log_throttle_sec <= 0.0 or (now - self._last_log.get(role, rospy.Time(0))).to_sec() >= self.log_throttle_sec:
-                rospy.loginfo(f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed}")
+                di, dp = v.get("dest", ("", 0))
+                rospy.loginfo(f"[RC-UDP][{role}] angle={xy_angle}, speed={xy_speed} -> {di}:{dp}")
                 self._last_log[role] = now
             pkt = struct.pack(self.pkt_fmt, xy_angle, xy_speed, int(v["seq"]) & 0xFFFFFFFF)
 

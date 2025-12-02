@@ -33,19 +33,35 @@ DEFAULT_MODEL_MAP: List[str] = [
     "vehicle.vehicle.yellowxycar",   # ego_vehicle_1
     "vehicle.vehicle.greenxycar",     # ego_vehicle_2
     "vehicle.vehicle.redxycar",  # ego_vehicle_3
-    "vehicle.vehicle.purplexycar",  # ego_vehicle_4
-    "vehicle.vehicle.pinkxycar",    # ego_vehicle_5
-    "vehicle.vehicle.blackxycar",   # ego_vehicle_6
-]
-
-DEFAULT_MODEL_MAP: List[str] = [
-    "vehicle.vehicle.redxycar",   # ego_vehicle_1
-    "vehicle.vehicle.purplexycar",     # ego_vehicle_2
-    "vehicle.vehicle.pinkxycar",  # ego_vehicle_3
     "vehicle.vehicle.whitexycar",  # ego_vehicle_4
-    "vehicle.vehicle.greenxycar",    # ego_vehicle_5
-    "vehicle.vehicle.yellowxycar",   # ego_vehicle_6
+    "vehicle.vehicle.pinkxycar",    # ego_vehicle_5
+    "vehicle.vehicle.purplexycar",   # ego_vehicle_6
 ]
+# 이슈 1 특정 차량 전역 경로 게획 제한
+# 추가적으로 특정 차량은 y좌표가 +10 이상인 영역으로는 경로 계획 및 주행을 안했으면 좋겠음 가능할지?
+# 이유는 맵에 언덕 구간이 있는데, 특정 차량들은 모터 기능 이슈로 언덕을 등판하지 못함.
+# 그렇다면 ui에 언덕 등판 못하는 차량을 선택했을때는 언덕을 꼭 지나가야만하는 위치는 선택 못하게끔 표시하는 기능도 추가해야겠군 (이건 ui적 문제니 동의형에게 맡겨야겠다)
+
+# 이슈 2 인지 및 차량 운용 다양성 
+# 젤 문제가 서버 인지 정보가 색상이 안나옴. 수동으로 꼭 매칭 해야하는가?
+# 색상을 좀 잡는다면? 초기 헝가리안 매칭 되고, 인지가 조금 나아지는다는 가정하에 매칭 풀릴 이슈는 없을거임
+# 매칭이 안풀린다면 각 차량의 위치 바뀜 없을것이고, 차량별 ip매핑이 안풀릴것임. 논리적 모순이나 리스크 포인트가 있는지?
+# 현재는 carla vehicle 번호랑 색상, 아이피가 고정 매핑 되어잇어서 유동적으로 노랑, 퍼플 2대만 굴린다거나 그린, 레드, 퍼플 3대만 굴리는 시나리오를 실행하려면 하려면 많은 라인의 코드 수정이 필요
+# 런치할때마다 운용 차량 대수, 사용 차량 색상 문자열 순서대로 입력하면 그렇게 스폰 및 아이피 할당하게끔 만들어야할듯
+# 아이피와 색상은 udp_akermann_senders.launch에서 매핑되는 것으로 이해함
+
+# 
+
+# 차량번호별 스폰 차량 모델, ip, 색상 할당.
+# 번호랑 색상이 꼭 맞아야 즉, 
+# DEFAULT_MODEL_MAP: List[str] = [
+#     "vehicle.vehicle.redxycar",   # ego_vehicle_1
+#     "vehicle.vehicle.purplexycar",     # ego_vehicle_2
+#     "vehicle.vehicle.pinkxycar",  # ego_vehicle_3
+#     "vehicle.vehicle.whitexycar",  # ego_vehicle_4
+#     "vehicle.vehicle.greenxycar",    # ego_vehicle_5
+#     "vehicle.vehicle.yellowxycar",   # ego_vehicle_6
+# ]
 
 
 def euler_to_quaternion(roll, pitch, yaw):

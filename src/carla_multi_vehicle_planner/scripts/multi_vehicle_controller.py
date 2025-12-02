@@ -47,7 +47,7 @@ class MultiVehicleController:
         self.lookahead_distance = rospy.get_param("~lookahead_distance", 5.0)
         self.wheelbase = rospy.get_param("~wheelbase", 2.7)
         self.max_steer = rospy.get_param("~max_steer", 1.0)
-        self.target_speed = rospy.get_param("~target_speed", 3.0)
+        self.target_speed = rospy.get_param("~target_speed", 2.0)
         self.control_frequency = rospy.get_param("~control_frequency", 30.0)
         # Vehicle dimensions for path-based collision detection
         self.vehicle_length = float(rospy.get_param("~vehicle_length", 6.0))
@@ -61,10 +61,14 @@ class MultiVehicleController:
         self.path_collision_threshold = float(rospy.get_param("~path_collision_threshold", 4.0))  # meters (considering vehicle size)
         # Target selection policy: use arc-length along path (preserves waypoint order)
         self.target_select_by_arclength = bool(rospy.get_param("~target_select_by_arclength", True))
-        # Region-based control gains
-        self.regions_config_file = rospy.get_param("~regions_config_file", "/home/jamie/capstone/src/carla_multi_vehicle_planner/scripts/config/regions.yaml")
+        # Region-based control gains (unified with path offset regions)
+        # Default to path_offset_regions.yaml so one file controls offsets + gains
+        self.regions_config_file = rospy.get_param(
+            "~regions_config_file",
+            "scripts/config/path_offset_regions.yaml",
+        )
         self.default_speed_gain = float(rospy.get_param("~default_speed_gain", 1.0))
-        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 0.7))
+        self.default_steering_gain = float(rospy.get_param("~default_steering_gain", 1.0))
         self.regions: List[Dict] = []
         if self.regions_config_file:
             self._load_regions_config()
@@ -288,16 +292,51 @@ class MultiVehicleController:
         except Exception as e:
             rospy.logwarn_throttle(5.0, f"Error checking point in rectangle: {e}")
             return False
+
+    def _point_in_polygon(self, px: float, py: float, points: List[List[float]]) -> bool:
+        """
+        Ray casting algorithm for point-in-polygon.
+        points: list of [x, y] vertices in order (closed or open).
+        """
+        try:
+            n = len(points)
+            if n < 3:
+                return False
+            inside = False
+            x = float(px)
+            y = float(py)
+            for i in range(n):
+                x1 = float(points[i][0])
+                y1 = float(points[i][1])
+                x2 = float(points[(i + 1) % n][0])
+                y2 = float(points[(i + 1) % n][1])
+                # Check if edge crosses horizontal ray to the right of point
+                # ((y1 > y) != (y2 > y)) ensures y between y1 and y2
+                if ((y1 > y) != (y2 > y)):
+                    # Compute x coordinate of intersection of edge with the ray at y
+                    x_int = x1 + (y - y1) * (x2 - x1) / max(1e-9, (y2 - y1))
+                    if x_int > x:
+                        inside = not inside
+            return inside
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"Error checking point in polygon: {e}")
+            return False
     
     def _get_region_gains(self, x: float, y: float, role: Optional[str] = None) -> Tuple[float, float]:
         """Get speed and steering gains for current position.
 
         Also emits a clear debug log indicating which region (if any) the vehicle is in.
         """
-        # Check each region (first match wins)
+        # Check each region (first match wins). Supports either:
+        # - polygon regions with 'points': [[x, y], ...]
+        # - rectangle regions with 'corners': {top_left, top_right, bottom_right, bottom_left}
         for region in self.regions:
-            corners = region.get("corners", {})
-            if self._point_in_rectangle(x, y, corners):
+            matched = False
+            if "points" in region and region["points"]:
+                matched = self._point_in_polygon(x, y, region.get("points", []))
+            elif "corners" in region and region["corners"]:
+                matched = self._point_in_rectangle(x, y, region.get("corners", {}))
+            if matched:
                 speed_gain = float(region.get("speed_gain", self.default_speed_gain))
                 steering_gain = float(region.get("steering_gain", self.default_steering_gain))
                 region_id = region.get("id", "unknown")
@@ -870,15 +909,16 @@ class MultiVehicleController:
 
     def _path_cb(self, msg, role):
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
-        self.states[role]["path"] = points
-        # Store original Path message for collision detection (includes yaw information)
-        self.states[role]["path_msg"] = msg
-        self.states[role]["current_index"] = 0
         s_profile, total_len = self._compute_path_profile(points)
-        self.states[role]["s_profile"] = s_profile
-        self.states[role]["path_length"] = total_len
-        self.states[role]["progress_s"] = 0.0
-        self.states[role]["remaining_distance"] = total_len if total_len > 0.0 else None
+        # Assign in a tight block to reduce race with control loop
+        st = self.states[role]
+        st["path"] = points
+        st["path_msg"] = msg  # original for yaw/collision checks
+        st["current_index"] = 0
+        st["s_profile"] = s_profile
+        st["path_length"] = total_len
+        st["progress_s"] = 0.0
+        st["remaining_distance"] = total_len if total_len > 0.0 else None
         # rospy.loginfo(f"{role}: received path with {len(points)} points")
 
     def _odom_cb(self, msg, role):
@@ -1158,7 +1198,8 @@ class MultiVehicleController:
         path = state["path"]
         position = state["position"]
         orientation = state["orientation"]
-        if not path or position is None or orientation is None:
+        # Strong guard against empty/too-short path or missing pose
+        if not path or len(path) < 2 or position is None or orientation is None:
             return None, None
 
         x = position.x
@@ -1172,6 +1213,10 @@ class MultiVehicleController:
         if self.target_select_by_arclength and state.get("s_profile"):
             # Choose the point whose arc-length >= s_now + lookahead_distance
             s_profile = state["s_profile"]
+            # Guard against race: if s_profile length mismatches path, recompute quickly
+            if len(s_profile) != len(path):
+                s_profile, _ = self._compute_path_profile(path)
+                state["s_profile"] = s_profile
             s_now = float(state.get("progress_s", 0.0))
             s_target = s_now + float(effective_lookahead)
             # Binary search could be used; linear scan is fine for typical sizes
@@ -1181,6 +1226,11 @@ class MultiVehicleController:
                     target_idx = i
                     break
             if target_idx is None:
+                target_idx = len(path) - 1
+            # Final clamp to avoid IndexError on races
+            if target_idx < 0 or target_idx >= len(path):
+                if not path:
+                    return None, None
                 target_idx = len(path) - 1
             tx, ty = path[target_idx]
             target = (tx, ty)

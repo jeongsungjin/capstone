@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import socket
 import re
-from typing import Dict
+from typing import Dict, List
 
 import rospy
 from geometry_msgs.msg import PoseStamped
@@ -11,8 +11,36 @@ from std_msgs.msg import String
 UDP_IP = rospy.get_param("~udp_ip", "0.0.0.0") if rospy.core.is_initialized() else "0.0.0.0"
 UDP_PORT = int(rospy.get_param("~udp_port", 9001)) if rospy.core.is_initialized() else 9001
 
-def _role_name(vid: int) -> str:
-    return f"ego_vehicle_{max(1, int(vid))}"
+def _build_color_fixed_id_map() -> Dict[int, str]:
+    # Fixed UI ID → color mapping (sync with udp_ackermann_senders.launch)
+    # 1: yellow, 2: green, 3: red, 4: purple, 5: pink, 6: white
+    return {
+        1: "yellow",
+        2: "green",
+        3: "red",
+        4: "purple",
+        5: "pink",
+        6: "white",
+    }
+
+def _parse_active_colors() -> List[str]:
+    raw = str(rospy.get_param("~color_list", "")).strip()
+    if not raw:
+        return []
+    return [c.strip().lower() for c in raw.split(",") if c.strip()]
+
+def _role_name_from_ui_id(ui_id: int, active_colors: List[str]) -> str:
+    # Map UI numeric ID (color-fixed) to dynamic role index via color_list
+    fixed_map = _build_color_fixed_id_map()
+    color = fixed_map.get(int(ui_id), None)
+    if color and active_colors:
+        try:
+            idx = active_colors.index(color)
+            return f"ego_vehicle_{idx + 1}"
+        except ValueError:
+            pass
+    # Fallback to ordinal mapping
+    return f"ego_vehicle_{max(1, int(ui_id))}"
 
 
 def main():
@@ -49,6 +77,7 @@ def main():
     }
 
     try:
+        active_colors = _parse_active_colors()
         while not rospy.is_shutdown():
             data, _ = sock.recvfrom(1024)
             msg = data.decode("utf-8", errors="ignore").strip()
@@ -64,7 +93,7 @@ def main():
             # 1) 차량 선택 (숫자만)
             if msg.isdigit():
                 current_vehicle_id = int(msg)
-                role = _role_name(current_vehicle_id)
+                role = _role_name_from_ui_id(current_vehicle_id, active_colors)
                 selected_pub.publish(String(data=role))
                 rospy.loginfo("udp_goal_bridge: selected %s", role)
                 continue
@@ -83,7 +112,7 @@ def main():
                     if current_vehicle_id is None:
                         rospy.logwarn_throttle(2.0, "udp_goal_bridge: vehicle_id not set; ignoring coords")
                         continue
-                    role = _role_name(current_vehicle_id)
+                    role = _role_name_from_ui_id(current_vehicle_id, active_colors)
                     pub = get_override_pub(role)
                     # Optional: re-publish selection (default: disabled to avoid forcing follow view)
                     if bool(rospy.get_param("~republish_selected_on_coords", False)):

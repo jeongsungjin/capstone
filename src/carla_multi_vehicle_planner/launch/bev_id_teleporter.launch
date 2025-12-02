@@ -12,9 +12,9 @@
   <arg name="vehicle_1_color" default="yellow" />
   <arg name="vehicle_2_color" default="green" />
   <arg name="vehicle_3_color" default="red" />
-  <arg name="vehicle_4_color" default="purple" />
-  <arg name="vehicle_5_color" default="" />
-  <arg name="vehicle_6_color" default="" />
+  <arg name="vehicle_4_color" default="white" />
+  <arg name="vehicle_5_color" default="pink" />
+  <arg name="vehicle_6_color" default="purple" />
   <arg name="enable_color_matching" default="true" />
   <arg name="color_gate_on_mismatch" default="true" />
   <arg name="color_match_bonus" default="4.0" />
@@ -60,7 +60,7 @@
   <arg name="only_correct_yaw_during_alignment" default="true" />
 
   <!-- Motion-based yaw 제어 -->
-  <arg name="motion_yaw_enabled" default="false" />
+  <arg name="motion_yaw_enabled" default="true" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="bev_id_teleporter.py"
