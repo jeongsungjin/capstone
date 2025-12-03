@@ -63,7 +63,7 @@
   <arg name="motion_yaw_enabled" default="true" />
 
   <node pkg="carla_multi_vehicle_planner"
-        type="bev_id_teleporter.py"
+        type="old/bev_id_teleporter.py"
         name="bev_id_teleporter"
         output="screen">
     <param name="topic" value="/bev_info" />

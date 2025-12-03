@@ -18,10 +18,10 @@
   </include>
 
   <!-- UI bundle (camera/shutdown/udp bridge/path viz) -->
-  <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
+  <!-- <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
     <arg name="color_list" value="" />
-  </include>
+  </include> -->
 
   <!-- RC UDP senders (simple) -->
   <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">

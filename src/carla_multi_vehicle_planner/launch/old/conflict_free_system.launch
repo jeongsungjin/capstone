@@ -38,7 +38,7 @@
   </node>
 
   <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
-  <node pkg="carla_multi_vehicle_planner" type="multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
+  <node pkg="carla_multi_vehicle_planner" type="old/multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="global_route_resolution" value="1.0" />
@@ -118,7 +118,7 @@
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
 
   <!-- 4) Controller -->
-  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+  <node pkg="carla_multi_vehicle_planner" type="old/multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />
@@ -162,7 +162,7 @@
   </node>
 
   <!-- 4.5) Platoon manager (optional) -->
-  <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="platoon_manager.py" name="platoon_manager" output="screen">
+  <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="old/platoon_manager.py" name="platoon_manager" output="screen">
     <param name="leader_role" value="ego_vehicle_1" />
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
     <param name="desired_gap_m" value="10.0" />
@@ -183,7 +183,7 @@
   <!-- 4.6) Monitoring dashboard -->
   <node if="$(arg enable_rviz)"
         pkg="carla_multi_vehicle_planner"
-        type="platoon_monitor.py"
+        type="old/platoon_monitor.py"
         name="platoon_monitor"
         output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />

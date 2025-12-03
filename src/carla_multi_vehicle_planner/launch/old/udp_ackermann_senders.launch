@@ -27,7 +27,7 @@
   <arg name="vehicle_5_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[4])" />
   <arg name="vehicle_6_color" default="$(eval ([c.strip() for c in arg('color_list').split(',') if c.strip()] + ['yellow','green','red','white','pink','purple'])[5])" />
 
-  <node pkg="carla_multi_vehicle_planner" type="udp_ackermann_sender.py" name="udp_ackermann_sender" output="screen">
+  <node pkg="carla_multi_vehicle_planner" type="old/udp_ackermann_sender.py" name="udp_ackermann_sender" output="screen">
     <param name="bind_ip" value="$(arg bind_ip)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="send_angle_as_float" value="true" />
