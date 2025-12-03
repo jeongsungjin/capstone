@@ -1,6 +1,6 @@
 <launch>
   <!-- Top-level unified args -->
-  <!-- color_list: 쉼표로 구분된 색상 목록. 예) \"red,pink\" -->
+  <!-- color_list: 쉼표로 구분된 색상 목록. 예) "red,pink" -->
   <arg name="color_list" default="" />
   <!-- color_list가 주어지면 그 길이를 num_vehicles로 사용, 없으면 기본 3 -->
   <arg name="num_vehicles" default="$(eval (len([c for c in arg('color_list').split(',') if c.strip()]) if arg('color_list') != '' else 3))" />

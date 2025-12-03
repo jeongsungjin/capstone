@@ -1,3 +1,26 @@
+## Build artifacts
+build/
+devel/
+install/
+logs/
+.catkin_tools/
+
+## Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+## ROS/Bag/Logs
+*.bag
+*.bag.active
+*.log
+
+## Editors/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
 # Catkin/ROS build artifacts
 build/
 devel/

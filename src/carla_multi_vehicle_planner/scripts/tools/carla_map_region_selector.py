@@ -230,7 +230,7 @@ class CarlaMapRegionSelector:
         labels = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"]
         for i, (x, y) in enumerate(corners):
             print(f"    {labels[i]}: ({x:.3f}, {y:.3f})")
-        print(f"  Center: ({(corners[0][0] + corners[2][0])/2:.3f}, {(corners[0][1] + corners[2][1])/2:.3f})")
+        print(f"  Center: ({(corners[0][0] + corners[2][0]) / 2:.3f}, {(corners[0][1] + corners[2][1]) / 2:.3f})")
         print(f"  Width: {abs(corners[1][0] - corners[0][0]):.3f}m, Height: {abs(corners[2][1] - corners[0][1]):.3f}m")
     
     def run(self):
@@ -393,4 +393,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

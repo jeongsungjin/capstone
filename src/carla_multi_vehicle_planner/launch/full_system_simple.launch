@@ -1,0 +1,32 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="enable_platooning" default="false" />
+  <arg name="enable_bev_pipeline" default="true" />
+
+  <!-- Teleporter -->
+  <include if="$(arg enable_bev_pipeline)" file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter_simple.launch">
+    <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
+  </include>
+
+  <!-- Planner + Controller -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/conflict_free_system_simple.launch">
+    <arg name="enable_platooning" value="$(arg enable_platooning)" />
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="enable_manual_goal" value="false" />
+    <arg name="enable_bev_tracking_hold" value="$(arg enable_bev_pipeline)" />
+    <arg name="enable_bev_pipeline" value="$(arg enable_bev_pipeline)" />
+  </include>
+
+  <!-- UI bundle (camera/shutdown/udp bridge/path viz) -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/ui.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="color_list" value="" />
+  </include>
+
+  <!-- RC UDP senders (simple) -->
+  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  </include>
+</launch>
+
+

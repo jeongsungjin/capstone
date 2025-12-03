@@ -33,21 +33,18 @@ class CarlaPathOffsetRegionEditor:
     - 방향키(←→↑↓)로 선택된 영역의 x/y 오프셋을 nudge_step_m 단위로 조정
     - YAML 로 저장
 
-    이 YAML 은 이후 multi_agent_conflict_free_planner 의q
+    이 YAML 은 이후 multi_agent_conflict_free_planner 의
     _route_to_points() 같은 곳에서 좌표 오프셋을 적용할 때 사용할 수 있다.
     """
 
     def __init__(self) -> None:
         rospy.init_node("carla_path_offset_region_editor", anonymous=True)
 
-        self.output_yaml = rospy.get_param(
-            "~output_yaml",
-            os.path.join(
-                os.path.dirname(__file__),
-                "config",
-                "path_offset_regions.yaml",
-            ),
-        )
+        # 패키지 내부 scripts/config/ 로 기본 출력 경로 고정 (툴이 tools/ 로 이동해도 유지되도록)
+        script_dir = os.path.dirname(__file__)
+        pkg_config_dir = os.path.abspath(os.path.join(script_dir, "..", "config"))
+        default_output = os.path.join(pkg_config_dir, "path_offset_regions.yaml")
+        self.output_yaml = rospy.get_param("~output_yaml", default_output)
         # 키보드 방향키로 영역의 x/y 오프셋을 조정할 때 한 번에 움직이는 거리(m)
         self.nudge_step_m = float(rospy.get_param("~nudge_step_m", 0.4))
         self.carla_host = rospy.get_param("~carla_host", "localhost")
@@ -189,7 +186,7 @@ class CarlaPathOffsetRegionEditor:
                 )
 
             # Draw current rectangle selection (preview)
-            if self.drawing_rect:
+            if getattr(self, "drawing_rect", False):
                 x1, y1 = self.rect_start_uv
                 x2, y2 = self.rect_end_uv
                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 1)

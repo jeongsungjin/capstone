@@ -1,0 +1,78 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="enable_rviz" default="true" />
+  <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
+  <arg name="enable_platooning" default="false" />
+  <arg name="enable_manual_goal" default="true" />
+  <arg name="enable_bev_tracking_hold" default="true" />
+  <arg name="enable_bev_pipeline" default="true" />
+
+  <!-- 1) Spawner (no autopilot) -->
+  <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="enable_autopilot" value="false" />
+    <param name="vehicle_model" value="vehicle.jetracer.jetracer" />
+    <param name="spawn_delay" value="1.5" />
+    <param name="randomize_spawn" value="true" />
+    <param name="spawn_min_separation_m" value="8.0" />
+    <param name="use_waypoint_spawn_fallback" value="true" />
+    <param name="waypoint_spawn_spacing_m" value="8.0" />
+    <param name="align_spawn_heading" value="true" />
+    <param name="platoon_enable" value="$(arg enable_platooning)" />
+    <param name="platoon_leader" value="ego_vehicle_1" />
+    <param name="platoon_followers" value="ego_vehicle_2,ego_vehicle_3" />
+    <param name="platoon_gap_m" value="8.0" />
+  </node>
+
+  <!-- 2) Planner (simple) -->
+  <node pkg="carla_multi_vehicle_planner" type="simple_multi_agent_planner.py" name="conflict_free_planner" output="screen">
+    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="global_route_resolution" value="1.0" />
+    <param name="min_destination_distance" value="80.0" />
+    <param name="max_destination_distance" value="180.0" />
+    <param name="replan_interval" value="1.0" />
+  </node>
+
+  <!-- 2.5) Occupancy grid -->
+  <node pkg="carla_multi_vehicle_planner" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
+    <param name="resolution" value="0.25" />
+    <param name="update_rate" value="1.0" />
+  </node>
+
+  <!-- 3) Relay global_path_* -> planned_path_* -->
+  <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="ignore_roles" value="" />
+  </node>
+
+  <!-- 3.5) Visualizer -->
+  <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
+    <param name="max_vehicle_count" value="$(arg num_vehicles)" />
+    <param name="update_rate" value="2.0" />
+  </node>
+
+  <!-- 3.6) Manual goal tools -->
+  <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+    <param name="default_vehicle" value="ego_vehicle_1" />
+  </node>
+  <node unless="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_click_teleporter.py" name="rviz_click_teleporter" output="screen">
+    <param name="carla_host" value="localhost" />
+    <param name="carla_port" value="2000" />
+    <param name="use_waypoint_heading" value="true" />
+    <param name="snap_to_waypoint_height" value="true" />
+    <param name="default_z" value="0.5" />
+    <param name="z_offset" value="0.0" />
+    <param name="disable_collision_check" value="true" />
+  </node>
+  <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
+
+  <!-- 4) Controller -->
+  <node pkg="carla_multi_vehicle_planner" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="lookahead_distance" value="1.0" />
+    <param name="target_speed" value="2.0" />
+  </node>
+</launch>
+
+

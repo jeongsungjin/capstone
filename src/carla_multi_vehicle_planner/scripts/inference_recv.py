@@ -94,12 +94,7 @@ class InferenceReceiverNode:
             y = float(center[1]) + self.y_offset_m
             yaw_val = float(it.get("yaw", 0.0))
             yaw_rad = math.radians(yaw_val) if self.input_yaw_degrees else yaw_val
-            # Add yaw offset (default +180 deg) and normalize
-            # yaw_rad += math.radians(self.yaw_add_deg)
-            # while yaw_rad > math.pi:
-            #     yaw_rad -= 2.0 * math.pi
-            # while yaw_rad < -math.pi:
-            #     yaw_rad += 2.0 * math.pi
+
 
             color_val = it.get("color")
             if color_val is None:

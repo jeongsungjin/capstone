@@ -354,7 +354,7 @@ class CarlaManualPathPlanner:
                 
                 print(f"Added waypoint {len(self.path_points)}: ({loc.x:.2f}, {loc.y:.2f}), yaw={math.degrees(yaw_rad):.1f}deg")
         
-        elif event == cv2.EVENT_RBUTTONDOWN:
+        elif event == cv2.EVENT_RBUTTON_DOWN:
             # Right click: remove last waypoint
             if len(self.path_points) > 0:
                 removed = self.path_points.pop()
@@ -455,3 +455,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
