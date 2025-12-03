@@ -36,10 +36,10 @@ class SimpleMultiVehicleController:
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
-        self.wheelbase = float(rospy.get_param("~wheelbase", 2.7))
+        self.wheelbase = float(rospy.get_param("~wheelbase", 1.75))
         self.max_steer = float(rospy.get_param("~max_steer", 1.0))
         self.target_speed = float(rospy.get_param("~target_speed", 2.0))
-        self.control_frequency = float(rospy.get_param("~control_frequency", 50.0))
+        self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")

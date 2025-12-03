@@ -1,0 +1,8 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">
+    <arg name="num_vehicles" value="$(arg num_vehicles)" />
+  </include>
+</launch>
+
+

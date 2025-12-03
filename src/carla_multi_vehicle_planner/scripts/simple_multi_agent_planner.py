@@ -46,7 +46,9 @@ class SimpleMultiAgentPlanner:
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
-        self.replan_interval = float(rospy.get_param("~replan_interval", 1.0))
+        # Replan policy: distance-gated (no fixed-period replanning)
+        self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 40.0))
+        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.5))
         self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 80.0))
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 180.0))
 
@@ -88,15 +90,33 @@ class SimpleMultiAgentPlanner:
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
 
+        # Destination memory per role (for distance-gated replanning)
+        self._current_dest: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
+
         rospy.sleep(0.5)
         self._plan_once()
-        rospy.Timer(rospy.Duration(self.replan_interval), self._timer_cb)
+        rospy.Timer(rospy.Duration(self.replan_check_interval), self._replan_check_cb)
 
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
 
-    def _timer_cb(self, _evt) -> None:
-        self._plan_once()
+    def _replan_check_cb(self, _evt) -> None:
+        # Distance-gated replanning per vehicle
+        vehicles = self._get_ego_vehicles()
+        if not vehicles:
+            return
+        for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
+            role = self._role_name(index)
+            # If no prior destination, plan now
+            dest_loc = self._current_dest.get(role)
+            front_loc = self._vehicle_front(vehicle)
+            if dest_loc is None:
+                self._plan_for_role(vehicle, role, front_loc)
+                continue
+            # Replan only when remaining straight-line distance to destination is small enough
+            dist = math.hypot(dest_loc.x - front_loc.x, dest_loc.y - front_loc.y)
+            if dist <= max(0.0, float(self.replan_gate_distance_m)):
+                self._plan_for_role(vehicle, role, front_loc)
 
     def _get_ego_vehicles(self) -> List[carla.Actor]:
         actors = self.world.get_actors().filter("vehicle.*")
@@ -139,7 +159,7 @@ class SimpleMultiAgentPlanner:
                 rospy.logwarn(f"trace_route failed: {exc}")
                 return None
         # Fallback: generate a simple forward route by lane-follow for a fixed length
-        return self._lane_follow_route(start, length_m=150.0, step_m=2.0)
+        return self._lane_follow_route(start, length_m=150.0, step_m=0.2)
 
     def _lane_follow_route(self, start: carla.Location, length_m: float = 120.0, step_m: float = 2.0):
         try:
@@ -155,8 +175,30 @@ class SimpleMultiAgentPlanner:
                 nxt = current.next(float(step_m))
                 if not nxt:
                     break
-                # Choose the first option deterministically
-                current = nxt[0]
+                # Choose the next waypoint that keeps heading smooth and lane consistent
+                chosen = None
+                try:
+                    cur_yaw_deg = float(current.transform.rotation.yaw)
+                    cur_yaw = math.radians(cur_yaw_deg)
+                    cur_road = getattr(current, "road_id", None)
+                    cur_lane = getattr(current, "lane_id", None)
+                    best_score = float("inf")
+                    for cand in nxt:
+                        yaw_deg = float(cand.transform.rotation.yaw)
+                        yaw = math.radians(yaw_deg)
+                        # Smaller yaw change preferred
+                        yaw_diff = abs((yaw - cur_yaw + math.pi) % (2.0 * math.pi) - math.pi)
+                        same_lane = 1 if (getattr(cand, "road_id", None) == cur_road and getattr(cand, "lane_id", None) == cur_lane) else 0
+                        # Score: prioritize same lane, then minimal heading change
+                        score = (0 if same_lane else 1) * 10.0 + yaw_diff
+                        if score < best_score:
+                            best_score = score
+                            chosen = cand
+                except Exception:
+                    chosen = None
+                if chosen is None:
+                    chosen = nxt[0]
+                current = chosen
                 route.append((current, None))
                 traveled += float(step_m)
             return route if len(route) >= 2 else None
@@ -205,20 +247,26 @@ class SimpleMultiAgentPlanner:
             return
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
-            start_loc = self._vehicle_front(vehicle)
-            dest_loc = self._choose_destination(start_loc)
-            if dest_loc is None:
-                rospy.logwarn_throttle(5.0, f"{role}: destination not found within distance bounds")
-                continue
-            route = self._trace_route(start_loc, dest_loc)
-            if not route or len(route) < 2:
-                rospy.logwarn_throttle(5.0, f"{role}: route trace failed")
-                continue
-            points = self._route_to_points(route)
-            if len(points) < 2:
-                rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
-                continue
-            self._publish_path(points, role)
+            front_loc = self._vehicle_front(vehicle)
+            self._plan_for_role(vehicle, role, front_loc)
+
+    def _plan_for_role(self, vehicle, role: str, front_loc: carla.Location) -> None:
+        # Sample (or resample) destination and publish a fresh path
+        dest_loc = self._choose_destination(front_loc)
+        if dest_loc is None:
+            rospy.logwarn_throttle(5.0, f"{role}: destination not found within distance bounds")
+            return
+        route = self._trace_route(front_loc, dest_loc)
+        if not route or len(route) < 2:
+            rospy.logwarn_throttle(5.0, f"{role}: route trace failed")
+            return
+        points = self._route_to_points(route)
+        if len(points) < 2:
+            rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
+            return
+        self._publish_path(points, role)
+        # Remember current destination for distance-gated replanning
+        self._current_dest[role] = dest_loc
 
 
 if __name__ == "__main__":

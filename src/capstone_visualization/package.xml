@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>capstone_visualization</name>
+  <version>0.1.0</version>
+  <description>Visualization nodes (RViz markers, occupancy grid) for Capstone</description>
+  <maintainer email="okjsj0222@kookmin.ac.kr">ctrl</maintainer>
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+</package>
+
+

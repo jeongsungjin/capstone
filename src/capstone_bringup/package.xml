@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>capstone_bringup</name>
+  <version>0.1.0</version>
+  <description>System-level launch files for Capstone</description>
+  <maintainer email="okjsj0222@kookmin.ac.kr">ctrl</maintainer>
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>capstone_visualization</exec_depend>
+  <exec_depend>carla_multi_vehicle_planner</exec_depend>
+</package>
+
+

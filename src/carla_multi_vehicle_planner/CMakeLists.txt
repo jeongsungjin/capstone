@@ -16,16 +16,12 @@ catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/multi_vehicle_spawner.py
-  scripts/multi_vehicle_controller.py
-  scripts/bev_visualizer.py
-  scripts/occupancy_grid_publisher.py
-  scripts/inference_recv.py
+  scripts/simple_multi_vehicle_controller.py
+  scripts/simple_multi_agent_planner.py
+  scripts/simple_udp_ackermann_sender.py
+  scripts/simple_bev_teleporter.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
-  scripts/udp_ackermann_sender.py
   scripts/path_relay.py
-  scripts/platoon_manager.py
-  scripts/bev_id_teleporter.py
   scripts/rviz_click_teleporter.py
-  scripts/platoon_monitor.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})

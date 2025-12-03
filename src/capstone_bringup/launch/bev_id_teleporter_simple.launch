@@ -1,0 +1,8 @@
+<launch>
+  <arg name="num_vehicles" default="3" />
+  <include file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter_simple.launch">
+    <arg name="max_vehicle_count" value="$(arg num_vehicles)" />
+  </include>
+</launch>
+
+
