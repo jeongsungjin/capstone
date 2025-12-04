@@ -39,16 +39,14 @@ BLUE = (70, 140, 220)  # 좌회전 화살표용 테두리
 #  ALL_RED_3         : 전방향 RED
 #
 # 각 Phase 이름, 지속 시간(초)
+# ALL_RED_* 단계는 모두 0초라서, 실제 시뮬레이션에서는 사용하지 않도록 제거
 PHASE_SEQUENCE = [
     ("P1_MAIN_GREEN", 6),
     ("P1_YELLOW", 2),
-    ("ALL_RED_1", 0),
     ("P2_MAIN_LEFT", 4),
     ("P2_YELLOW", 2),
-    ("ALL_RED_2", 0),
     ("P3_SIDE_GREEN", 5),
     ("P3_YELLOW", 2),
-    ("ALL_RED_3", 0),
 ]
 
 # ----------------------------------
@@ -192,25 +190,56 @@ def draw_all_signals(state, current_phase, phase_remaining):
 
     # 메인 오른→왼 신호등 위치
     x2, y2 = WIDTH - 220, 150
-    draw_signal_box(x2, y2, "메인 오른→왼", has_left_arrow=False)
+    draw_signal_box_3light(x2, y2, "메인 오른→왼")
+
 
     draw_light(x2 + 60, y2 + 40, RED, state["M_RL_R"])
     draw_light(x2 + 60, y2 + 90, YELLOW, state.get("M_RL_Y", False))
     draw_light(x2 + 60, y2 + 140, GREEN, state["M_RL_G"])
 
     # 지선 신호등 위치
-    x3, y3 = WIDTH//2 - 60, 40
-    draw_signal_box(x3, y3, "지선 (위→아래)", has_left_arrow=False)
+    # 지선 가로형 신호등
+    x3, y3 = WIDTH//2 - 90, 40   # 위치 조정
+    draw_horizontal_signal(x3, y3, "지선 (위→아래)", state)
 
-    draw_light(x3 + 60, y3 + 40, RED, state["S_R"])
-    draw_light(x3 + 60, y3 + 90, YELLOW, state["S_Y"])
-    draw_light(x3 + 60, y3 + 140, GREEN, state["S_G"])
 
     # 현재 Phase 정보 표시
     phase_text = FONT.render(f"현재 Phase: {current_phase}", True, WHITE)
     time_text = FONT.render(f"남은 시간: {phase_remaining:.1f} s", True, WHITE)
     SCREEN.blit(phase_text, (20, HEIGHT - 60))
     SCREEN.blit(time_text, (20, HEIGHT - 30))
+
+def draw_horizontal_signal(x, y, title, state):
+    """
+    지선 신호등을 가로형으로 그림
+    RED — YELLOW — GREEN 순으로 좌→우 배치
+    """
+    # 박스
+    pygame.draw.rect(SCREEN, BLACK, (x, y, 180, 80), border_radius=10)
+
+    # 제목
+    label = FONT.render(title, True, WHITE)
+    SCREEN.blit(label, (x, y - 25))
+
+    # 각 불 위치
+    positions = [
+        (x + 40, y + 40, RED, state["S_R"]),
+        (x + 90, y + 40, YELLOW, state["S_Y"]),
+        (x + 140, y + 40, GREEN, state["S_G"]),
+    ]
+
+    for px, py, color, on in positions:
+        radius = 18
+        if on:
+            pygame.draw.circle(SCREEN, color, (px, py), radius)
+        else:
+            pygame.draw.circle(SCREEN, GREY, (px, py), radius)
+            pygame.draw.circle(SCREEN, color, (px, py), radius, 2)
+
+def draw_signal_box_3light(x, y, title):
+    pygame.draw.rect(SCREEN, BLACK, (x, y, 120, 170), border_radius=10)
+    label = FONT.render(title, True, WHITE)
+    SCREEN.blit(label, (x, y - 25))
 
 
 # ----------------------------------
