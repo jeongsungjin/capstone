@@ -44,11 +44,11 @@ class SimpleMultiAgentPlanner:
         if carla is None:
             raise RuntimeError("CARLA Python API unavailable")
 
-        self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         # Replan policy: distance-gated (no fixed-period replanning)
-        self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 40.0))
-        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.5))
+        self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 10.0))
+        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 1.0))
         self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 80.0))
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 180.0))
 

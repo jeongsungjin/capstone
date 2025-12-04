@@ -70,13 +70,12 @@ class MultiVehicleSpawner:
         if carla is None:
             raise RuntimeError("CARLA Python API unavailable")
 
-        self.num_vehicles = rospy.get_param("~num_vehicles", 3)
+        self.num_vehicles = rospy.get_param("~num_vehicles", 5)
         # 단일 블루프린트로 모든 차량을 스폰하려면 vehicle_model에 설정하세요.
         # 기본값은 경량 시연용 jetracer.
         self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.jetracer")
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
-        self.target_speed = rospy.get_param("~target_speed", 8.0)
         self.randomize_spawn = bool(rospy.get_param("~randomize_spawn", False))
         self.spawn_seed = rospy.get_param("~spawn_seed", None)
         self.spawn_retry_limit = int(rospy.get_param("~spawn_retry_limit", 20))
@@ -89,12 +88,7 @@ class MultiVehicleSpawner:
         self.align_spawn_heading = bool(rospy.get_param("~align_spawn_heading", True))
         self.spawn_heading_offset_deg = float(rospy.get_param("~spawn_heading_offset_deg", 0.0))
 
-        # Optional platoon spawn alignment
-        self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
-        self.platoon_leader = str(rospy.get_param("~platoon_leader", "ego_vehicle_1"))
-        followers_str = str(rospy.get_param("~platoon_followers", "")).strip()
-        self.platoon_followers = [s.strip() for s in followers_str.split(",") if s.strip()] if followers_str else []
-        self.platoon_gap_m = float(rospy.get_param("~platoon_gap_m", 9.0))
+        # platoon parameters removed
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -138,11 +132,6 @@ class MultiVehicleSpawner:
         self._autopilot_pending = []
         self.autopilot_post_delay = float(rospy.get_param("~autopilot_enable_post_delay_sec", 0.8))
         self.spawn_vehicles()
-        if self.platoon_enable:
-            try:
-                self._align_platoon_after_spawn()
-            except Exception as exc:
-                rospy.logwarn("platoon alignment after spawn failed: %s", exc)
         if self.enable_autopilot and self._autopilot_pending:
             rospy.Timer(rospy.Duration(self.autopilot_post_delay), self._enable_autopilot_for_pending, oneshot=True)
         rospy.on_shutdown(self.cleanup)
@@ -448,50 +437,7 @@ class MultiVehicleSpawner:
         )
         self.initial_pose_pub.publish(pose_msg)
 
-    def _align_platoon_after_spawn(self):
-        if not self.platoon_followers:
-            return
-        leader = None
-        for veh in self.vehicles:
-            try:
-                role = veh.attributes.get("role_name", "")
-            except Exception:
-                continue
-            if role == self.platoon_leader:
-                leader = veh
-                break
-        if leader is None:
-            rospy.logwarn("platoon: leader %s not found among spawned vehicles", self.platoon_leader)
-            return
-        base = leader.get_transform()
-        yaw_rad = math.radians(base.rotation.yaw)
-        fx = math.cos(yaw_rad)
-        fy = math.sin(yaw_rad)
-        for idx, follower_name in enumerate(self.platoon_followers, start=1):
-            follower = None
-            for veh in self.vehicles:
-                try:
-                    role = veh.attributes.get("role_name", "")
-                except Exception:
-                    continue
-                if role == follower_name:
-                    follower = veh
-                    break
-            if follower is None:
-                rospy.logwarn("platoon: follower %s not found; skip", follower_name)
-                continue
-            offset = self.platoon_gap_m * float(idx)
-            loc = carla.Location(
-                x=base.location.x - fx * offset,
-                y=base.location.y - fy * offset,
-                z=base.location.z,
-            )
-            tf = carla.Transform(location=loc, rotation=base.rotation)
-            try:
-                follower.set_transform(tf)
-                rospy.loginfo("platoon: aligned %s behind %s at %.1fm", follower_name, self.platoon_leader, offset)
-            except Exception as exc:
-                rospy.logwarn("platoon: set_transform failed for %s: %s", follower_name, exc)
+    # platoon alignment feature removed
 
 
 if __name__ == "__main__":

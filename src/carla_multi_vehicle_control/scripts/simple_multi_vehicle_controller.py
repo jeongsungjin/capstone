@@ -135,8 +135,13 @@ class SimpleMultiVehicleController:
         return fx, fy, yaw
 
     def _project_progress(self, path, s_profile, px, py):
-        if len(path) < 2 or not s_profile:
+        # 방어: s_profile이 비었거나 길이가 path와 다르면 즉시 재계산
+        if len(path) < 2:
             return None
+        if not s_profile or len(s_profile) != len(path):
+            s_profile, _ = self._compute_path_profile(path)
+            if not s_profile or len(s_profile) != len(path):
+                return None
         best_dist_sq = float("inf")
         best_index = None
         best_t = 0.0
@@ -158,6 +163,9 @@ class SimpleMultiVehicleController:
                 best_index = idx
                 best_t = t
         if best_index is None:
+            return None
+        # 추가 방어: 인덱스 경계 확인
+        if best_index < 0 or best_index >= len(path) - 1 or best_index >= len(s_profile):
             return None
         seg_length = math.hypot(path[best_index + 1][0] - path[best_index][0], path[best_index + 1][1] - path[best_index][1])
         if seg_length < 1e-6:
@@ -256,5 +264,6 @@ if __name__ == "__main__":
     except Exception as e:
         rospy.logfatal(f"SimpleMultiVehicleController crashed: {e}")
         raise
+
 
 

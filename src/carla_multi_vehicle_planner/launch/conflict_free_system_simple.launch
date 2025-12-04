@@ -1,5 +1,5 @@
 <launch>
-  <arg name="num_vehicles" default="3" />
+  <arg name="num_vehicles" default="5" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="enable_platooning" default="false" />
@@ -68,7 +68,7 @@
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
 
   <!-- 4) Controller -->
-  <node pkg="carla_multi_vehicle_planner" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />

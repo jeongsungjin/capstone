@@ -16,9 +16,7 @@ catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/multi_vehicle_spawner.py
-  scripts/simple_multi_vehicle_controller.py
   scripts/simple_multi_agent_planner.py
-  scripts/simple_udp_ackermann_sender.py
   scripts/simple_bev_teleporter.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
