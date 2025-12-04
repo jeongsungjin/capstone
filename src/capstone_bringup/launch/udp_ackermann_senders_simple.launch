@@ -2,6 +2,12 @@
   <arg name="num_vehicles" default="3" />
   <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="vehicle_1_ip" default="10.30.75.44" />
+    <arg name="vehicle_2_ip" default="10.10.103.107" />
+    <arg name="vehicle_3_ip" default="10.10.103.115" />
+    <arg name="vehicle_4_ip" default="10.10.103.113" />
+    <arg name="vehicle_5_ip" default="10.10.103.112" />
+    <arg name="vehicle_6_ip" default="10.10.103.106" />
   </include>
 </launch>
 

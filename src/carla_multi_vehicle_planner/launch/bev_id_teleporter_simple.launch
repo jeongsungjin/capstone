@@ -1,6 +1,6 @@
 <launch>
   <arg name="topic" default="/bev_info" />
-  <arg name="max_vehicle_count" default="1" />
+  <arg name="max_vehicle_count" default="5" />
   <arg name="role_names" default="" />
   <arg name="yaw_in_degrees" default="false" />
   <arg name="snap_to_waypoint_height" default="true" />

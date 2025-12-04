@@ -35,10 +35,13 @@ class SimpleMultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
-        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
+        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 2.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.75))
+        # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 1.0))
-        self.target_speed = float(rospy.get_param("~target_speed", 2.0))
+        # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
+        self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
+        self.target_speed = float(rospy.get_param("~target_speed", 3.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
 
         # CARLA world
@@ -221,13 +224,29 @@ class SimpleMultiVehicleController:
         if Ld < 1e-3:
             return 0.0, 0.0
         steer = math.atan2(2.0 * self.wheelbase * math.sin(alpha), Ld)
-        steer = max(-self.max_steer, min(self.max_steer, steer))
+        # 명령 상한으로 클램프 (라디안)
+        steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
         speed = self.target_speed
         return steer, speed
 
+    def _get_vehicle_max_steer(self, vehicle) -> float:
+        # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
+        try:
+            pc = vehicle.get_physics_control()
+            wheels = getattr(pc, "wheels", [])
+            if wheels:
+                deg = max([float(getattr(w, "max_steer_angle", 0.0)) for w in wheels])
+                if deg > 0.0:
+                    return deg * math.pi / 180.0
+        except Exception:
+            pass
+        return max(1e-3, float(self.max_steer))
+
     def _apply_carla_control(self, vehicle, steer, speed):
         control = carla.VehicleControl()
-        control.steer = max(-1.0, min(1.0, steer / max(1e-3, self.max_steer)))
+        # 차량 물리 최대각으로 정규화하여 CARLA [-1,1]에 매핑
+        veh_max = self._get_vehicle_max_steer(vehicle)
+        control.steer = max(-1.0, min(1.0, float(steer) / max(1e-3, veh_max)))
         v = vehicle.get_velocity()
         current_speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
         speed_error = speed - current_speed
