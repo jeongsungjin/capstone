@@ -15,7 +15,7 @@
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="enable_autopilot" value="false" />
-    <param name="vehicle_model" value="vehicle.vehicle.coloredxycar" />
+    <param name="vehicle_model" value="vehicle.vehicle.jetracer" />
     <!-- 색상 리스트가 주어졌다면 해당 색상 순서의 모델들을 사용 -->
     <param name="vehicle_models" value="$(eval ','.join(['vehicle.vehicle.' + c.strip() + 'xycar' for c in arg('color_list').split(',') if c.strip()]))" />
     <param name="spawn_delay" value="1.5" />
@@ -38,7 +38,7 @@
   </node>
 
   <!-- 2) Conflict-free global planner (independent of time-aware scheduling) -->
-  <node pkg="carla_multi_vehicle_planner" type="old/multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
+  <node pkg="carla_multi_vehicle_planner" type="multi_agent_conflict_free_planner.py" name="conflict_free_planner" output="screen">
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="global_route_resolution" value="1.0" />
@@ -75,7 +75,7 @@
   </node>
 
   <!-- 2.5) Occupancy grid for road geometry (RViz Map display on /map) -->
-  <node pkg="carla_multi_vehicle_planner" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
+  <node pkg="capstone_visualization" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen">
     <param name="resolution" value="0.25" />
     <param name="update_rate" value="1.0" />
   </node>
@@ -94,7 +94,7 @@
   </node>
 
   <!-- 3.5) BEV / Marker visualizer: vehicle cubes + colored path markers on map frame -->
-  <node pkg="carla_multi_vehicle_planner" type="bev_visualizer.py" name="bev_visualizer" output="screen">
+  <node pkg="capstone_visualization" type="bev_visualizer.py" name="bev_visualizer" output="screen">
     <param name="max_vehicle_count" value="$(arg num_vehicles)" />
     <param name="update_rate" value="2.0" />
   </node>
@@ -118,7 +118,7 @@
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
 
   <!-- 4) Controller -->
-  <node pkg="carla_multi_vehicle_planner" type="old/multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
+  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="1.0" />
     <param name="target_speed" value="2.0" />
@@ -162,6 +162,7 @@
   </node>
 
   <!-- 4.5) Platoon manager (optional) -->
+  <!-- platoon_manager disabled: legacy node not installed -->
   <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="old/platoon_manager.py" name="platoon_manager" output="screen">
     <param name="leader_role" value="ego_vehicle_1" />
     <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
@@ -181,9 +182,11 @@
   </node>
 
   <!-- 4.6) Monitoring dashboard -->
+  <!-- legacy platoon_monitor disabled -->
+  <!-- legacy platoon_monitor is not installed; keep disabled to avoid launch errors
   <node if="$(arg enable_rviz)"
         pkg="carla_multi_vehicle_planner"
-        type="old/platoon_monitor.py"
+        type="platoon_monitor.py"
         name="platoon_monitor"
         output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
@@ -193,6 +196,7 @@
     <param name="enable_bev_pipeline" value="$(arg enable_bev_pipeline)" />
     <param name="enable_bev_tracking_hold" value="$(arg enable_bev_tracking_hold)" />
   </node>
+  -->
 
   <!-- Optional RViz -->
   <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"

@@ -35,10 +35,10 @@ class SimpleMultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
-        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 2.0))
-        self.wheelbase = float(rospy.get_param("~wheelbase", 1.75))
+        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.5))
+        self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
-        self.max_steer = float(rospy.get_param("~max_steer", 1.0))
+        self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
         self.target_speed = float(rospy.get_param("~target_speed", 3.0))

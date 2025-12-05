@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import math
 import random
 from typing import Dict, List, Optional, Tuple
@@ -46,6 +45,10 @@ class SimpleMultiAgentPlanner:
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
+        # Fallback lane-follow tuning (for when GRP is unavailable)
+        self.lane_follow_step_m = float(rospy.get_param("~lane_follow_step_m", 0.3))      # default denser than 2.0
+        self.lane_follow_length_m = float(rospy.get_param("~lane_follow_length_m", 150.0))
+        self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
         # Replan policy: distance-gated (no fixed-period replanning)
         self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 10.0))
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 1.0))
@@ -158,8 +161,12 @@ class SimpleMultiAgentPlanner:
             except Exception as exc:
                 rospy.logwarn(f"trace_route failed: {exc}")
                 return None
-        # Fallback: generate a simple forward route by lane-follow for a fixed length
-        return self._lane_follow_route(start, length_m=150.0, step_m=0.2)
+        # Fallback: generate a forward route by lane-follow (parameterized density)
+        return self._lane_follow_route(
+            start,
+            length_m=float(self.lane_follow_length_m),
+            step_m=max(0.05, float(self.lane_follow_step_m)),
+        )
 
     def _lane_follow_route(self, start: carla.Location, length_m: float = 120.0, step_m: float = 2.0):
         try:
@@ -219,7 +226,8 @@ class SimpleMultiAgentPlanner:
                 last_x, last_y = x, y
                 continue
             dx, dy = x - last_x, y - last_y
-            if dx * dx + dy * dy >= 0.2 * 0.2:
+            # Thin only when spacing exceeds configured threshold
+            if dx * dx + dy * dy >= float(self.path_thin_min_m) * float(self.path_thin_min_m):
                 points.append((x, y))
                 last_x, last_y = x, y
         if len(points) >= 2:

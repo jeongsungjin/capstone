@@ -22,4 +22,5 @@ catkin_install_python(PROGRAMS
   scripts/rviz_goal_mux.py
   scripts/path_relay.py
   scripts/rviz_click_teleporter.py
+  scripts/old/multi_agent_conflict_free_planner.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
