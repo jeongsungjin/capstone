@@ -57,6 +57,10 @@ class SimpleMultiVehicleController:
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
+        # Collision stop gating (forward cone)
+        self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 60.0))  # +/-deg ahead
+        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 5.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")
@@ -217,7 +221,7 @@ class SimpleMultiVehicleController:
         tx, ty = path[target_idx]
         return tx, ty
 
-    def _compute_control(self, st, vehicle):
+    def _compute_control(self, st, vehicle, role: str):
         path = st.get("path") or []
         pos = st.get("position")
         ori = st.get("orientation")
@@ -255,7 +259,37 @@ class SimpleMultiVehicleController:
         speed = self.target_speed
         # Apply traffic light gating
         speed = self._apply_tl_gating(vehicle, fx, fy, speed)
+        # Apply forward collision gating (vehicles in front cone within distance)
+        speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         return steer, speed
+
+    def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
+        if not self.collision_stop_enable:
+            return speed_cmd
+        angle_th = abs(float(self.collision_stop_angle_deg)) * math.pi / 180.0
+        dist_th = max(0.0, float(self.collision_stop_distance_m))
+        # Iterate over other controlled vehicles (based on odom states)
+        for other_role, ost in self.states.items():
+            if other_role == role:
+                continue
+            op = ost.get("position")
+            if op is None:
+                continue
+            dx = float(op.x) - fx
+            dy = float(op.y) - fy
+            dist = math.hypot(dx, dy)
+            if dist <= 1e-3:
+                return 0.0
+            # Bearing difference to heading
+            ang = math.atan2(dy, dx)
+            rel = ang - yaw
+            while rel > math.pi:
+                rel -= 2.0 * math.pi
+            while rel < -math.pi:
+                rel += 2.0 * math.pi
+            if abs(rel) <= angle_th and dist <= dist_th:
+                return 0.0
+        return speed_cmd
 
     def _compute_adaptive_lookahead(self, st) -> float:
         """
@@ -360,7 +394,7 @@ class SimpleMultiVehicleController:
             vehicle = self.vehicles.get(role)
             if vehicle is None:
                 continue
-            steer, speed = self._compute_control(st, vehicle)
+            steer, speed = self._compute_control(st, vehicle, role)
             if steer is None:
                 continue
             self._apply_carla_control(vehicle, steer, speed)
