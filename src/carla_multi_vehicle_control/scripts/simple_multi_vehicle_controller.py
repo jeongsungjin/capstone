@@ -42,16 +42,20 @@ class SimpleMultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
-        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.5))
+        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
+        # Curvature-adaptive lookahead (straight: large, sharp turn: small)
+        self.ld_min = float(rospy.get_param("~ld_min", 1.0))
+        self.ld_max = float(rospy.get_param("~ld_max", 4.0))
+        self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
+        self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
-        self.target_speed = float(rospy.get_param("~target_speed", 3.0))
+        self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
-        # Traffic light gating
-        self.tl_stop_distance_m = float(rospy.get_param("~tl_stop_distance_m", 15.0))
+        # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
 
         # CARLA world
@@ -192,14 +196,15 @@ class SimpleMultiVehicleController:
             s_now = s_profile[best_index] + best_t * seg_length
         return s_now, best_index
 
-    def _select_target(self, st, x, y) -> Tuple[float, float]:
+    def _select_target(self, st, x, y, lookahead_override: float = None) -> Tuple[float, float]:
         path = st.get("path") or []
         s_profile = st.get("s_profile") or []
         if len(path) < 2:
             return x, y
         # arc-length target selection
         s_now = float(st.get("progress_s", 0.0))
-        s_target = s_now + float(self.lookahead_distance)
+        ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
+        s_target = s_now + max(0.05, ld)
         target_idx = None
         for i, s in enumerate(s_profile):
             if s >= s_target:
@@ -227,7 +232,13 @@ class SimpleMultiVehicleController:
             s_now, idx = proj
             st["progress_s"] = s_now
             st["current_index"] = idx
-        tx, ty = self._select_target(st, fx, fy)
+        # Curvature-adaptive lookahead: reduce Ld on sharp turns, increase on straights
+        ld_dynamic = self.lookahead_distance
+        try:
+            ld_dynamic = self._compute_adaptive_lookahead(st)
+        except Exception:
+            ld_dynamic = self.lookahead_distance
+        tx, ty = self._select_target(st, fx, fy, lookahead_override=ld_dynamic)
         dx = tx - fx
         dy = ty - fy
         alpha = math.atan2(dy, dx) - yaw
@@ -245,6 +256,39 @@ class SimpleMultiVehicleController:
         # Apply traffic light gating
         speed = self._apply_tl_gating(vehicle, fx, fy, speed)
         return steer, speed
+
+    def _compute_adaptive_lookahead(self, st) -> float:
+        """
+        Compute curvature-adaptive lookahead within [ld_min, ld_max].
+        Map kappa (rad/m) to lookahead: L = Lmax - (Lmax-Lmin) * clamp(kappa/kappa_max, 0, 1)
+        """
+        path = st.get("path") or []
+        s_profile = st.get("s_profile") or []
+        idx = st.get("current_index", 0)
+        if len(path) < 3 or not s_profile:
+            return max(self.ld_min, min(self.ld_max, self.lookahead_distance))
+        # Find a forward index at least ld_window_m ahead in arc-length
+        s_now = float(st.get("progress_s", 0.0))
+        target_s = s_now + max(0.5, float(self.ld_window_m))
+        j = idx
+        while j + 1 < len(s_profile) and float(s_profile[j]) < target_s:
+            j += 1
+        j = min(j, len(path) - 1)
+        if j <= idx:
+            return max(self.ld_min, min(self.ld_max, self.lookahead_distance))
+        # Estimate heading change between segments around idx and j
+        def heading(p, q):
+            return math.atan2(q[1] - p[1], q[0] - p[0])
+        i2 = min(idx + 1, len(path) - 1)
+        j1 = max(j - 1, 0)
+        h0 = heading(path[idx], path[i2])
+        h1 = heading(path[j1], path[j])
+        dtheta = (h1 - h0 + math.pi) % (2.0 * math.pi) - math.pi
+        ds = max(1e-3, float(s_profile[j]) - float(s_profile[idx]))
+        kappa = abs(dtheta) / ds
+        ratio = max(0.0, min(1.0, kappa / max(1e-6, float(self.ld_kappa_max))))
+        L = float(self.ld_max) - (float(self.ld_max) - float(self.ld_min)) * ratio
+        return max(float(self.ld_min), min(float(self.ld_max), L))
 
     def _get_vehicle_max_steer(self, vehicle) -> float:
         # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
@@ -298,18 +342,12 @@ class SimpleMultiVehicleController:
             return speed_cmd
         for ap in approaches:
             if fx >= ap["xmin"] and fx <= ap["xmax"] and fy >= ap["ymin"] and fy <= ap["ymax"]:
-                dx = ap["sx"] - fx
-                dy = ap["sy"] - fy
-                dist = math.hypot(dx, dy)
                 color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
+                # Region-based hard stop
                 if color == 0:
-                    if dist <= max(0.0, float(self.tl_stop_distance_m)):
-                        return 0.0
-                    return min(speed_cmd, max(0.5, speed_cmd * (dist / (dist + 5.0))))
-                elif color == 1:
-                    if self.tl_yellow_policy.lower() != "permissive":
-                        if dist <= max(0.0, float(self.tl_stop_distance_m)) * 0.7:
-                            return 0.0
+                    return 0.0
+                if color == 1 and self.tl_yellow_policy.lower() != "permissive":
+                    return 0.0
         return speed_cmd
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
