@@ -7,6 +7,13 @@ import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Header
+
+try:
+    from carla_multi_vehicle_control.msg import TrafficLightPhase, TrafficApproach  # type: ignore
+except Exception:
+    TrafficLightPhase = None  # type: ignore
+    TrafficApproach = None  # type: ignore
 
 try:
     import carla  # type: ignore
@@ -43,6 +50,9 @@ class SimpleMultiVehicleController:
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
         self.target_speed = float(rospy.get_param("~target_speed", 3.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
+        # Traffic light gating
+        self.tl_stop_distance_m = float(rospy.get_param("~tl_stop_distance_m", 15.0))
+        self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")
@@ -57,6 +67,7 @@ class SimpleMultiVehicleController:
         self.states: Dict[str, Dict] = {}
         self.control_publishers: Dict[str, rospy.Publisher] = {}
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
+        self._tl_phase: Dict[str, Dict] = {"stamp": rospy.Time(0), "approaches": []}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -77,6 +88,10 @@ class SimpleMultiVehicleController:
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+
+        # Subscribe traffic light phase if message is available
+        if TrafficLightPhase is not None:
+            rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
 
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
@@ -227,6 +242,8 @@ class SimpleMultiVehicleController:
         # 명령 상한으로 클램프 (라디안)
         steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
         speed = self.target_speed
+        # Apply traffic light gating
+        speed = self._apply_tl_gating(vehicle, fx, fy, speed)
         return steer, speed
 
     def _get_vehicle_max_steer(self, vehicle) -> float:
@@ -258,6 +275,42 @@ class SimpleMultiVehicleController:
             control.brake = min(1.0, -speed_error / max(1.0, self.target_speed))
         vehicle.apply_control(control)
 
+    def _tl_cb(self, msg: "TrafficLightPhase") -> None:
+        # Cache approaches for quick gating
+        try:
+            approaches = []
+            for ap in msg.approaches:
+                approaches.append({
+                    "name": ap.name,
+                    "color": int(ap.color),
+                    "xmin": float(ap.xmin), "xmax": float(ap.xmax),
+                    "ymin": float(ap.ymin), "ymax": float(ap.ymax),
+                    "sx": float(ap.stopline_x), "sy": float(ap.stopline_y),
+                })
+            self._tl_phase = {"stamp": msg.header.stamp, "approaches": approaches}
+        except Exception:
+            self._tl_phase = {"stamp": rospy.Time.now(), "approaches": []}
+
+    def _apply_tl_gating(self, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
+        data = self._tl_phase
+        approaches = data.get("approaches", [])
+        if not approaches:
+            return speed_cmd
+        for ap in approaches:
+            if fx >= ap["xmin"] and fx <= ap["xmax"] and fy >= ap["ymin"] and fy <= ap["ymax"]:
+                dx = ap["sx"] - fx
+                dy = ap["sy"] - fy
+                dist = math.hypot(dx, dy)
+                color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
+                if color == 0:
+                    if dist <= max(0.0, float(self.tl_stop_distance_m)):
+                        return 0.0
+                    return min(speed_cmd, max(0.5, speed_cmd * (dist / (dist + 5.0))))
+                elif color == 1:
+                    if self.tl_yellow_policy.lower() != "permissive":
+                        if dist <= max(0.0, float(self.tl_stop_distance_m)) * 0.7:
+                            return 0.0
+        return speed_cmd
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
         msg.steering_angle = float(steer)

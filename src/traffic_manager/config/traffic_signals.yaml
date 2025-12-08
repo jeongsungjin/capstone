@@ -1,0 +1,153 @@
+# 신호등 1~9에 대한 설정
+# - 각 신호등이 어떤 교차로/유형인지
+# - 어떤 light_state 키를 보고 직진/좌회전을 허용하는지
+# - CARLA 월드 좌표 상 정지 영역 폴리곤
+
+signals:
+  "1":
+    intersection: "A"
+    name: "A_MAIN_3"
+    type: "MAIN_3"
+    description: "교차로 A, 메인도로 3등 신호"
+    state_keys:
+      red: "M_RL_R"
+      yellow: "M_RL_Y"
+      straight_green: "M_RL_G"
+      left_green: null
+    stop_region:
+      - [ -6.0,  -14.5 ]
+      - [ -6.0,  -10.5 ]
+      - [ -12.0, -14.5 ]
+      - [ -12.0, -10.5 ]
+
+  "2":
+    intersection: "A"
+    name: "A_MAIN_4"
+    type: "MAIN_4"
+    description: "교차로 A, 메인도로 4등 신호 (좌회전 화살표 포함)"
+    state_keys:
+      red: "M_LR_R"
+      yellow: "M_LR_Y"
+      straight_green: "M_LR_G"
+      left_green: "M_LR_LEFT"
+    stop_region:
+      - [ 6.0,  -18.5 ]
+      - [ 6.0,  -14.5 ]
+      - [ 12.0, -18.5 ]
+      - [ 12.0, -14.5 ]
+
+  "3":
+    intersection: "A"
+    name: "A_SIDE"
+    type: "SIDE"
+    description: "교차로 A, 지선 3등 신호"
+    state_keys:
+      red: "S_R"
+      yellow: "S_Y"
+      straight_green: "S_G"
+      left_green: null
+    stop_region:
+      - [ 0.0, -10.5 ]
+      - [ 4.0, -10.5 ]
+      - [ 0.0, -7.0 ]
+      - [ 4.0, -7.0 ]
+
+  "4":
+    intersection: "B"
+    name: "B_MAIN_3"
+    type: "MAIN_3"
+    description: "교차로 B, 메인도로 3등 신호"
+    state_keys:
+      red: "M_RL_R"
+      yellow: "M_RL_Y"
+      straight_green: "M_RL_G"
+      left_green: null
+    stop_region:
+      - [ -21.0, 7.0 ]
+      - [ -17.0, 7.0 ]
+      - [ -15.0, 10.0 ]
+      - [ -18.0, 13.0 ]
+      - [ -20.35, 10.0 ]
+
+  "5":
+    intersection: "B"
+    name: "B_MAIN_4"
+    type: "MAIN_4"
+    description: "교차로 B, 메인도로 4등 신호 (좌회전 화살표 포함)"
+    state_keys:
+      red: "M_LR_R"
+      yellow: "M_LR_Y"
+      straight_green: "M_LR_G"
+      left_green: "M_LR_LEFT"
+    stop_region:
+      - [ -25.0, -6.0 ]
+      - [ -21.0, -6.0 ]
+      - [ -21.0, -8.3 ]
+      - [ -20.0, -10.7 ]
+      - [ -25.0, -12.0 ]
+
+  "6":
+    intersection: "B"
+    name: "B_SIDE"
+    type: "SIDE"
+    description: "교차로 B, 지선 3등 신호"
+    state_keys:
+      red: "S_R"
+      yellow: "S_Y"
+      straight_green: "S_G"
+      left_green: null
+    stop_region:
+      - [ -15.0, 0.5 ]
+      - [ -15.0, -3.5 ]
+      - [ -9.0,  0.5 ]
+      - [ -9.0, -3.5 ]
+
+  "7":
+    intersection: "C"
+    name: "C_MAIN_3"
+    type: "MAIN_3"
+    description: "교차로 C, 메인도로 3등 신호"
+    state_keys:
+      red: "M_RL_R"
+      yellow: "M_RL_Y"
+      straight_green: "M_RL_G"
+      left_green: null
+    stop_region:
+      - [ 17.0,  -6.0 ]
+      - [ 21.0,  -6.0 ]
+      - [ 15.0, -10.0 ]
+      - [ 17.5, -13.2 ]
+      - [ 20.3, -10.1 ]
+
+  "8":
+    intersection: "C"
+    name: "C_MAIN_4"
+    type: "MAIN_4"
+    description: "교차로 C, 메인도로 4등 신호 (좌회전 화살표 포함)"
+    state_keys:
+      red: "M_LR_R"
+      yellow: "M_LR_Y"
+      straight_green: "M_LR_G"
+      left_green: "M_LR_LEFT"
+    stop_region:
+      - [ 21.0,   7.0 ]
+      - [ 25.0,   7.0 ]
+      - [ 21.0,   9.3 ]
+      - [ 19.25, 11.7 ]
+      - [ 23.25, 13.0 ]
+
+  "9":
+    intersection: "C"
+    name: "C_SIDE"
+    type: "SIDE"
+    description: "교차로 C, 지선 3등 신호"
+    state_keys:
+      red: "S_R"
+      yellow: "S_Y"
+      straight_green: "S_G"
+      left_green: null
+    stop_region:
+      - [ 9.0, 0.5 ]
+      - [ 9.0, 4.5 ]
+      - [ 15.0, 0.5 ]
+      - [ 15.0, 4.5 ]

@@ -4,9 +4,21 @@ project(carla_multi_vehicle_control)
 find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
+  message_generation
   geometry_msgs
   nav_msgs
   ackermann_msgs
+)
+
+add_message_files(
+  FILES
+  TrafficApproach.msg
+  TrafficLightPhase.msg
+)
+
+generate_messages(
+  DEPENDENCIES
+  std_msgs
 )
 
 catkin_package()
