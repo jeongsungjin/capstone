@@ -163,7 +163,6 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/signals_phase_publisher.py
   scripts/tl_monitor_ui.py
-  scripts/signals_map_viewer.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

@@ -44,22 +44,22 @@ class SimpleMultiVehicleController:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
-        self.ld_min = float(rospy.get_param("~ld_min", 1.0))
-        self.ld_max = float(rospy.get_param("~ld_max", 4.0))
+        self.ld_min = float(rospy.get_param("~ld_min", 0.5))
+        self.ld_max = float(rospy.get_param("~ld_max", 2.5))
         self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
-        self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
+        self.ld_window_m = float(rospy.get_param("~ld_window_m", 6.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
-        self.max_steer = float(rospy.get_param("~max_steer", 0.5))
+        self.max_steer = float(rospy.get_param("~max_steer", 0.6))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
-        self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
+        self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.6))
         self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
-        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 60.0))  # +/-deg ahead
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
         self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 5.0))
 
         # CARLA world
@@ -69,6 +69,7 @@ class SimpleMultiVehicleController:
         self.client = carla.Client(host, port)
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
+        self.map = self.world.get_map() 
 
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
@@ -275,6 +276,7 @@ class SimpleMultiVehicleController:
             op = ost.get("position")
             if op is None:
                 continue
+
             dx = float(op.x) - fx
             dy = float(op.y) - fy
             dist = math.hypot(dx, dy)
