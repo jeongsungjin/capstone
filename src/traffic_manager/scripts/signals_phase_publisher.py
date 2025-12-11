@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-import math
 import os
 import time
 from typing import Dict, List, Tuple, Optional
@@ -41,6 +40,14 @@ class SignalsPhasePublisher:
         # 외부 페이즈 입력(선택): /tm/phase_name (std_msgs/String) 구독
         self.external_phase_topic = str(rospy.get_param("~external_phase_topic", "/tm/phase_name")).strip()
         self.use_external_phase = bool(rospy.get_param("~use_external_phase", False))
+        default_offsets = {"A": 20.0, "B": 0.0, "C": 38.0}
+        cfg_offsets = rospy.get_param("~intersection_offsets", default_offsets)
+        self.intersection_offsets = {}
+        for k, v in (cfg_offsets or {}).items():
+            try:
+                self.intersection_offsets[str(k)] = float(v)
+            except Exception:
+                pass
 
         self._phase_name = "P1_MAIN_GREEN"
         if self.use_external_phase and self.external_phase_topic:
@@ -63,6 +70,7 @@ class SignalsPhasePublisher:
             ("P3_SIDE_GREEN", float(rospy.get_param("~p3_green_s", 15.0))),
             ("P3_YELLOW", float(rospy.get_param("~p3_yellow_s", 3.0))),
         ]
+        self._cycle_time = sum([d for _, d in self.sequence]) or 1.0
         self._t0 = time.time()
 
     def _phase_cb(self, msg: String) -> None:
@@ -97,18 +105,21 @@ class SignalsPhasePublisher:
             signals[str(key)] = val
         return signals
 
-    def _current_phase(self) -> str:
-        if self.use_external_phase:
-            return self._phase_name
-        # 내부 순환
-        total = sum([d for _, d in self.sequence])
-        t = (time.time() - self._t0) % max(1e-3, total)
+    def _phase_from_elapsed(self, elapsed: float) -> str:
+        t = elapsed % max(1e-3, self._cycle_time)
         acc = 0.0
         for name, dur in self.sequence:
             if acc <= t < acc + dur:
                 return name
             acc += dur
         return self.sequence[-1][0]
+
+    def _phase_for_intersection(self, iid: str) -> str:
+        if self.use_external_phase:
+            return self._phase_name
+        offset = float(self.intersection_offsets.get(iid, 0.0))
+        elapsed = time.time() - self._t0 + offset
+        return self._phase_from_elapsed(elapsed)
 
     def _compute_color(self, state_keys: Dict, light_states: Dict[str, bool]) -> int:
         # 0=Red, 1=Yellow, 2=Green
@@ -147,9 +158,9 @@ class SignalsPhasePublisher:
     def spin(self) -> None:
         rate = rospy.Rate(max(1.0, self.publish_hz))
         while not rospy.is_shutdown():
-            phase = self._current_phase()
-            ls = get_light_states(phase)
             for iid in self.by_intersection.keys():
+                phase = self._phase_for_intersection(iid)
+                ls = get_light_states(phase)
                 msg = self._build_msg_for_intersection(iid, ls, phase)
                 self.pub.publish(msg)
             rate.sleep()
@@ -161,5 +172,3 @@ if __name__ == "__main__":
         node.spin()
     except rospy.ROSInterruptException:
         pass
-
-

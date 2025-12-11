@@ -4,7 +4,7 @@ import time
 
 
 # ----------------------------------
-# 신호등 상태 계산
+# Signal state calculation helpers
 # ----------------------------------
 def get_light_states(phase_name):
     state = {
@@ -51,8 +51,8 @@ def get_light_states(phase_name):
 
 
 class TrafficSimulator:
-    def __init__(self, width: int = 1240, height: int = 900) -> None:
-        # 기본 설정
+    def __init__(self, width: int = 1240, height: int = 1020) -> None:
+        # Screen setup
         self.width = width
         self.height = height
 
@@ -62,7 +62,7 @@ class TrafficSimulator:
         self.font = pygame.font.SysFont("malgungothic", 18)
         self.clock = pygame.time.Clock()
 
-        # 색상 정의
+        # Colors
         self.BLACK = (0, 0, 0)
         self.WHITE = (255, 255, 255)
         self.RED = (220, 50, 50)
@@ -71,7 +71,7 @@ class TrafficSimulator:
         self.GREY = (80, 80, 80)
         self.DARKGREY = (40, 40, 40)
 
-        # 신호 Phase 정의
+        # Phase sequence definition
         self.phase_sequence = [
             ("P1_MAIN_GREEN", 25),
             ("P1_YELLOW", 3),
@@ -83,17 +83,19 @@ class TrafficSimulator:
         self.total_phase_time = sum(d for _, d in self.phase_sequence)
 
     # ----------------------------------
-    # 신호등 그리기 메서드들 (임의 Surface 지원)
+    # Signal drawing helpers
     # ----------------------------------
-    def _draw_signal_box_4light(self, surface, x, y, title):
+    def _draw_signal_box_4light(self, surface, x, y, title, show_label=True):
         pygame.draw.rect(surface, self.BLACK, (x, y, 120, 220), border_radius=10)
-        label = self.font.render(title, True, self.WHITE)
-        surface.blit(label, (x, y - 22))
+        if show_label and title:
+            label = self.font.render(title, True, self.WHITE)
+            surface.blit(label, (x, y - 22))
 
-    def _draw_signal_box_3light(self, surface, x, y, title):
+    def _draw_signal_box_3light(self, surface, x, y, title, show_label=True):
         pygame.draw.rect(surface, self.BLACK, (x, y, 120, 170), border_radius=10)
-        label = self.font.render(title, True, self.WHITE)
-        surface.blit(label, (x, y - 22))
+        if show_label and title:
+            label = self.font.render(title, True, self.WHITE)
+            surface.blit(label, (x, y - 22))
 
     def _draw_light(self, surface, x, y, color, on):
         radius = 16
@@ -111,12 +113,13 @@ class TrafficSimulator:
             pygame.draw.circle(surface, self.GREY, (x, y), radius)
             pygame.draw.circle(surface, self.GREEN, (x, y), radius, 2)
 
-        arrow_text = self.font.render("←", True, self.WHITE if on else self.GREEN)
+        arrow_text = self.font.render("<-", True, self.WHITE if on else self.GREEN)
         surface.blit(arrow_text, arrow_text.get_rect(center=(x, y)))
 
-    def _draw_horizontal_signal(self, surface, x, y, title, state):
+    def _draw_horizontal_signal(self, surface, x, y, title, state, show_label=True):
         pygame.draw.rect(surface, self.BLACK, (x, y, 180, 80), border_radius=10)
-        surface.blit(self.font.render(title, True, self.WHITE), (x, y - 22))
+        if show_label and title:
+            surface.blit(self.font.render(title, True, self.WHITE), (x, y - 22))
 
         positions = [
             (x + 40, y + 40, self.RED, state["S_R"]),
@@ -127,58 +130,66 @@ class TrafficSimulator:
         for px, py, color, on in positions:
             self._draw_light(surface, px, py, color, on)
 
-    def _draw_intersection_raw(self, surface, base_x, base_y, name, state):
-        # 메인 왼→오른
+    def _draw_intersection_raw(self, surface, base_x, base_y, name, state, show_labels=True):
+        # Main left-to-right
         x1, y1 = base_x, base_y
-        self._draw_signal_box_4light(surface, x1, y1, f"{name} L→R")
+        self._draw_signal_box_4light(surface, x1, y1, f"{name} L->R", show_label=show_labels)
         self._draw_light(surface, x1 + 60, y1 + 40, self.RED, state["M_LR_R"])
         self._draw_light(surface, x1 + 60, y1 + 85, self.YELLOW, state["M_LR_Y"])
         self._draw_light(surface, x1 + 60, y1 + 130, self.GREEN, state["M_LR_G"])
         self._draw_arrow_light(surface, x1 + 60, y1 + 175, state["M_LR_LEFT"])
 
-        # 메인 오른→왼
+        # Main right-to-left
         x2, y2 = base_x + 150, base_y + 40
-        self._draw_signal_box_3light(surface, x2, y2, f"{name} R→L")
+        self._draw_signal_box_3light(surface, x2, y2, f"{name} R->L", show_label=show_labels)
         self._draw_light(surface, x2 + 60, y2 + 35, self.RED, state["M_RL_R"])
         self._draw_light(surface, x2 + 60, y2 + 80, self.YELLOW, state["M_RL_Y"])
         self._draw_light(surface, x2 + 60, y2 + 125, self.GREEN, state["M_RL_G"])
 
-        # 지선
-        self._draw_horizontal_signal(surface, base_x + 30, base_y - 120, f"{name} Side", state)
+        # Side road
+        self._draw_horizontal_signal(surface, base_x + 30, base_y - 120, f"{name} Side", state, show_label=show_labels)
 
     # ----------------------------------
-    # 교차로(삼거리) 그리기 (회전 지원)
+    # Intersection drawing with optional rotation
     # ----------------------------------
     def draw_intersection(self, base_x, base_y, name, state, angle: int = 0):
         """
-        base_x, base_y는 '메인 L→R 신호 상자의 왼쪽 위 좌표' 기준.
-        angle은 도 단위이며, pygame의 규칙을 따라 양수는 반시계 방향 회전.
+        base_x/base_y correspond to the reference corner of the left-to-right signal box.
+        angle is in degrees (pygame convention: positive is CCW).
         """
+        show_labels = angle == 0
         if angle == 0:
-            # 기존과 동일하게 바로 화면에 그림
-            self._draw_intersection_raw(self.screen, base_x, base_y, name, state)
+            # Draw directly on the main screen
+            self._draw_intersection_raw(self.screen, base_x, base_y, name, state, show_labels=show_labels)
+            anchor_x = base_x + 150
+            anchor_y = base_y - 10
         else:
-            # 임시 Surface 위에 그리고 전체를 회전시켜서 blit
-            # (회전 시 잘리지 않도록 넉넉한 크기로 확보)
+            # Draw on a temporary surface and rotate/blit
+            # (use a generous canvas so rotation does not clip)
             temp_width, temp_height = 400, 400
             temp_surface = pygame.Surface((temp_width, temp_height), pygame.SRCALPHA)
 
-            # temp_surface 내부에서의 교차로 위치 (적당한 마진 포함)
-            # 필요하면 이 값을 조절해서 안쪽 배치를 미세 조정할 수 있음
+            # Internal coordinates within the temporary surface
             local_base_x, local_base_y = 80, 140
-            self._draw_intersection_raw(temp_surface, local_base_x, local_base_y, name, state)
+            self._draw_intersection_raw(temp_surface, local_base_x, local_base_y, name, state, show_labels=False)
 
             rotated = pygame.transform.rotate(temp_surface, angle)
 
-            # 원래 base_x, base_y 기준으로 교차로 중심을 대략 맞춤
-            center_x = base_x + 150  # 대략 교차로 중심 x
-            center_y = base_y + 120  # 대략 교차로 중심 y
+            # Approximate alignment with the requested base point
+            center_x = base_x + 150
+            center_y = base_y + 120
 
             rect = rotated.get_rect(center=(center_x, center_y))
             self.screen.blit(rotated, rect.topleft)
+            anchor_x = rect.centerx
+            anchor_y = rect.top - 10
+
+        label_surface = self.font.render(name, True, self.WHITE)
+        label_rect = label_surface.get_rect(center=(anchor_x, anchor_y))
+        self.screen.blit(label_surface, label_rect)
 
     # ----------------------------------
-    # Phase 계산 (Offset 포함)
+    # Phase computation (per-intersection offset)
     # ----------------------------------
     def get_phase_from_time(self, t):
         t = t % self.total_phase_time
@@ -192,12 +203,12 @@ class TrafficSimulator:
         return self.phase_sequence[-1][0], 0
 
     # ----------------------------------
-    # 메인 루프
+    # Main loop
     # ----------------------------------
     def run(self):
         start_time = time.time()
 
-        # 각 교차로 offset (초)
+        # Intersection offsets (seconds)
         offsets = {
             "A": 20,
             "B": 0,
@@ -216,17 +227,17 @@ class TrafficSimulator:
 
             self.screen.fill((20, 20, 20))
 
-            # 교차로 A (상단 중앙) - 180도 회전
+            # Intersection A (top center) rotated 180 degrees
             phaseA, remainA = self.get_phase_from_time(now + offsets["A"])
-            self.draw_intersection(450, 100, "교차로1", get_light_states(phaseA), angle=180)
+            self.draw_intersection(450, 100, "Intersection 1", get_light_states(phaseA), angle=180)
 
-            # 교차로 B (좌측 아래) - 시계 방향 90도 회전
+            # Intersection B (bottom left) rotated -90 degrees
             phaseB, remainB = self.get_phase_from_time(now + offsets["B"])
-            self.draw_intersection(70, 570, "교차로2", get_light_states(phaseB), angle=-90)
+            self.draw_intersection(70, 570, "Intersection 2", get_light_states(phaseB), angle=-90)
 
-            # 교차로 C (우측 아래) - 반시계 방향 90도 회전
+            # Intersection C (bottom right) rotated +90 degrees
             phaseC, remainC = self.get_phase_from_time(now + offsets["C"])
-            self.draw_intersection(880, 570, "교차로3", get_light_states(phaseC), angle=90)
+            self.draw_intersection(880, 570, "Intersection 3", get_light_states(phaseC), angle=90)
 
             pygame.display.flip()
 
