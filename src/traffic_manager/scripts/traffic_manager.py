@@ -15,25 +15,25 @@ def get_light_states(phase_name):
 
     if phase_name == "P1_MAIN_GREEN":
         state.update({
-            "M_LR_R": False, "M_LR_G": True,
+            "M_LR_R": True, "M_LR_G": False,
             "M_RL_R": False, "M_RL_G": True,
         })
 
     elif phase_name == "P1_YELLOW":
         state.update({
-            "M_LR_R": False, "M_LR_Y": True,
+            "M_LR_R": True, "M_LR_Y": False,
             "M_RL_R": False, "M_RL_Y": True,
         })
 
-    elif phase_name == "P2_MAIN_LEFT":
+    elif phase_name == "P2_MAIN_GREEN":
         state.update({
-            "M_LR_R": True, "M_LR_LEFT": True,
-            "M_RL_R": True,
+            "M_LR_R": False, "M_LR_LEFT": True,
+            "M_RL_R": True, "M_LR_G": True,
         })
 
     elif phase_name == "P2_YELLOW":
         state.update({
-            "M_LR_R": True, "M_LR_Y": True,
+            "M_LR_R": False, "M_LR_Y": True,
             "M_RL_R": True,
         })
 
@@ -73,9 +73,9 @@ class TrafficSimulator:
 
         # 신호 Phase 정의
         self.phase_sequence = [
-            ("P1_MAIN_GREEN", 25),
+            ("P1_MAIN_GREEN", 20),
             ("P1_YELLOW", 3),
-            ("P2_MAIN_LEFT", 10),
+            ("P2_MAIN_GREEN", 20),
             ("P2_YELLOW", 3),
             ("P3_SIDE_GREEN", 15),
             ("P3_YELLOW", 3),
