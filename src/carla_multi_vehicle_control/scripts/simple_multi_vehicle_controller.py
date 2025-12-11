@@ -56,6 +56,12 @@ class SimpleMultiVehicleController:
         self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         self.progress_backtrack_window_m = float(rospy.get_param("~progress_backtrack_window_m", 5.0))
+        self.progress_sequential_window_m = float(rospy.get_param("~progress_sequential_window_m", 35.0))
+        self.progress_heading_limit_deg = float(rospy.get_param("~progress_heading_limit_deg", 150.0))
+        self._progress_heading_limit_rad = max(
+            0.0,
+            min(math.pi, abs(self.progress_heading_limit_deg) * math.pi / 180.0),
+        )
         # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
@@ -177,7 +183,47 @@ class SimpleMultiVehicleController:
         fy = pos.y + math.sin(yaw) * offset
         return fx, fy, yaw
 
-    def _project_progress(self, path, s_profile, px, py, prev_s: float, backtrack_window: float):
+    def _project_progress(
+        self,
+        path,
+        s_profile,
+        px,
+        py,
+        prev_s: float,
+        backtrack_window: float,
+        heading: float = None,
+    ):
+        attempts = []
+        seq_window = max(0.0, getattr(self, "progress_sequential_window_m", 0.0))
+        if seq_window > 1e-3:
+            attempts.append(seq_window)
+        attempts.append(None)  # Fall back to unrestricted search
+        for forward_window in attempts:
+            result = self._project_progress_limited(
+                path,
+                s_profile,
+                px,
+                py,
+                prev_s,
+                backtrack_window,
+                forward_window=forward_window,
+                heading=heading,
+            )
+            if result is not None:
+                return result
+        return None
+
+    def _project_progress_limited(
+        self,
+        path,
+        s_profile,
+        px,
+        py,
+        prev_s: float,
+        backtrack_window: float,
+        forward_window: float = None,
+        heading: float = None,
+    ):
         # 방어: s_profile이 비었거나 길이가 path와 다르면 즉시 재계산
         if len(path) < 2:
             return None
@@ -186,6 +232,9 @@ class SimpleMultiVehicleController:
             if not s_profile or len(s_profile) != len(path):
                 return None
         min_s = max(0.0, float(prev_s) - max(0.0, float(backtrack_window)))
+        max_s = float("inf")
+        if forward_window is not None and math.isfinite(float(forward_window)):
+            max_s = float(prev_s) + max(0.0, float(forward_window))
         best_dist_sq = float("inf")
         best_index = None
         best_t = 0.0
@@ -207,6 +256,13 @@ class SimpleMultiVehicleController:
             cand_s = s_profile[idx] + t * seg_length
             if cand_s < min_s:
                 continue
+            if cand_s > max_s:
+                continue
+            if heading is not None and self._progress_heading_limit_rad < math.pi - 1e-6:
+                seg_heading = math.atan2(dy, dx)
+                diff = abs((seg_heading - heading + math.pi) % (2.0 * math.pi) - math.pi)
+                if diff > self._progress_heading_limit_rad:
+                    continue
             if dist_sq < best_dist_sq:
                 best_dist_sq = dist_sq
                 best_index = idx
@@ -218,6 +274,55 @@ class SimpleMultiVehicleController:
         if best_index < 0 or best_index >= len(path) - 1 or best_index >= len(s_profile):
             return None
         return float(best_s), best_index
+
+    def _project_point_on_path(self, path, px: float, py: float):
+        if len(path) < 2:
+            return None
+        best_dist_sq = float("inf")
+        best_index = None
+        best_t = 0.0
+        best_seg = (0.0, 0.0)
+        for idx in range(len(path) - 1):
+            x1, y1 = path[idx]
+            x2, y2 = path[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+            if seg_len_sq < 1e-6:
+                continue
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_index = idx
+                best_t = t
+                best_seg = (dx, dy)
+        if best_index is None:
+            return None
+        proj_x = path[best_index][0] + best_seg[0] * best_t
+        proj_y = path[best_index][1] + best_seg[1] * best_t
+        return best_index, best_t, proj_x, proj_y, best_seg[0], best_seg[1]
+
+    def _force_snap_progress(self, st, px: float, py: float):
+        path = st.get("path") or []
+        s_profile = st.get("s_profile") or []
+        proj = self._project_point_on_path(path, px, py)
+        if proj is None:
+            return None
+        idx, t, proj_x, proj_y, seg_dx, seg_dy = proj
+        seg_len = math.hypot(seg_dx, seg_dy)
+        if not s_profile or len(s_profile) != len(path):
+            s_profile, _ = self._compute_path_profile(path)
+        if idx >= len(s_profile):
+            return None
+        if seg_len < 1e-6:
+            s_now = s_profile[idx]
+        else:
+            s_now = s_profile[idx] + t * seg_len
+        return s_now, idx
 
     def _select_target(self, st, x, y, lookahead_override: float = None) -> Tuple[float, float]:
         path = st.get("path") or []
@@ -258,11 +363,30 @@ class SimpleMultiVehicleController:
             fy,
             prev_s,
             self.progress_backtrack_window_m,
+            heading=yaw,
         )
         if proj is not None:
             s_now, idx = proj
             st["progress_s"] = s_now
             st["current_index"] = idx
+        else:
+            count = st.setdefault("progress_fail_count", 0) + 1
+            st["progress_fail_count"] = count
+            rospy.logwarn_throttle(
+                2.0,
+                f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
+            )
+            # If we have too many consecutive failures, try to hard-reset onto the path
+            if count >= 3:
+                reset = self._force_snap_progress(st, fx, fy)
+                if reset is not None:
+                    s_now, idx = reset
+                    st["progress_s"] = s_now
+                    st["current_index"] = idx
+                    st["progress_fail_count"] = 0
+                    rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after repeated projection failures")
+        if proj is not None:
+            st["progress_fail_count"] = 0
         # Curvature-adaptive lookahead: reduce Ld on sharp turns, increase on straights
         ld_dynamic = self.lookahead_distance
         try:
@@ -315,6 +439,10 @@ class SimpleMultiVehicleController:
             while rel < -math.pi:
                 rel += 2.0 * math.pi
             if abs(rel) <= angle_th and dist <= dist_th:
+                rospy.logwarn_throttle(
+                    1.0,
+                    f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",
+                )
                 return 0.0
         return speed_cmd
 

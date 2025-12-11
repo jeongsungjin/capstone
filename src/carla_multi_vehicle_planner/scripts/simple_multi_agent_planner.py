@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import heapq
 import math
 import random
 from typing import Dict, List, Optional, Tuple
@@ -52,29 +51,20 @@ class SimpleMultiAgentPlanner:
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
-        # Fallback lane-follow tuning (for when GRP is unavailable)
-        self.lane_follow_step_m = float(rospy.get_param("~lane_follow_step_m", 0.3))      # default denser than 2.0
-        self.lane_follow_length_m = float(rospy.get_param("~lane_follow_length_m", 150.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
         # Replan policy: distance-gated (no fixed-period replanning)
         self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 8.0))
-        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 20.0))
+        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 1.0))
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
-        self.heading_align_max_diff_deg = float(rospy.get_param("~heading_align_max_diff_deg", 60.0))
-        # Start waypoint selection parameters
-        self.start_heading_deg = float(rospy.get_param("~start_heading_deg", 30.0))
-        self.start_search_radius = float(rospy.get_param("~start_search_radius", 5.0))
-        self.start_search_radius_max = float(rospy.get_param("~start_search_radius_max", 15.0))
-        self.start_k_candidates = int(rospy.get_param("~start_k_candidates", 40))
+        # Start waypoint/path stitch parameters
         self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 12.0))
         self.start_offset_m = float(rospy.get_param("~start_offset_m", 3.0))
-        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 8.0))
-        self.heading_compat_deg = float(rospy.get_param("~heading_compat_deg", 60.0))
-        self.heading_compat_dist_m = float(rospy.get_param("~heading_compat_dist_m", 5.0))
-        self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 80.0))
-        self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 180.0))
+        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 30.0))
+        self.max_extend_attempts = int(rospy.get_param("~max_extend_attempts", 3))
+        self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 70.0))
+        self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 100.0))
 
         # CARLA world/map
         host = rospy.get_param("~carla_host", "localhost")
@@ -84,26 +74,18 @@ class SimpleMultiAgentPlanner:
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
         self.carla_map = self.world.get_map()
-        waypoint_resolution = max(0.5, min(2.0, float(self.global_route_resolution)))
-        self._waypoint_cache = [
-            wp
-            for wp in self.carla_map.generate_waypoints(waypoint_resolution)
-            if getattr(wp, "lane_type", carla.LaneType.Driving) == carla.LaneType.Driving
-        ]
 
         # Route planner (prefer CARLA agents; fallback to simple lane-follow)
         self.route_planner = None
-        if GlobalRoutePlanner is not None:
-            try:
-                self.route_planner = GlobalRoutePlanner(self.carla_map, self.global_route_resolution)
-                if hasattr(self.route_planner, "setup"):
-                    self.route_planner.setup()
-                rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
-            except Exception as exc:
-                self.route_planner = None
-                rospy.logwarn(f"GlobalRoutePlanner unavailable, falling back to lane-follow routing: {exc}")
-        else:
-            rospy.logwarn("GlobalRoutePlanner module not found; using lane-follow routing fallback")
+        if GlobalRoutePlanner is None:
+            raise RuntimeError("CARLA GlobalRoutePlanner module unavailable")
+        try:
+            self.route_planner = GlobalRoutePlanner(self.carla_map, self.global_route_resolution)
+            if hasattr(self.route_planner, "setup"):
+                self.route_planner.setup()
+            rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
+        except Exception as exc:
+            raise RuntimeError(f"Failed to initialize GlobalRoutePlanner: {exc}")
 
         self.spawn_points = self.carla_map.get_spawn_points()
         if not self.spawn_points:
@@ -139,20 +121,24 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             current_path = self._active_paths.get(role)
             if not current_path or len(current_path) < 2:
-                self._plan_for_role(vehicle, role, front_loc)
+                if not self._plan_for_role(vehicle, role, front_loc):
+                    rospy.logwarn_throttle(5.0, f"{role}: failed to plan initial path")
                 continue
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is None:
-                self._plan_for_role(vehicle, role, front_loc)
+                if not self._plan_for_role(vehicle, role, front_loc):
+                    rospy.logwarn_throttle(5.0, f"{role}: failed to replan after progress loss")
                 continue
             if remaining <= max(0.0, float(self.replan_soft_distance_m)):
-                self._extend_path(vehicle, role, front_loc)
+                if not self._extend_path(vehicle, role, front_loc):
+                    rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
+                    self._plan_for_role(vehicle, role, front_loc)
 
-    def _extend_path(self, vehicle, role: str, front_loc: carla.Location) -> None:
+    def _extend_path(self, vehicle, role: str, front_loc: carla.Location) -> bool:
         current = self._active_paths.get(role)
         if not current or len(current) < 2:
-            self._plan_for_role(vehicle, role, front_loc)
-            return
+            rospy.logwarn_throttle(5.0, f"{role}: no active path to extend; full replan")
+            return self._plan_for_role(vehicle, role, front_loc)
         s_profile = self._active_path_s.get(role)
         suffix = current
         if s_profile and len(s_profile) == len(current):
@@ -165,11 +151,21 @@ class SimpleMultiAgentPlanner:
                         start_idx = i
                         break
                 suffix = current[start_idx:]
-        prefix_copy = list(suffix)
-        if len(prefix_copy) < 2:
-            self._plan_for_role(vehicle, role, front_loc)
-            return
-        self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix_copy)
+        attempts = 0
+        while attempts < max(1, int(self.max_extend_attempts)):
+            prefix_copy = list(suffix)
+            if len(prefix_copy) < 2:
+                rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
+                return self._plan_for_role(vehicle, role, front_loc)
+            remaining = self._remaining_path_distance(role, front_loc)
+            if remaining is not None:
+                rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
+            if self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix_copy):
+                return True
+            attempts += 1
+            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
+        rospy.logwarn_throttle(5.0, f"{role}: all extension attempts failed; falling back to fresh plan")
+        return self._plan_for_role(vehicle, role, front_loc)
 
     def _get_ego_vehicles(self) -> List[carla.Actor]:
         actors = self.world.get_actors().filter("vehicle.*")
@@ -206,62 +202,10 @@ class SimpleMultiAgentPlanner:
         return None
 
     def _trace_route(self, start: carla.Location, dest: carla.Location):
-        if self.route_planner is not None:
-            try:
-                return self.route_planner.trace_route(start, dest)
-            except Exception as exc:
-                rospy.logwarn(f"trace_route failed: {exc}")
-                return None
-        # Fallback: generate a forward route by lane-follow (parameterized density)
-        return self._lane_follow_route(
-            start,
-            length_m=float(self.lane_follow_length_m),
-            step_m=max(0.05, float(self.lane_follow_step_m)),
-        )
-
-    def _lane_follow_route(self, start: carla.Location, length_m: float = 120.0, step_m: float = 2.0):
         try:
-            wp = self.carla_map.get_waypoint(start, project_to_road=True, lane_type=carla.LaneType.Driving)
-            if wp is None:
-                return None
-            route = []
-            traveled = 0.0
-            current = wp
-            # Seed with start waypoint
-            route.append((current, None))
-            while traveled < max(5.0, float(length_m)):
-                nxt = current.next(float(step_m))
-                if not nxt:
-                    break
-                # Choose the next waypoint that keeps heading smooth and lane consistent
-                chosen = None
-                try:
-                    cur_yaw_deg = float(current.transform.rotation.yaw)
-                    cur_yaw = math.radians(cur_yaw_deg)
-                    cur_road = getattr(current, "road_id", None)
-                    cur_lane = getattr(current, "lane_id", None)
-                    best_score = float("inf")
-                    for cand in nxt:
-                        yaw_deg = float(cand.transform.rotation.yaw)
-                        yaw = math.radians(yaw_deg)
-                        # Smaller yaw change preferred
-                        yaw_diff = abs((yaw - cur_yaw + math.pi) % (2.0 * math.pi) - math.pi)
-                        same_lane = 1 if (getattr(cand, "road_id", None) == cur_road and getattr(cand, "lane_id", None) == cur_lane) else 0
-                        # Score: prioritize same lane, then minimal heading change
-                        score = (0 if same_lane else 1) * 10.0 + yaw_diff
-                        if score < best_score:
-                            best_score = score
-                            chosen = cand
-                except Exception:
-                    chosen = None
-                if chosen is None:
-                    chosen = nxt[0]
-                current = chosen
-                route.append((current, None))
-                traveled += float(step_m)
-            return route if len(route) >= 2 else None
+            return self.route_planner.trace_route(start, dest)
         except Exception as exc:
-            rospy.logwarn(f"lane-follow routing failed: {exc}")
+            rospy.logwarn(f"trace_route failed: {exc}")
             return None
 
     def _route_to_points(self, route) -> List[Tuple[float, float]]:
@@ -284,29 +228,6 @@ class SimpleMultiAgentPlanner:
         if len(points) >= 2:
             return points
         return points
-
-    def _route_heading_compatible(self, route, yaw_rad: float) -> bool:
-        if not route or len(route) < 2:
-            return False
-        thresh = math.radians(max(0.0, min(180.0, float(self.heading_compat_deg))))
-        accum = 0.0
-        prev_wp = None
-        for wp, _ in route:
-            if prev_wp is not None:
-                a = prev_wp.transform.location
-                b = wp.transform.location
-                dx = b.x - a.x
-                dy = b.y - a.y
-                seg = math.hypot(dx, dy)
-                if seg > 1e-3:
-                    heading = math.atan2(dy, dx)
-                    if abs(_normalize_angle(heading - yaw_rad)) > thresh:
-                        return False
-                    accum += seg
-                    if accum >= max(0.5, float(self.heading_compat_dist_m)):
-                        break
-            prev_wp = wp
-        return True
 
     def _ensure_path_starts_at_vehicle(self, path_points: List[Tuple[float, float]], front_xy: Tuple[float, float]):
         if not path_points:
@@ -383,6 +304,7 @@ class SimpleMultiAgentPlanner:
                 best_index = idx
                 best_t = t
         if best_index is None:
+            rospy.logwarn_throttle(2.0, "SimpleMultiAgentPlanner: unable to project progress (disjoint path)")
             return None
         seg_length = math.hypot(points[best_index + 1][0] - points[best_index][0], points[best_index + 1][1] - points[best_index][1])
         if seg_length < 1e-6:
@@ -398,6 +320,7 @@ class SimpleMultiAgentPlanner:
         s_profile = self._active_path_s.get(role) or []
         progress = self._project_progress_on_path(points, s_profile, front_loc.x, front_loc.y)
         if progress is None:
+            rospy.logwarn_throttle(2.0, f"{role}: progress projection failed; forcing replan fallback")
             return None
         path_len = self._active_path_len.get(role, 0.0)
         remaining = path_len - progress
@@ -415,6 +338,23 @@ class SimpleMultiAgentPlanner:
         self._active_paths[role] = points
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
+
+    def _path_heading_variation(self, points: List[Tuple[float, float]]) -> float:
+        if len(points) < 3:
+            return 0.0
+        total = 0.0
+        prev_heading = None
+        for idx in range(1, len(points)):
+            dx = points[idx][0] - points[idx - 1][0]
+            dy = points[idx][1] - points[idx - 1][1]
+            seg_len = math.hypot(dx, dy)
+            if seg_len < 1e-3:
+                continue
+            heading = math.atan2(dy, dx)
+            if prev_heading is not None:
+                total += abs(_normalize_angle(heading - prev_heading))
+            prev_heading = heading
+        return total
 
     def _publish_path(self, points: List[Tuple[float, float]], role: str) -> None:
         if role not in self.path_publishers:
@@ -440,12 +380,12 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             self._plan_for_role(vehicle, role, front_loc)
 
-    def _plan_for_role(self, vehicle, role: str, front_loc: carla.Location, prefix_points: Optional[List[Tuple[float, float]]] = None) -> None:
+    def _plan_for_role(self, vehicle, role: str, front_loc: carla.Location, prefix_points: Optional[List[Tuple[float, float]]] = None) -> bool:
         # Sample (or resample) destination and publish a fresh path
         dest_loc = self._choose_destination(front_loc)
         if dest_loc is None:
             rospy.logwarn_throttle(5.0, f"{role}: destination not found within distance bounds")
-            return
+            return False
         tf = vehicle.get_transform()
         yaw_rad = math.radians(tf.rotation.yaw)
         start_loc = None
@@ -469,8 +409,7 @@ class SimpleMultiAgentPlanner:
         while attempts < max_attempts:
             route = self._trace_route(start_loc, dest_loc)
             if route and len(route) >= 2:
-                if self.route_planner is None or self._route_heading_compatible(route, yaw_rad):
-                    break
+                break
             dest_loc = self._choose_destination(front_loc)
             if dest_loc is None:
                 route = None
@@ -478,7 +417,7 @@ class SimpleMultiAgentPlanner:
             attempts += 1
         if not route or len(route) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: route trace failed")
-            return
+            return False
         new_points = self._route_to_points(route)
         if prefix_points is not None and len(prefix_points) >= 1:
             combined = prefix_points[:-1] + new_points
@@ -488,11 +427,13 @@ class SimpleMultiAgentPlanner:
             points = self._snap_points_to_lane(points)
         if len(points) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
-            return
+            return False
+        rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
         self._publish_path(points, role)
         self._store_active_path(role, points)
         # Remember current destination for distance-gated replanning
         self._current_dest[role] = dest_loc
+        return True
 
 
 if __name__ == "__main__":
