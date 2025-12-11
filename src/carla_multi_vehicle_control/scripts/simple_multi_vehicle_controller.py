@@ -44,22 +44,23 @@ class SimpleMultiVehicleController:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
-        self.ld_min = float(rospy.get_param("~ld_min", 0.5))
-        self.ld_max = float(rospy.get_param("~ld_max", 2.5))
+        self.ld_min = float(rospy.get_param("~ld_min", 1.0))
+        self.ld_max = float(rospy.get_param("~ld_max", 4.0))
         self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
-        self.ld_window_m = float(rospy.get_param("~ld_window_m", 6.0))
+        self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
-        self.max_steer = float(rospy.get_param("~max_steer", 0.6))
+        self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
-        self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.6))
+        self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
         self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
+        self.progress_backtrack_window_m = float(rospy.get_param("~progress_backtrack_window_m", 5.0))
         # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
-        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 60.0))  # +/-deg ahead
         self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 5.0))
 
         # CARLA world
@@ -69,7 +70,6 @@ class SimpleMultiVehicleController:
         self.client = carla.Client(host, port)
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
-        self.map = self.world.get_map() 
 
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
@@ -124,6 +124,22 @@ class SimpleMultiVehicleController:
         st["s_profile"] = s_profile
         st["path_length"] = total_len
         st["progress_s"] = 0.0
+        vehicle = self.vehicles.get(role)
+        front = self._front_point(st, vehicle)
+        if front is not None:
+            fx, fy, _ = front
+            proj = self._project_progress(
+                points,
+                s_profile,
+                fx,
+                fy,
+                0.0,
+                self.progress_backtrack_window_m,
+            )
+            if proj is not None:
+                s_now, idx = proj
+                st["progress_s"] = s_now
+                st["current_index"] = idx
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         st = self.states[role]
@@ -161,7 +177,7 @@ class SimpleMultiVehicleController:
         fy = pos.y + math.sin(yaw) * offset
         return fx, fy, yaw
 
-    def _project_progress(self, path, s_profile, px, py):
+    def _project_progress(self, path, s_profile, px, py, prev_s: float, backtrack_window: float):
         # 방어: s_profile이 비었거나 길이가 path와 다르면 즉시 재계산
         if len(path) < 2:
             return None
@@ -169,9 +185,11 @@ class SimpleMultiVehicleController:
             s_profile, _ = self._compute_path_profile(path)
             if not s_profile or len(s_profile) != len(path):
                 return None
+        min_s = max(0.0, float(prev_s) - max(0.0, float(backtrack_window)))
         best_dist_sq = float("inf")
         best_index = None
         best_t = 0.0
+        best_s = None
         for idx in range(len(path) - 1):
             x1, y1 = path[idx]
             x2, y2 = path[idx + 1]
@@ -185,21 +203,21 @@ class SimpleMultiVehicleController:
             proj_x = x1 + dx * t
             proj_y = y1 + dy * t
             dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+            seg_length = math.sqrt(seg_len_sq)
+            cand_s = s_profile[idx] + t * seg_length
+            if cand_s < min_s:
+                continue
             if dist_sq < best_dist_sq:
                 best_dist_sq = dist_sq
                 best_index = idx
                 best_t = t
+                best_s = cand_s
         if best_index is None:
             return None
         # 추가 방어: 인덱스 경계 확인
         if best_index < 0 or best_index >= len(path) - 1 or best_index >= len(s_profile):
             return None
-        seg_length = math.hypot(path[best_index + 1][0] - path[best_index][0], path[best_index + 1][1] - path[best_index][1])
-        if seg_length < 1e-6:
-            s_now = s_profile[best_index]
-        else:
-            s_now = s_profile[best_index] + best_t * seg_length
-        return s_now, best_index
+        return float(best_s), best_index
 
     def _select_target(self, st, x, y, lookahead_override: float = None) -> Tuple[float, float]:
         path = st.get("path") or []
@@ -232,7 +250,15 @@ class SimpleMultiVehicleController:
         if front is None:
             return None, None
         fx, fy, yaw = front
-        proj = self._project_progress(path, st.get("s_profile") or [], fx, fy)
+        prev_s = float(st.get("progress_s", 0.0))
+        proj = self._project_progress(
+            path,
+            st.get("s_profile") or [],
+            fx,
+            fy,
+            prev_s,
+            self.progress_backtrack_window_m,
+        )
         if proj is not None:
             s_now, idx = proj
             st["progress_s"] = s_now
@@ -276,7 +302,6 @@ class SimpleMultiVehicleController:
             op = ost.get("position")
             if op is None:
                 continue
-
             dx = float(op.x) - fx
             dy = float(op.y) - fy
             dist = math.hypot(dx, dy)
@@ -410,6 +435,3 @@ if __name__ == "__main__":
     except Exception as e:
         rospy.logfatal(f"SimpleMultiVehicleController crashed: {e}")
         raise
-
-
-
