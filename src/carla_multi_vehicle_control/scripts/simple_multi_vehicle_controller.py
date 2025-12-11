@@ -45,7 +45,7 @@ class SimpleMultiVehicleController:
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
         self.ld_min = float(rospy.get_param("~ld_min", 1.0))
-        self.ld_max = float(rospy.get_param("~ld_max", 4.0))
+        self.ld_max = float(rospy.get_param("~ld_max", 3.0))
         self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
         self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
@@ -82,7 +82,7 @@ class SimpleMultiVehicleController:
         self.states: Dict[str, Dict] = {}
         self.control_publishers: Dict[str, rospy.Publisher] = {}
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
-        self._tl_phase: Dict[str, Dict] = {"stamp": rospy.Time(0), "approaches": []}
+        self._tl_phase: Dict[str, Dict] = {}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -510,6 +510,7 @@ class SimpleMultiVehicleController:
 
     def _tl_cb(self, msg: "TrafficLightPhase") -> None:
         # Cache approaches for quick gating
+        iid = msg.intersection_id or "default"
         try:
             approaches = []
             for ap in msg.approaches:
@@ -520,23 +521,23 @@ class SimpleMultiVehicleController:
                     "ymin": float(ap.ymin), "ymax": float(ap.ymax),
                     "sx": float(ap.stopline_x), "sy": float(ap.stopline_y),
                 })
-            self._tl_phase = {"stamp": msg.header.stamp, "approaches": approaches}
+            self._tl_phase[iid] = {"stamp": msg.header.stamp, "approaches": approaches}
         except Exception:
-            self._tl_phase = {"stamp": rospy.Time.now(), "approaches": []}
+            self._tl_phase[iid] = {"stamp": rospy.Time.now(), "approaches": []}
 
     def _apply_tl_gating(self, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
-        data = self._tl_phase
-        approaches = data.get("approaches", [])
-        if not approaches:
+        if not self._tl_phase:
             return speed_cmd
-        for ap in approaches:
-            if fx >= ap["xmin"] and fx <= ap["xmax"] and fy >= ap["ymin"] and fy <= ap["ymax"]:
-                color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
-                # Region-based hard stop
-                if color == 0:
-                    return 0.0
-                if color == 1 and self.tl_yellow_policy.lower() != "permissive":
-                    return 0.0
+        for data in self._tl_phase.values():
+            approaches = data.get("approaches", [])
+            for ap in approaches:
+                if fx >= ap["xmin"] and fx <= ap["xmax"] and fy >= ap["ymin"] and fy <= ap["ymax"]:
+                    color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
+                    # Region-based hard stop
+                    if color == 0:
+                        return 0.0
+                    if color == 1 and self.tl_yellow_policy.lower() != "permissive":
+                        return 0.0
         return speed_cmd
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()

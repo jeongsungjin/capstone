@@ -18,13 +18,25 @@ def get_light_states(phase_name: str) -> Dict[str, bool]:
         "S_R": True, "S_Y": False, "S_G": False,
     }
     if phase_name == "P1_MAIN_GREEN":
-        keys.update({"M_LR_R": False, "M_LR_G": True, "M_RL_R": False, "M_RL_G": True})
+        keys.update({
+            "M_LR_R": True, "M_LR_G": False,
+            "M_RL_R": False, "M_RL_G": True,
+        })
     elif phase_name == "P1_YELLOW":
-        keys.update({"M_LR_R": False, "M_LR_Y": True, "M_RL_R": False, "M_RL_Y": True})
-    elif phase_name == "P2_MAIN_LEFT":
-        keys.update({"M_LR_R": True, "M_LR_LEFT": True, "M_RL_R": True})
+        keys.update({
+            "M_LR_R": True, "M_LR_Y": False,
+            "M_RL_R": False, "M_RL_Y": True,
+        })
+    elif phase_name == "P2_MAIN_GREEN":
+        keys.update({
+            "M_LR_R": False, "M_LR_LEFT": True,
+            "M_RL_R": True, "M_LR_G": True,
+        })
     elif phase_name == "P2_YELLOW":
-        keys.update({"M_LR_R": True, "M_LR_Y": True, "M_RL_R": True})
+        keys.update({
+            "M_LR_R": False, "M_LR_Y": True,
+            "M_RL_R": True,
+        })
     elif phase_name == "P3_SIDE_GREEN":
         keys.update({"S_R": False, "S_G": True})
     elif phase_name == "P3_YELLOW":
@@ -63,9 +75,9 @@ class SignalsPhasePublisher:
 
         # 내부 사이클(옵션): 외부 입력 없으면 내부 순환
         self.sequence = [
-            ("P1_MAIN_GREEN", float(rospy.get_param("~p1_green_s", 25.0))),
+            ("P1_MAIN_GREEN", float(rospy.get_param("~p1_green_s", 20.0))),
             ("P1_YELLOW", float(rospy.get_param("~p1_yellow_s", 3.0))),
-            ("P2_MAIN_LEFT", float(rospy.get_param("~p2_left_s", 10.0))),
+            ("P2_MAIN_GREEN", float(rospy.get_param("~p2_green_s", 20.0))),
             ("P2_YELLOW", float(rospy.get_param("~p2_yellow_s", 3.0))),
             ("P3_SIDE_GREEN", float(rospy.get_param("~p3_green_s", 15.0))),
             ("P3_YELLOW", float(rospy.get_param("~p3_yellow_s", 3.0))),
