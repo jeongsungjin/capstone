@@ -26,6 +26,7 @@ catkin_package()
 catkin_install_python(PROGRAMS
   scripts/simple_multi_vehicle_controller.py
   scripts/simple_udp_ackermann_sender.py
+  scripts/reverse_parking_controller.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 

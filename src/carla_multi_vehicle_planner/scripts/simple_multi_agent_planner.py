@@ -8,6 +8,11 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
 
+try:
+    from capstone_msgs.msg import Uplink  # type: ignore
+except Exception:
+    Uplink = None  # type: ignore
+
 # Ensure CARLA Python API and Agents are on sys.path (side-effect import)
 try:
     import setup_carla_path  # noqa: F401
@@ -65,6 +70,14 @@ class SimpleMultiAgentPlanner:
         self.max_extend_attempts = int(rospy.get_param("~max_extend_attempts", 3))
         self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 70.0))
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 100.0))
+        # Low-voltage handling (forced destination / parking)
+        self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
+        self.low_voltage_dest_x = float(rospy.get_param("~low_voltage_dest_x", -23.0))
+        self.low_voltage_dest_y = float(rospy.get_param("~low_voltage_dest_y", -6.0))
+        self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -23.0))
+        self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
+        self.parking_trigger_distance_m = float(rospy.get_param("~parking_trigger_distance_m", 3.0))
+        self.low_voltage_lock_once = bool(rospy.get_param("~low_voltage_lock_once", True))
 
         # CARLA world/map
         host = rospy.get_param("~carla_host", "localhost")
@@ -97,12 +110,26 @@ class SimpleMultiAgentPlanner:
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+        # Parking target publishers (for reverse parking node)
+        self.parking_target_pubs: Dict[str, rospy.Publisher] = {}
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            topic = f"/parking_target_{role}"
+            self.parking_target_pubs[role] = rospy.Publisher(topic, PoseStamped, queue_size=1, latch=True)
 
         # Destination memory per role (for distance-gated replanning)
         self._current_dest: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
         self._active_paths: Dict[str, List[Tuple[float, float]]] = {}
         self._active_path_s: Dict[str, List[float]] = {}
         self._active_path_len: Dict[str, float] = {}
+        self._voltage: Dict[int, float] = {}
+        self._low_voltage_active: Dict[str, bool] = {self._role_name(i): False for i in range(self.num_vehicles)}
+        self._low_voltage_locked: Dict[str, bool] = {self._role_name(i): False for i in range(self.num_vehicles)}
+        self._parking_published: Dict[str, bool] = {self._role_name(i): False for i in range(self.num_vehicles)}
+
+        # Uplink subscriber
+        if Uplink is not None:
+            rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
 
         rospy.sleep(0.5)
         self._plan_once()
@@ -119,26 +146,56 @@ class SimpleMultiAgentPlanner:
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             front_loc = self._vehicle_front(vehicle)
+            dest_override = None
+            if self._is_low_voltage(role):
+                dest_override = carla.Location(x=float(self.low_voltage_dest_x), y=float(self.low_voltage_dest_y), z=front_loc.z)
+            # If low-voltage path already locked, skip further replans; just monitor arrival
+            if self._low_voltage_locked.get(role, False):
+                remaining = self._remaining_path_distance(role, front_loc)
+                if remaining is None:
+                    # recover once with forced dest
+                    self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override)
+                else:
+                    if remaining <= max(0.0, float(self.parking_trigger_distance_m)) and not self._parking_published.get(role, False):
+                        self._publish_parking_target(role, front_loc)
+                        self._parking_published[role] = True
+                continue
+            # Low-voltage active but not locked: plan once and lock, skip extensions
+            if self._is_low_voltage(role) and self.low_voltage_lock_once:
+                if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
+                    rospy.logwarn_throttle(5.0, f"{role}: low-voltage plan failed")
+                else:
+                    self._low_voltage_locked[role] = True
+                continue
             current_path = self._active_paths.get(role)
             if not current_path or len(current_path) < 2:
-                if not self._plan_for_role(vehicle, role, front_loc):
+                if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
                     rospy.logwarn_throttle(5.0, f"{role}: failed to plan initial path")
+                elif dest_override is not None:
+                    self._low_voltage_locked[role] = True
                 continue
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is None:
-                if not self._plan_for_role(vehicle, role, front_loc):
+                if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
                     rospy.logwarn_throttle(5.0, f"{role}: failed to replan after progress loss")
+                elif dest_override is not None:
+                    self._low_voltage_locked[role] = True
                 continue
             if remaining <= max(0.0, float(self.replan_soft_distance_m)):
-                if not self._extend_path(vehicle, role, front_loc):
+                if not self._extend_path(vehicle, role, front_loc, dest_override=dest_override):
                     rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
-                    self._plan_for_role(vehicle, role, front_loc)
+                    if self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
+                        if dest_override is not None:
+                            self._low_voltage_locked[role] = True
+                else:
+                    if dest_override is not None:
+                        self._low_voltage_locked[role] = True
 
-    def _extend_path(self, vehicle, role: str, front_loc: carla.Location) -> bool:
+    def _extend_path(self, vehicle, role: str, front_loc: carla.Location, dest_override: Optional[carla.Location] = None) -> bool:
         current = self._active_paths.get(role)
         if not current or len(current) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: no active path to extend; full replan")
-            return self._plan_for_role(vehicle, role, front_loc)
+            return self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override)
         s_profile = self._active_path_s.get(role)
         suffix = current
         if s_profile and len(s_profile) == len(current):
@@ -160,7 +217,10 @@ class SimpleMultiAgentPlanner:
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is not None:
                 rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
-            if self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix_copy):
+            dest_override = None
+            if self._is_low_voltage(role):
+                dest_override = carla.Location(x=float(self.low_voltage_dest_x), y=float(self.low_voltage_dest_y), z=front_loc.z)
+            if self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix_copy, dest_override=dest_override):
                 return True
             attempts += 1
             rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
@@ -176,6 +236,23 @@ class SimpleMultiAgentPlanner:
                 vehicles.append(actor)
         vehicles.sort(key=lambda v: v.attributes.get("role_name", ""))
         return vehicles
+
+    def _uplink_cb(self, msg: "Uplink") -> None:
+        try:
+            self._voltage[int(msg.vehicle_id)] = float(msg.voltage)
+            role = self._role_name(max(0, int(msg.vehicle_id) - 1))
+            if msg.voltage <= float(self.low_voltage_threshold):
+                self._low_voltage_active[role] = True
+        except Exception:
+            pass
+
+    def _is_low_voltage(self, role: str) -> bool:
+        try:
+            vid = int(role.split("_")[-1])
+            v = self._voltage.get(vid, float("inf"))
+            return v <= float(self.low_voltage_threshold)
+        except Exception:
+            return False
 
     def _vehicle_front(self, vehicle: carla.Actor) -> carla.Location:
         tf = vehicle.get_transform()
@@ -380,9 +457,9 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             self._plan_for_role(vehicle, role, front_loc)
 
-    def _plan_for_role(self, vehicle, role: str, front_loc: carla.Location, prefix_points: Optional[List[Tuple[float, float]]] = None) -> bool:
+    def _plan_for_role(self, vehicle, role: str, front_loc: carla.Location, prefix_points: Optional[List[Tuple[float, float]]] = None, dest_override: Optional[carla.Location] = None) -> bool:
         # Sample (or resample) destination and publish a fresh path
-        dest_loc = self._choose_destination(front_loc)
+        dest_loc = dest_override if dest_override is not None else self._choose_destination(front_loc)
         if dest_loc is None:
             rospy.logwarn_throttle(5.0, f"{role}: destination not found within distance bounds")
             return False
@@ -434,6 +511,19 @@ class SimpleMultiAgentPlanner:
         # Remember current destination for distance-gated replanning
         self._current_dest[role] = dest_loc
         return True
+
+    def _publish_parking_target(self, role: str, front_loc: carla.Location) -> None:
+        try:
+            ps = PoseStamped()
+            ps.header = Header(frame_id="map", stamp=rospy.Time.now())
+            ps.pose.position.x = float(self.parking_dest_x)
+            ps.pose.position.y = float(self.parking_dest_y)
+            ps.pose.position.z = front_loc.z
+            pub = self.parking_target_pubs.get(role)
+            if pub is not None:
+                pub.publish(ps)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
