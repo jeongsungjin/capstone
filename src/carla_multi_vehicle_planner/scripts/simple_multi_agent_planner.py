@@ -31,14 +31,6 @@ except Exception:
     GlobalRoutePlanner = None  # type: ignore
 
 
-def _normalize_angle(angle: float) -> float:
-    while angle > math.pi:
-        angle -= 2.0 * math.pi
-    while angle < -math.pi:
-        angle += 2.0 * math.pi
-    return angle
-
-
 class SimpleMultiAgentPlanner:
     """
     최소 기능 다중 차량 글로벌 플래너.
@@ -57,8 +49,6 @@ class SimpleMultiAgentPlanner:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
-        # Replan policy: distance-gated (no fixed-period replanning)
-        self.replan_gate_distance_m = float(rospy.get_param("~replan_gate_distance_m", 8.0))
         self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 1.0))
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
@@ -432,23 +422,6 @@ class SimpleMultiAgentPlanner:
         self._active_paths[role] = points
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
-
-    def _path_heading_variation(self, points: List[Tuple[float, float]]) -> float:
-        if len(points) < 3:
-            return 0.0
-        total = 0.0
-        prev_heading = None
-        for idx in range(1, len(points)):
-            dx = points[idx][0] - points[idx - 1][0]
-            dy = points[idx][1] - points[idx - 1][1]
-            seg_len = math.hypot(dx, dy)
-            if seg_len < 1e-3:
-                continue
-            heading = math.atan2(dy, dx)
-            if prev_heading is not None:
-                total += abs(_normalize_angle(heading - prev_heading))
-            prev_heading = heading
-        return total
 
     def _publish_path(self, points: List[Tuple[float, float]], role: str) -> None:
         if role not in self.path_publishers:
