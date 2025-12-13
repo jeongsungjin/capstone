@@ -10,7 +10,7 @@
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="vehicle_model" value="vehicle.vehicle.jetracer" />
+    <param name="vehicle_model" value="vehicle.vehicle.jetracer_red" />
   </node>
 
   <!-- 2) Planner (simple) -->
@@ -19,6 +19,13 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="min_destination_distance" value="15.0" />
     <param name="max_destination_distance" value="200.0" />
+    <!-- Low-voltage direct parking parameters -->
+    <param name="low_voltage_threshold" value="5.0" />
+    <param name="low_voltage_dest_x" value="-12.5" />
+    <param name="low_voltage_dest_y" value="-16.5" />
+    <param name="parking_dest_x" value="-23.0" />
+    <param name="parking_dest_y" value="-16.5" />
+    <param name="parking_trigger_distance_m" value="3.0" />
   </node>
 
   <!-- 2.5) Occupancy grid -->
@@ -46,6 +53,13 @@
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
     <param name="target_speed" value="6.0" />
+    <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
+    <param name="low_voltage_threshold" value="5.0" />
+    <param name="parking_dest_x" value="-25.0" />
+    <param name="parking_dest_y" value="-16.5" />
+    <param name="parking_speed" value="3.0" />
+    <param name="parking_speed_radius" value="8.0" />
+    <param name="parking_stop_radius" value="0.5" />
   </node>
 
   <!-- RViz -->

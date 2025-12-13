@@ -56,9 +56,13 @@ class SimpleMultiVehicleController:
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
         self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
-        # Low-voltage speed gating
+        # Low-voltage speed gating + parking slowdown
         self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
-        self.parking_engage_radius = float(rospy.get_param("~parking_engage_radius", 12.0))
+        self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -23.0))
+        self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
+        self.parking_speed = float(rospy.get_param("~parking_speed", 3.0))
+        self.parking_speed_radius = float(rospy.get_param("~parking_speed_radius", 5.0))
+        self.parking_stop_radius = float(rospy.get_param("~parking_stop_radius", 0.5))
         self.progress_backtrack_window_m = float(rospy.get_param("~progress_backtrack_window_m", 5.0))
         self.progress_sequential_window_m = float(rospy.get_param("~progress_sequential_window_m", 35.0))
         self.progress_heading_limit_deg = float(rospy.get_param("~progress_heading_limit_deg", 150.0))
@@ -88,10 +92,6 @@ class SimpleMultiVehicleController:
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
-        self._parking_target: Dict[str, Tuple[float, float]] = {}
-        self._parked: Dict[str, bool] = {}
-        self._parking_engaged: Dict[str, bool] = {}
-        self._voltage: Dict[int, float] = {}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -116,10 +116,6 @@ class SimpleMultiVehicleController:
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
-        rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
-        for index in range(self.num_vehicles):
-            role = self._role_name(index)
-            rospy.Subscriber(f"/parking_target_{role}", PoseStamped, self._parking_target_cb, callback_args=role, queue_size=1)
         rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
 
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
@@ -364,7 +360,7 @@ class SimpleMultiVehicleController:
         pos = st.get("position")
         ori = st.get("orientation")
         if not path or len(path) < 2 or pos is None or ori is None or vehicle is None:
-            return None, None
+            return 0.0, 0.0
         front = self._front_point(st, vehicle)
         if front is None:
             return None, None
@@ -408,23 +404,6 @@ class SimpleMultiVehicleController:
         except Exception:
             ld_dynamic = self.lookahead_distance
         tx, ty = self._select_target(st, fx, fy, lookahead_override=ld_dynamic)
-        # Parking handover: if parking target 존재 + 저전압, 접근 시 정지하고 주차 완료 후 계속 정지
-        pt = self._parking_target.get(role)
-        if pt is not None and self._is_low_voltage(role):
-            # 주차 접근 판단은 차량 중심 좌표 기준
-            pos = st.get("position")
-            if pos is not None:
-                dist_pt = math.hypot(pt[0] - float(pos.x), pt[1] - float(pos.y))
-                rospy.loginfo_throttle(
-                    1.0,
-                    f"{role}: parking check dist={dist_pt:.2f}m target=({pt[0]:.2f},{pt[1]:.2f}) engaged={self._parking_engaged.get(role, False)} parked={self._parked.get(role, False)}",
-                )
-                if self._parked.get(role, False):
-                    return 0.0, 0.0
-                if dist_pt <= max(0.1, float(self.parking_engage_radius)):
-                    self._parked[role] = True
-                    self._parking_engaged[role] = True  # handover to reverse node
-                    return 0.0, 0.0
         dx = tx - fx
         dy = ty - fy
         alpha = math.atan2(dy, dx) - yaw
@@ -443,6 +422,8 @@ class SimpleMultiVehicleController:
         speed = self._apply_tl_gating(vehicle, fx, fy, speed)
         # Apply forward collision gating (vehicles in front cone within distance)
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
+        # Apply parking slowdown when low-voltage path ends at parking dest
+        speed = self._apply_parking_speed_limit(role, st, speed)
         return steer, speed
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
@@ -570,16 +551,6 @@ class SimpleMultiVehicleController:
         except Exception:
             return False
 
-    def _parking_target_cb(self, msg: PoseStamped, role: str) -> None:
-        try:
-            self._parking_target[role] = (float(msg.pose.position.x), float(msg.pose.position.y))
-            # 새 타깃 수신 시 주차 완료 플래그 리셋
-            self._parked[role] = False
-            self._parking_engaged[role] = False
-            rospy.loginfo(f"{role}: parking target updated to ({msg.pose.position.x:.2f}, {msg.pose.position.y:.2f})")
-        except Exception:
-            pass
-
     def _apply_tl_gating(self, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
         if not self._tl_phase:
             return speed_cmd
@@ -594,6 +565,41 @@ class SimpleMultiVehicleController:
                     if color == 1 and self.tl_yellow_policy.lower() != "permissive":
                         return 0.0
         return speed_cmd
+
+    def _apply_parking_speed_limit(self, role: str, st, speed_cmd: float) -> float:
+        if not self._is_low_voltage(role):
+            return speed_cmd
+        # Distance to parking destination (vehicle position preferred)
+        pos = st.get("position")
+        if pos is not None:
+            dist = math.hypot(float(pos.x) - float(self.parking_dest_x), float(pos.y) - float(self.parking_dest_y))
+        else:
+            path = st.get("path") or []
+            if len(path) < 2:
+                return speed_cmd
+            px, py = path[-1]
+            dist = math.hypot(px - float(self.parking_dest_x), py - float(self.parking_dest_y))
+        # Distance to end of current path (arc-length)
+        dist_end = self._distance_to_path_end(st)
+        stop_r = max(0.0, float(self.parking_stop_radius))
+        slow_r = max(stop_r, float(self.parking_speed_radius))
+        if (dist_end is not None and dist_end <= stop_r) or dist <= stop_r:
+            return 0.0
+        if (dist_end is not None and dist_end <= slow_r) or dist <= slow_r:
+            return min(speed_cmd, float(self.parking_speed))
+        return speed_cmd
+
+    def _distance_to_path_end(self, st) -> float:
+        path = st.get("path") or []
+        s_profile = st.get("s_profile") or []
+        if len(path) < 2 or not s_profile or len(s_profile) != len(path):
+            return None
+        path_len = float(st.get("path_length", 0.0))
+        prog = float(st.get("progress_s", 0.0))
+        rem = path_len - prog
+        if rem < 0.0:
+            rem = 0.0
+        return rem
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
         msg.steering_angle = float(steer)
@@ -604,10 +610,6 @@ class SimpleMultiVehicleController:
         for role, st in self.states.items():
             vehicle = self.vehicles.get(role)
             if vehicle is None:
-                continue
-            if self._parking_engaged.get(role, False):
-                rospy.loginfo_throttle(2.0, f"{role}: parking engaged; skip main control")
-                # handover to reverse node; do not override its control
                 continue
             steer, speed = self._compute_control(st, vehicle, role)
             if steer is None:

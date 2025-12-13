@@ -72,8 +72,8 @@ class MultiVehicleSpawner:
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 5)
         # 단일 블루프린트로 모든 차량을 스폰하려면 vehicle_model에 설정하세요.
-        # 기본값은 경량 시연용 jetracer.
-        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.jetracer")
+        # 색상추가 jetracer_red, jetracer_yellow, jetracer_green, jetracer_black, jetracer_white
+        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.jetracer_red")
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
         self.randomize_spawn = bool(rospy.get_param("~randomize_spawn", False))
