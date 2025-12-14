@@ -45,7 +45,7 @@ class SimpleMultiVehicleController:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
-        self.ld_min = float(rospy.get_param("~ld_min", 1.0))
+        self.ld_min = float(rospy.get_param("~ld_min", 0.5))
         self.ld_max = float(rospy.get_param("~ld_max", 3.0))
         self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
         self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
@@ -74,8 +74,8 @@ class SimpleMultiVehicleController:
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
-        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 60.0))  # +/-deg ahead
-        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 5.0))
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
+        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 7.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")
@@ -141,14 +141,14 @@ class SimpleMultiVehicleController:
         st["path_length"] = total_len
         st["progress_s"] = 0.0
         vehicle = self.vehicles.get(role)
-        front = self._front_point(st, vehicle)
-        if front is not None:
-            fx, fy, _ = front
+        rear = self._rear_point(st, vehicle)
+        if rear is not None:
+            rx, ry, _ = rear
             proj = self._project_progress(
                 points,
                 s_profile,
-                fx,
-                fy,
+                rx,
+                ry,
                 0.0,
                 self.progress_backtrack_window_m,
             )
@@ -178,20 +178,26 @@ class SimpleMultiVehicleController:
             cumulative.append(total)
         return cumulative, total
 
-    def _front_point(self, st, vehicle):
+    def _rear_point(self, st, vehicle):
+        """
+        Pure pursuit은 보통 rear-axle를 기준점으로 사용한다.
+        CARLA odom은 차량 중심 기준이므로, bbox 절반 길이나 wheelbase/2를 뒤로 보정해 rear를 추정한다.
+        """
         pos = st.get("position")
         ori = st.get("orientation")
         if pos is None or ori is None:
             return None
         yaw = quaternion_to_yaw(ori)
-        offset = 2.0
+        # rear axle 위치: 차량 전체 길이의 7/8 지점(= center에서 뒤로 0.75 * length/2 = 0.75*extent.x)
+        back_offset = max(0.0, self.wheelbase * 0.5)
         if vehicle is not None:
             bb = getattr(vehicle, "bounding_box", None)
             if bb is not None and getattr(bb, "extent", None) is not None:
-                offset = bb.extent.x + 0.3
-        fx = pos.x + math.cos(yaw) * offset
-        fy = pos.y + math.sin(yaw) * offset
-        return fx, fy, yaw
+                length_half = float(bb.extent.x)
+                back_offset = max(back_offset, 0.75 * length_half)
+        rx = pos.x - math.cos(yaw) * back_offset
+        ry = pos.y - math.sin(yaw) * back_offset
+        return rx, ry, yaw
 
     def _project_progress(
         self,
@@ -334,25 +340,40 @@ class SimpleMultiVehicleController:
             s_now = s_profile[idx] + t * seg_len
         return s_now, idx
 
+    def _sample_path_at_s(self, path, s_profile, s_target: float):
+        """Arc-length 보간으로 정확한 목표점을 얻는다."""
+        if len(path) < 2 or not s_profile or len(s_profile) != len(path):
+            return None
+        if s_target <= s_profile[0]:
+            return path[0][0], path[0][1], 0, 0.0
+        if s_target >= s_profile[-1]:
+            return path[-1][0], path[-1][1], len(path) - 1, 0.0
+        # 찾기
+        for i in range(len(s_profile) - 1):
+            if s_profile[i + 1] >= s_target:
+                ds = max(1e-6, s_profile[i + 1] - s_profile[i])
+                t = (s_target - s_profile[i]) / ds
+                x1, y1 = path[i]
+                x2, y2 = path[i + 1]
+                tx = x1 + (x2 - x1) * t
+                ty = y1 + (y2 - y1) * t
+                return tx, ty, i, t
+        return None
+
     def _select_target(self, st, x, y, lookahead_override: float = None) -> Tuple[float, float]:
         path = st.get("path") or []
         s_profile = st.get("s_profile") or []
         if len(path) < 2:
             return x, y
-        # arc-length target selection
+        # arc-length target selection with interpolation
         s_now = float(st.get("progress_s", 0.0))
         ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
         s_target = s_now + max(0.05, ld)
-        target_idx = None
-        for i, s in enumerate(s_profile):
-            if s >= s_target:
-                target_idx = i
-                break
-        if target_idx is None:
-            target_idx = len(path) - 1
-        target_idx = max(0, min(target_idx, len(path) - 1))
-        st["current_index"] = target_idx
-        tx, ty = path[target_idx]
+        sample = self._sample_path_at_s(path, s_profile, s_target)
+        if sample is None:
+            return x, y
+        tx, ty, idx, _t = sample
+        st["current_index"] = idx
         return tx, ty
 
     def _compute_control(self, st, vehicle, role: str):
@@ -361,10 +382,10 @@ class SimpleMultiVehicleController:
         ori = st.get("orientation")
         if not path or len(path) < 2 or pos is None or ori is None or vehicle is None:
             return 0.0, 0.0
-        front = self._front_point(st, vehicle)
-        if front is None:
+        ref = self._rear_point(st, vehicle)
+        if ref is None:
             return None, None
-        fx, fy, yaw = front
+        fx, fy, yaw = ref
         prev_s = float(st.get("progress_s", 0.0))
         proj = self._project_progress(
             path,

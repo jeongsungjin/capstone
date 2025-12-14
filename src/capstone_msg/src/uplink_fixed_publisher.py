@@ -2,23 +2,7 @@
 import math
 
 import rospy
-from sensor_msgs.msg import Imu
 from capstone_msgs.msg import Uplink
-
-
-def make_dummy_imu() -> Imu:
-    msg = Imu()
-    msg.header.stamp = rospy.Time.now()
-    msg.header.frame_id = "imu"
-    # Arbitrary small values for testing
-    msg.orientation.w = 1.0
-    msg.angular_velocity.x = 0.01
-    msg.angular_velocity.y = -0.01
-    msg.angular_velocity.z = 0.02
-    msg.linear_acceleration.x = 0.1
-    msg.linear_acceleration.y = 0.0
-    msg.linear_acceleration.z = -9.7
-    return msg
 
 
 def main():
@@ -32,7 +16,6 @@ def main():
         msg = Uplink()
         msg.vehicle_id = vehicle_id
         msg.voltage = voltage
-        msg.imu = make_dummy_imu()
         pub.publish(msg)
         rate.sleep()
 
