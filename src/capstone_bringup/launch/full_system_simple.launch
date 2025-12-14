@@ -18,9 +18,9 @@
   </include>
 
   <!-- RC UDP senders (simple) -->
-  <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
+  <!-- <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-  </include>
+  </include> -->
 </launch>
 
 

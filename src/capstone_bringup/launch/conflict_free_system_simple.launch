@@ -14,18 +14,31 @@
   </node>
 
   <!-- 2) Planner (simple) -->
-  <node pkg="carla_multi_vehicle_planner" type="simple_multi_agent_planner.py" name="conflict_free_planner" output="screen">
+  <!-- <node pkg="carla_multi_vehicle_planner" type="simple_multi_agent_planner.py" name="conflict_free_planner" output="screen">
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="min_destination_distance" value="15.0" />
-    <param name="max_destination_distance" value="200.0" />
+    <param name="max_destination_distance" value="200.0" /> -->
     <!-- Low-voltage direct parking parameters -->
-    <param name="low_voltage_threshold" value="5.0" />
+    <!-- <param name="low_voltage_threshold" value="5.0" />
     <param name="low_voltage_dest_x" value="-12.5" />
     <param name="low_voltage_dest_y" value="-16.5" />
     <param name="parking_dest_x" value="-23.0" />
     <param name="parking_dest_y" value="-16.5" />
     <param name="parking_trigger_distance_m" value="3.0" />
+  </node> -->
+
+  <node pkg="carla_multi_vehicle_planner" type="psipp_multi_agent_planner.py" name="conflict_free_planner" output="screen">
+    <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="waypoint_spacing" value="0.1" />
+    <param name="vehicle_radius" value="5.0" />
+    <param name="goal_reached_threshold" value="5.0" />
+    <param name="replan_interval" value="2.0" />
+    <param name="min_destination_distance" value="15.0" />
+    <param name="max_destination_distance" value="200.0" />
+    <param name="roadmap_file" value="$(find carla_multi_vehicle_planner)/config/roadmap.json" />
+    <param name="target_speed" value="6.0" />
   </node>
 
   <!-- 2.5) Occupancy grid -->
@@ -41,19 +54,20 @@
   <node pkg="capstone_visualization" type="bev_visualizer.py" name="bev_visualizer" output="screen" />
 
   <!-- 3.6) Manual goal tools -->
-  <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
+  <!-- <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
     <param name="default_vehicle" value="ego_vehicle_1" />
   </node>
   <node unless="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_click_teleporter.py" name="rviz_click_teleporter" output="screen">
   </node>
-  <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
+  <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" /> -->
 
   <!-- 4) Controller -->
+  <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
+  
   <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
     <param name="target_speed" value="6.0" />
-    <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
     <param name="low_voltage_threshold" value="5.0" />
     <param name="parking_dest_x" value="-25.0" />
     <param name="parking_dest_y" value="-16.5" />
