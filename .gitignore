@@ -47,5 +47,4 @@ src/perception/engine/
 
 .catkin_tools/
 dataset/
-src/perception/scripts/
 src/perception/logging/
