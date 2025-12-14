@@ -1,0 +1,26 @@
+<launch>
+  <!-- Arguments -->
+  <arg name="signals_yaml" default="$(find traffic_manager)/config/traffic_signals.yaml" />
+  <arg name="publish_hz" default="10.0" />
+  <arg name="ui_width" default="1200" />
+  <arg name="ui_height" default="800" />
+  <arg name="num_vehicles" default="5" />
+
+  <!-- Traffic light phase publisher (YAML-driven) -->
+  <node pkg="traffic_manager" type="signals_phase_publisher.py" name="signals_phase_publisher" output="screen">
+    <param name="signals_yaml" value="$(arg signals_yaml)"/>
+    <param name="publish_hz" value="$(arg publish_hz)"/>
+    <!-- Optional: enable external phase topic
+    <param name="use_external_phase" value="false"/>
+    <param name="external_phase_topic" value="/tm/phase_name"/>
+    -->
+  </node>
+
+  <!-- Traffic light monitor UI (per-intersection list + vehicles in approach) -->
+  <node pkg="traffic_manager" type="tl_monitor_ui.py" name="tl_monitor_ui" output="screen">
+    <param name="width" value="$(arg ui_width)"/>
+    <param name="height" value="$(arg ui_height)"/>
+    <param name="num_vehicles" value="$(arg num_vehicles)"/>
+  </node>
+</launch>
+

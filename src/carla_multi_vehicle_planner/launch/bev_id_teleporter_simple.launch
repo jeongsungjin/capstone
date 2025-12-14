@@ -1,28 +1,24 @@
 <launch>
+  <arg name="num_vehicles" default="3" />
+  <arg name="max_vehicle_count" default="$(arg num_vehicles)" />
   <arg name="topic" default="/bev_info" />
-  <arg name="max_vehicle_count" default="5" />
-  <arg name="role_names" default="" />
-  <arg name="yaw_in_degrees" default="false" />
+  <arg name="carla_host" default="localhost" />
+  <arg name="carla_port" default="2000" />
   <arg name="snap_to_waypoint_height" default="true" />
   <arg name="default_z" default="0.5" />
   <arg name="z_offset" default="0.0" />
-  <arg name="carla_host" default="localhost" />
-  <arg name="carla_port" default="2000" />
 
   <node pkg="carla_multi_vehicle_planner"
         type="simple_bev_teleporter.py"
         name="bev_id_teleporter"
         output="screen">
-    <param name="topic" value="/bev_info" />
+    <param name="topic" value="$(arg topic)" />
     <param name="max_vehicle_count" value="$(arg max_vehicle_count)" />
-    <param name="role_names" value="$(arg role_names)" />
-    <param name="yaw_in_degrees" value="$(arg yaw_in_degrees)" />
+    <param name="carla_host" value="$(arg carla_host)" />
+    <param name="carla_port" value="$(arg carla_port)" />
     <param name="snap_to_waypoint_height" value="$(arg snap_to_waypoint_height)" />
     <param name="default_z" value="$(arg default_z)" />
     <param name="z_offset" value="$(arg z_offset)" />
-    <param name="carla_host" value="$(arg carla_host)" />
-    <param name="carla_port" value="$(arg carla_port)" />
   </node>
 </launch>
-
 

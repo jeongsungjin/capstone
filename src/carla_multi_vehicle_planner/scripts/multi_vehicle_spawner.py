@@ -72,8 +72,8 @@ class MultiVehicleSpawner:
 
         self.num_vehicles = rospy.get_param("~num_vehicles", 5)
         # 단일 블루프린트로 모든 차량을 스폰하려면 vehicle_model에 설정하세요.
-        # 기본값은 경량 시연용 jetracer.
-        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.jetracer")
+        # 색상추가 jetracer_red, jetracer_yellow, jetracer_green, jetracer_black, jetracer_white
+        self.vehicle_model = rospy.get_param("~vehicle_model", "vehicle.vehicle.jetracer_red")
         self.enable_autopilot = rospy.get_param("~enable_autopilot", False)
         self.spawn_delay = rospy.get_param("~spawn_delay", 0.5)
         self.randomize_spawn = bool(rospy.get_param("~randomize_spawn", False))
@@ -159,10 +159,21 @@ class MultiVehicleSpawner:
             models = [m.strip() for m in self.vehicle_models_param.split(",") if m.strip()]
             if models:
                 return models
-        # 2) 단일 모델이 지정되면 차량 수만큼 반복하여 사용
+        # 2) 기본 색상 세트가 정의되어 있으면 순서대로 할당 (red/yellow/green/black/white)
+        default_colors = [
+            "vehicle.vehicle.jetracer_red",
+            "vehicle.vehicle.jetracer_yellow",
+            "vehicle.vehicle.jetracer_green",
+            "vehicle.vehicle.jetracer_black",
+            "vehicle.vehicle.jetracer_white",
+        ]
+        num = int(self.num_vehicles)
+        if default_colors:
+            return [default_colors[i % len(default_colors)] for i in range(num)]
+        # 3) 단일 모델이 지정되면 차량 수만큼 반복하여 사용
         model = str(self.vehicle_model).strip()
         if model:
-            return [model for _ in range(int(self.num_vehicles))]
+            return [model for _ in range(num)]
 
 
     def _iter_candidate_transforms(self, seed_hint: Optional[float]):

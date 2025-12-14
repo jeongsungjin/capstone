@@ -1,41 +1,40 @@
 <launch>
   <arg name="num_vehicles" default="3" />
-  <arg name="bind_ip" default="0.0.0.0" />
+  <arg name="send_hz" default="30.0" />
+  <arg name="drop_stale_sec" default="0.3" />
+  <arg name="send_zero_on_missing" default="false" />
+  <!-- Optional per-vehicle IPs (1~6). Default localhost. -->
+  <arg name="vehicle_1_ip" default="127.0.0.1" />
+  <arg name="vehicle_2_ip" default="127.0.0.1" />
+  <arg name="vehicle_3_ip" default="127.0.0.1" />
+  <arg name="vehicle_4_ip" default="127.0.0.1" />
+  <arg name="vehicle_5_ip" default="127.0.0.1" />
+  <arg name="vehicle_6_ip" default="127.0.0.1" />
 
-  <!-- Per-vehicle network args -->
-  <arg name="vehicle_1_ip" default="10.10.103.105" />
-  <arg name="vehicle_2_ip" default="10.10.103.107" />
-  <arg name="vehicle_3_ip" default="10.10.103.115" />
-  <arg name="vehicle_4_ip" default="10.10.103.113" />
-  <arg name="vehicle_5_ip" default="10.10.103.112" />
-  <arg name="vehicle_6_ip" default="10.10.103.106" />
-
-  <node pkg="carla_multi_vehicle_control" type="simple_udp_ackermann_sender.py" name="udp_ackermann_sender" output="screen">
-    <param name="bind_ip" value="$(arg bind_ip)" />
+  <node pkg="carla_multi_vehicle_control"
+        type="simple_udp_ackermann_sender.py"
+        name="udp_ackermann_sender"
+        output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-
-    <!-- Per-vehicle topics -->
-    <param name="vehicles/ego_vehicle_1/topic" value="/carla/ego_vehicle_1/vehicle_control_cmd" />
-    <param name="vehicles/ego_vehicle_2/topic" value="/carla/ego_vehicle_2/vehicle_control_cmd" />
-    <param name="vehicles/ego_vehicle_3/topic" value="/carla/ego_vehicle_3/vehicle_control_cmd" />
-    <param name="vehicles/ego_vehicle_4/topic" value="/carla/ego_vehicle_4/vehicle_control_cmd" />
-    <param name="vehicles/ego_vehicle_5/topic" value="/carla/ego_vehicle_5/vehicle_control_cmd" />
-    <param name="vehicles/ego_vehicle_6/topic" value="/carla/ego_vehicle_6/vehicle_control_cmd" />
-
-    <!-- Network destinations -->
-    <param name="vehicles/ego_vehicle_1/dest_ip" value="$(arg vehicle_1_ip)" />
-    <param name="vehicles/ego_vehicle_1/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_2/dest_ip" value="$(arg vehicle_2_ip)" />
-    <param name="vehicles/ego_vehicle_2/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_3/dest_ip" value="$(arg vehicle_3_ip)" />
-    <param name="vehicles/ego_vehicle_3/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_4/dest_ip" value="$(arg vehicle_4_ip)" />
-    <param name="vehicles/ego_vehicle_4/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_5/dest_ip" value="$(arg vehicle_5_ip)" />
-    <param name="vehicles/ego_vehicle_5/dest_port" value="5555" />
-    <param name="vehicles/ego_vehicle_6/dest_ip" value="$(arg vehicle_6_ip)" />
-    <param name="vehicles/ego_vehicle_6/dest_port" value="5555" />
+    <param name="send_hz" value="$(arg send_hz)" />
+    <param name="drop_stale_sec" value="$(arg drop_stale_sec)" />
+    <param name="send_zero_on_missing" value="$(arg send_zero_on_missing)" />
+    <!-- Map per-vehicle destination IPs -->
+    <rosparam subst_value="true">
+      vehicles:
+        ego_vehicle_1:
+          dest_ip: $(arg vehicle_1_ip)
+        ego_vehicle_2:
+          dest_ip: $(arg vehicle_2_ip)
+        ego_vehicle_3:
+          dest_ip: $(arg vehicle_3_ip)
+        ego_vehicle_4:
+          dest_ip: $(arg vehicle_4_ip)
+        ego_vehicle_5:
+          dest_ip: $(arg vehicle_5_ip)
+        ego_vehicle_6:
+          dest_ip: $(arg vehicle_6_ip)
+    </rosparam>
   </node>
 </launch>
-
 

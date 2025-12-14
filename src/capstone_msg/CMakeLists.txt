@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
   message_generation
   message_runtime
   roscpp
+  sensor_msgs
   std_msgs
 )
 
@@ -18,11 +19,13 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   BEVInfo.msg
+  Uplink.msg
 )
 
 generate_messages(
   DEPENDENCIES
-  std_msgs # Or other packages containing msgs
+  sensor_msgs
+  std_msgs
 )
 
 ###################################
@@ -37,11 +40,17 @@ generate_messages(
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES capstone_msgs
-  CATKIN_DEPENDS message_runtime roscpp std_msgs
+  CATKIN_DEPENDS message_runtime roscpp sensor_msgs std_msgs
 #  DEPENDS system_lib
 )
 
 include_directories(
 # include
   ${catkin_INCLUDE_DIRS}
+)
+
+catkin_install_python(
+  PROGRAMS
+    src/uplink_fixed_publisher.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
