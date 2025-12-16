@@ -86,7 +86,17 @@ class PSIPPMultiAgentPlanner:
         self._active_plans: Dict[str, List[int]] = {}          # 현재 경로 (vertex path)
         self._goal_positions: Dict[str, Tuple[float, float]] = {}  # 목표 좌표
         
+        # Timing tracking (for logging planned vs actual arrival times)
+        self._program_start_time: Optional[rospy.Time] = None  # 프로그램 시작 시간
+        self._expected_times: Dict[str, Dict[int, float]] = {}  # role -> {vertex_id -> expected_time}
+        self._last_logged_vertex: Dict[str, int] = {}  # 마지막으로 로깅한 vertex (중복 방지)
+        self._plan_start_times: Dict[str, float] = {}  # role -> plan 시작 시 상대 시간
+        
         rospy.sleep(0.5)
+        
+        # Record program start time for relative timing
+        self._program_start_time = rospy.Time.now()
+        rospy.loginfo("[timing] Program start time recorded for relative timing")
         
         # Initial planning
         self._plan_all_vehicles()
@@ -301,7 +311,9 @@ class PSIPPMultiAgentPlanner:
         elapsed_ms = (time.time() - start_time) * 1000
         rospy.loginfo(f"PSIPP planning completed in {elapsed_ms:.1f}ms")
         
-        # Publish paths
+        # Publish paths and store timing info
+        plan_base_time = self._get_relative_time()  # 현재 상대 시간 (계획 시작점)
+        
         for plan, (vehicle, role, start_v, goal_v) in zip(plans, vehicle_info):
             if plan.success:
                 # PSIPP vertex path -> GlobalRoutePlanner 보간 경로
@@ -310,6 +322,9 @@ class PSIPPMultiAgentPlanner:
                 self._active_plans[role] = plan.vertex_path
                 self._current_dest[role] = goal_v
                 self._goal_positions[role] = self.vertices[goal_v]  # 목표 좌표 저장
+                
+                # Store expected times from PSIPP plan
+                self._store_expected_times(role, plan, plan_base_time)
                 
                 total_dist = sum(
                     math.hypot(
@@ -321,6 +336,9 @@ class PSIPPMultiAgentPlanner:
                 # PSIPP 시간 → 실제 시간 (target_speed 적용)
                 actual_arrival_time = total_dist / self.target_speed
                 rospy.loginfo(f"{role}: SUCCESS - {len(plan.vertex_path)} waypoints, {total_dist:.1f}m, ETA {actual_arrival_time:.1f}s (@{self.target_speed}m/s)")
+                
+                # Log planned wait points (where PSIPP expects waiting)
+                self._log_wait_points(role, plan, plan_base_time)
             else:
                 rospy.logwarn(f"{role}: FAILED to find collision-free path")
         
@@ -389,13 +407,69 @@ class PSIPPMultiAgentPlanner:
                 size=0.3, color=color, life_time=self.replan_interval + 1.0
             )
     
+    def _get_relative_time(self) -> float:
+        """프로그램 시작 이후 상대 시간 (초) 반환"""
+        if self._program_start_time is None:
+            return 0.0
+        return (rospy.Time.now() - self._program_start_time).to_sec()
+    
+    def _store_expected_times(self, role: str, plan, plan_base_time: float) -> None:
+        """PSIPP plan의 moves에서 각 vertex 도착 예상 시간 저장"""
+        self._expected_times[role] = {}
+        self._plan_start_times[role] = plan_base_time
+        self._last_logged_vertex[role] = -1
+        
+        # 시작 vertex
+        if plan.vertex_path:
+            self._expected_times[role][plan.vertex_path[0]] = plan_base_time
+        
+        # moves에서 각 target_vertex의 end_time 저장
+        for move in plan.moves:
+            # end_time은 PSIPP 내부 시간 (plan 시작 기준)
+            # plan_base_time을 더해 절대 상대 시간으로 변환
+            expected_arrival = plan_base_time + move.end_time
+            self._expected_times[role][move.target_vertex] = expected_arrival
+        
+        rospy.logdebug(f"[timing] {role}: Stored expected times for {len(self._expected_times[role])} vertices")
+    
+    def _log_wait_points(self, role: str, plan, plan_base_time: float) -> None:
+        """PSIPP가 대기를 계획한 지점 로깅 (start_time > 이전 end_time인 경우)"""
+        prev_end_time = 0.0
+        for move in plan.moves:
+            wait_duration = move.start_time - prev_end_time
+            if wait_duration > 0.1:  # 0.1초 이상 대기인 경우만 로깅
+                vertex_coords = self.vertices[move.target_vertex]
+                rospy.loginfo(
+                    f"[timing][wait] {role}: WAIT {wait_duration:.2f}s before vertex {move.target_vertex} "
+                    f"({vertex_coords[0]:.1f}, {vertex_coords[1]:.1f}) at t={plan_base_time + move.start_time:.2f}s"
+                )
+            prev_end_time = move.end_time
+    
+    def _log_vertex_timing(self, role: str, vertex_id: int, actual_time: float) -> None:
+        """특정 vertex 도착 시 예상 시간과 실제 시간 비교 로깅"""
+        expected_times = self._expected_times.get(role, {})
+        if vertex_id not in expected_times:
+            return
+        
+        expected_time = expected_times[vertex_id]
+        diff = actual_time - expected_time
+        vertex_coords = self.vertices[vertex_id]
+        
+        # Log with clear formatting
+        sign = "+" if diff >= 0 else ""
+        rospy.loginfo(
+            f"[timing] {role} | vertex={vertex_id} ({vertex_coords[0]:.1f}, {vertex_coords[1]:.1f}) | "
+            f"expected={expected_time:.2f}s, actual={actual_time:.2f}s, diff={sign}{diff:.2f}s"
+        )
+    
     def _check_goal_reached_cb(self, event):
-        """주기적으로 각 차량의 목표 도달 여부 체크"""
+        """주기적으로 각 차량의 목표 도달 여부 체크 + 웨이포인트 통과 로깅"""
         vehicles = self._get_ego_vehicles()
         if not vehicles:
             return
         
         vehicles_to_replan = []
+        current_time = self._get_relative_time()
         
         for i, vehicle in enumerate(vehicles[:self.num_vehicles]):
             role = self._role_name(i)
@@ -409,6 +483,17 @@ class PSIPPMultiAgentPlanner:
             # 차량 현재 위치
             front_x, front_y = self._vehicle_front(vehicle)
             
+            # 현재 경로에서 가장 가까운 vertex 찾기 (timing logging용)
+            active_plan = self._active_plans.get(role, [])
+            if active_plan:
+                closest_vid = self._find_closest_vertex_in_path(front_x, front_y, active_plan)
+                last_logged = self._last_logged_vertex.get(role, -1)
+                
+                # 새로운 vertex에 도달한 경우에만 로깅
+                if closest_vid != last_logged and closest_vid in self._expected_times.get(role, {}):
+                    self._log_vertex_timing(role, closest_vid, current_time)
+                    self._last_logged_vertex[role] = closest_vid
+            
             # 목표 위치
             goal_x, goal_y = self.vertices[goal_vid]
             
@@ -416,12 +501,26 @@ class PSIPPMultiAgentPlanner:
             dist_to_goal = math.hypot(front_x - goal_x, front_y - goal_y)
             
             if dist_to_goal <= self.goal_reached_threshold:
+                # 최종 목표 도달 시에도 timing 로깅
+                self._log_vertex_timing(role, goal_vid, current_time)
                 rospy.loginfo(f"{role}: Goal reached! (dist={dist_to_goal:.1f}m <= threshold={self.goal_reached_threshold}m)")
                 vehicles_to_replan.append((i, vehicle, role))
         
         # 도달한 차량들 재계획
         if vehicles_to_replan:
             self._replan_vehicles(vehicles_to_replan)
+    
+    def _find_closest_vertex_in_path(self, x: float, y: float, path: List[int]) -> int:
+        """경로 내에서 가장 가까운 vertex 찾기"""
+        min_dist = float('inf')
+        closest_vid = path[0] if path else -1
+        for vid in path:
+            vx, vy = self.vertices[vid]
+            dist = math.hypot(x - vx, y - vy)
+            if dist < min_dist:
+                min_dist = dist
+                closest_vid = vid
+        return closest_vid
     
     def _replan_vehicles(self, vehicles_to_replan: List[Tuple[int, any, str]]):
         """특정 차량들만 재계획 (다른 차량 경로 고려)"""
@@ -457,33 +556,9 @@ class PSIPPMultiAgentPlanner:
             if plans and plans[0].success:
                 plan = plans[0]
                 
-                # 이전 경로의 남은 부분 찾기
-                remaining_path = []
-                old_plan = self._active_plans.get(role, [])
-                if old_plan:
-                    # 현재 위치와 가장 가까운 인덱스 찾기
-                    min_dist = float('inf')
-                    closest_idx = 0
-                    for i, vid in enumerate(old_plan):
-                        vx, vy = self.vertices[vid]
-                        dist = math.hypot(front_x - vx, front_y - vy)
-                        if dist < min_dist:
-                            min_dist = dist
-                            closest_idx = i
-                    
-                    # 현재 위치부터 끝까지가 남은 경로
-                    remaining_path = old_plan[closest_idx:]
-                
-                # 새 경로 앞에 남은 경로 추가 (중복 vertex 제거)
-                if remaining_path:
-                    # 남은 경로의 마지막과 새 경로의 첫번째가 같으면 하나 제거
-                    if remaining_path[-1] == plan.vertex_path[0]:
-                        combined_vertex_path = remaining_path + plan.vertex_path[1:]
-                    else:
-                        combined_vertex_path = remaining_path + plan.vertex_path
-                    rospy.loginfo(f"{role}: Prepending {len(remaining_path)} remaining waypoints to new path")
-                else:
-                    combined_vertex_path = plan.vertex_path
+                # 새 경로만 사용 (PSIPP가 이미 현재 위치에서 새 목표까지 계획함)
+                # 이전에 remaining_path를 prepend하던 로직은 폐루프를 만들어 제거함
+                combined_vertex_path = plan.vertex_path
                 
                 # 경로 발행
                 path_points = self._interpolate_path(combined_vertex_path)
@@ -491,6 +566,11 @@ class PSIPPMultiAgentPlanner:
                 self._active_plans[role] = combined_vertex_path
                 self._current_dest[role] = goal_vertex
                 self._goal_positions[role] = self.vertices[goal_vertex]
+                
+                # Store expected times for timing logging
+                plan_base_time = self._get_relative_time()
+                self._store_expected_times(role, plan, plan_base_time)
+                self._log_wait_points(role, plan, plan_base_time)
                 
                 total_dist = sum(
                     math.hypot(
