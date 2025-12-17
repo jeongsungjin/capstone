@@ -9,6 +9,12 @@ from typing import List
 import rospy
 from capstone_msgs.msg import BEVInfo
 
+# capstone_msgs BEVInfo message에 차량 별 속도 필드 추가
+# inference_receiver.py 에 속도 필드 추가 반영
+# /bev_info_raw 토픽에 속도 정보 포함하여 발행
+# control 패키지에서 BEVInfo 메시지 구독하여 pid 속도 제어기 구현
+# simple_bev_teleporter에서 불연속 적인 투영에서도 pid제어기가 잘 동작할지?? (확인 필요)
+
 
 class InferenceReceiverNode:
     """Receives global_tracks inference over UDP and publishes BEVInfo."""
@@ -28,9 +34,6 @@ class InferenceReceiverNode:
             self.udp_ports = [self.udp_port]
 
         self.input_yaw_degrees = bool(rospy.get_param("~input_yaw_degrees", True))
-        self.x_offset_m = float(rospy.get_param("~x_offset_m", 0.0))
-        self.y_offset_m = float(rospy.get_param("~y_offset_m", 0.0))
-        self.yaw_add_deg = float(rospy.get_param("~yaw_add_deg", 0.0))
         self.max_items = int(rospy.get_param("~max_items", 64))
         self.topic = str(rospy.get_param("~topic", "/bev_info_raw"))
         self.frame_id = str(rospy.get_param("~frame_id", "map"))
@@ -90,9 +93,9 @@ class InferenceReceiverNode:
             center = it.get("center", [0.0, 0.0, 0.0])
             if not isinstance(center, (list, tuple)) or len(center) < 2:
                 continue
-            x = float(center[0]) + self.x_offset_m
-            y = float(center[1]) + self.y_offset_m
-            yaw_val = float(it.get("yaw", 0.0)) + self.yaw_add_deg
+            x = float(center[0]) 
+            y = float(center[1]) 
+            yaw_val = float(it.get("yaw", 0.0))
             yaw_rad = math.radians(yaw_val) if self.input_yaw_degrees else yaw_val
 
             color_val = it.get("color")
