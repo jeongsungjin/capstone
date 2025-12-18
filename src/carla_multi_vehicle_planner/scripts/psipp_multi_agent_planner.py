@@ -14,6 +14,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
+from capstone_msgs.msg import WaitPoint, TimingPlan
 
 import psipp
 
@@ -76,10 +77,18 @@ class PSIPPMultiAgentPlanner:
         
         # Publishers
         self.path_publishers: Dict[str, rospy.Publisher] = {}
+        self.wait_point_publishers: Dict[str, rospy.Publisher] = {}
+        self.timing_publishers: Dict[str, rospy.Publisher] = {}
         for i in range(self.num_vehicles):
             role = self._role_name(i)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+            # WaitPoint publisher for each vehicle
+            wait_topic = f"/wait_point_{role}"
+            self.wait_point_publishers[role] = rospy.Publisher(wait_topic, WaitPoint, queue_size=1, latch=True)
+            # TimingPlan publisher for each vehicle
+            timing_topic = f"/timing_plan_{role}"
+            self.timing_publishers[role] = rospy.Publisher(timing_topic, TimingPlan, queue_size=1, latch=True)
         
         # State
         self._current_dest: Dict[str, Optional[int]] = {}      # 현재 목표 vertex_id
@@ -312,7 +321,7 @@ class PSIPPMultiAgentPlanner:
         rospy.loginfo(f"PSIPP planning completed in {elapsed_ms:.1f}ms")
         
         # Publish paths and store timing info
-        plan_base_time = self._get_relative_time()  # 현재 상대 시간 (계획 시작점)
+        plan_base_time = rospy.Time.now().to_sec()  # 절대 시간 (Epoch) 기준
         
         for plan, (vehicle, role, start_v, goal_v) in zip(plans, vehicle_info):
             if plan.success:
@@ -431,19 +440,75 @@ class PSIPPMultiAgentPlanner:
             self._expected_times[role][move.target_vertex] = expected_arrival
         
         rospy.logdebug(f"[timing] {role}: Stored expected times for {len(self._expected_times[role])} vertices")
+        
+        # Publish TimingPlan for Controller
+        self._publish_timing_plan(role, plan, plan_base_time)
+    
+    def _publish_timing_plan(self, role: str, plan, plan_base_time: float) -> None:
+        """Controller에게 시간표 발행 - 각 vertex의 예상 도착 시간"""
+        if role not in self.timing_publishers:
+            return
+        
+        # vertex_times: plan.vertex_path의 각 vertex에 대응하는 예상 도착 시간
+        vertex_times = []
+        
+        # 첫 vertex는 plan_base_time
+        if plan.vertex_path:
+            vertex_times.append(plan_base_time)
+        
+        # 나머지는 moves의 end_time
+        for move in plan.moves:
+            vertex_times.append(plan_base_time + move.end_time)
+        
+        # Publish
+        msg = TimingPlan()
+        msg.plan_start_time = plan_base_time
+        msg.vertex_times = vertex_times
+        self.timing_publishers[role].publish(msg)
+        
+        rospy.logdebug(f"[timing] {role}: Published TimingPlan with {len(vertex_times)} vertex times")
     
     def _log_wait_points(self, role: str, plan, plan_base_time: float) -> None:
-        """PSIPP가 대기를 계획한 지점 로깅 (start_time > 이전 end_time인 경우)"""
+        """PSIPP가 대기를 계획한 지점 로깅 및 WaitPoint 발행 (start_time > 이전 end_time인 경우)"""
         prev_end_time = 0.0
-        for move in plan.moves:
+        prev_vertex = plan.vertex_path[0] if plan.vertex_path else None
+        
+        # Debug: log moves info
+        if plan.moves:
+            rospy.loginfo(f"[wait-debug] {role}: {len(plan.moves)} moves in plan")
+        else:
+            rospy.logwarn(f"[wait-debug] {role}: NO MOVES in plan!")
+        
+        for i, move in enumerate(plan.moves):
             wait_duration = move.start_time - prev_end_time
-            if wait_duration > 0.1:  # 0.1초 이상 대기인 경우만 로깅
-                vertex_coords = self.vertices[move.target_vertex]
-                rospy.loginfo(
-                    f"[timing][wait] {role}: WAIT {wait_duration:.2f}s before vertex {move.target_vertex} "
-                    f"({vertex_coords[0]:.1f}, {vertex_coords[1]:.1f}) at t={plan_base_time + move.start_time:.2f}s"
-                )
+            
+            # Debug: log each move's timing
+            rospy.loginfo(
+                f"[wait-debug] {role} move[{i}]: start={move.start_time:.2f}, end={move.end_time:.2f}, "
+                f"prev_end={prev_end_time:.2f}, wait_duration={wait_duration:.2f}"
+            )
+            
+            if wait_duration > 0.1:  # 0.1초 이상 대기인 경우
+                # 대기는 이동 전에 해야 하므로 이전 vertex (또는 시작점)의 좌표 사용
+                if prev_vertex is not None:
+                    wait_coords = self.vertices[prev_vertex]
+                    wait_until = plan_base_time + move.start_time
+                    
+                    rospy.loginfo(
+                        f"[timing][wait] {role}: WAIT {wait_duration:.2f}s at vertex {prev_vertex} "
+                        f"({wait_coords[0]:.1f}, {wait_coords[1]:.1f}) until t={wait_until:.2f}s"
+                    )
+                    
+                    # Publish WaitPoint
+                    if role in self.wait_point_publishers:
+                        wp = WaitPoint()
+                        wp.x = wait_coords[0]
+                        wp.y = wait_coords[1]
+                        wp.wait_until = wait_until
+                        self.wait_point_publishers[role].publish(wp)
+            
             prev_end_time = move.end_time
+            prev_vertex = move.target_vertex
     
     def _log_vertex_timing(self, role: str, vertex_id: int, actual_time: float) -> None:
         """특정 vertex 도착 시 예상 시간과 실제 시간 비교 로깅"""

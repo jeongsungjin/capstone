@@ -32,7 +32,7 @@
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="waypoint_spacing" value="0.1" />
-    <param name="vehicle_radius" value="2.0" />
+    <param name="vehicle_radius" value="1.0" />
     <param name="goal_reached_threshold" value="5.0" />
     <param name="replan_interval" value="2.0" />
     <param name="min_destination_distance" value="15.0" />
@@ -71,7 +71,11 @@
     <!-- Collision stop gating (거리/방향 기반 정지 로직 on/off) -->
     <param name="collision_stop_enable" value="false" />
     <param name="collision_stop_angle_deg" value="40.0" />
-    <param name="collision_stop_distance_m" value="7.0" />
+    <param name="collision_stop_distance_m" value="4.5" />
+    <!-- Progress tracking (회전교차로 shortcut 방지) -->
+    <param name="progress_sequential_window_m" value="10.0" />
+    <param name="progress_backtrack_window_m" value="2.0" />
+    <param name="progress_heading_limit_deg" value="90.0" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
     <param name="low_voltage_threshold" value="5.0" />
     <param name="parking_dest_x" value="-25.0" />

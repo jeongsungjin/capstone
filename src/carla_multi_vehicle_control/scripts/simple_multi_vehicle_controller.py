@@ -8,7 +8,7 @@ from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
 from std_msgs.msg import Header
-from capstone_msgs.msg import Uplink  # type: ignore
+from capstone_msgs.msg import Uplink, WaitPoint, TimingPlan  # type: ignore
 
 try:
     from carla_multi_vehicle_control.msg import TrafficLightPhase, TrafficApproach  # type: ignore
@@ -92,6 +92,7 @@ class SimpleMultiVehicleController:
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
+        self._program_start_time = rospy.Time.now()  # For relative time calculation
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -103,6 +104,8 @@ class SimpleMultiVehicleController:
                 "s_profile": [],
                 "progress_s": 0.0,
                 "path_length": 0.0,
+                "wait_point": None,  # WaitPoint message (x, y, wait_until)
+                "timing_plan": None,  # TimingPlan (plan_start_time, vertex_times[])
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
@@ -110,6 +113,12 @@ class SimpleMultiVehicleController:
             pose_topic = f"/{role}/pose"
             rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
+            # WaitPoint subscription
+            wait_topic = f"/wait_point_{role}"
+            rospy.Subscriber(wait_topic, WaitPoint, self._wait_point_cb, callback_args=role, queue_size=1)
+            # TimingPlan subscription for time-based speed control
+            timing_topic = f"/timing_plan_{role}"
+            rospy.Subscriber(timing_topic, TimingPlan, self._timing_plan_cb, callback_args=role, queue_size=1)
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
 
@@ -167,6 +176,23 @@ class SimpleMultiVehicleController:
         pose_msg.pose = msg.pose.pose
         self.pose_publishers[role].publish(pose_msg)
 
+    def _wait_point_cb(self, msg: WaitPoint, role: str) -> None:
+        """Store wait point for this vehicle"""
+        self.states[role]["wait_point"] = {
+            "x": msg.x,
+            "y": msg.y,
+            "wait_until": msg.wait_until,
+        }
+        rospy.loginfo(f"{role}: Received wait point at ({msg.x:.1f}, {msg.y:.1f}) until t={msg.wait_until:.2f}s")
+
+    def _timing_plan_cb(self, msg: TimingPlan, role: str) -> None:
+        """Store timing plan for time-based speed control"""
+        self.states[role]["timing_plan"] = {
+            "plan_start_time": msg.plan_start_time,
+            "vertex_times": list(msg.vertex_times),
+        }
+        rospy.logdebug(f"{role}: Received timing plan with {len(msg.vertex_times)} vertex times")
+
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
             return [], 0.0
@@ -209,25 +235,35 @@ class SimpleMultiVehicleController:
         backtrack_window: float,
         heading: float = None,
     ):
-        attempts = []
-        seq_window = max(0.0, getattr(self, "progress_sequential_window_m", 0.0))
-        if seq_window > 1e-3:
-            attempts.append(seq_window)
-        attempts.append(None)  # Fall back to unrestricted search
-        for forward_window in attempts:
-            result = self._project_progress_limited(
-                path,
-                s_profile,
-                px,
-                py,
-                prev_s,
-                backtrack_window,
-                forward_window=forward_window,
-                heading=heading,
-            )
-            if result is not None:
-                return result
-        return None
+        # LD-based tracking: use same window for forward and backward (±LD)
+        # This prevents roundabout shortcuts while allowing recovery if vehicle slides
+        forward_window = backtrack_window  # symmetric window
+        
+        # First try with LD window
+        result = self._project_progress_limited(
+            path,
+            s_profile,
+            px,
+            py,
+            prev_s,
+            backtrack_window,
+            forward_window=forward_window,
+            heading=heading,
+        )
+        if result is not None:
+            return result
+        
+        # Fallback: unrestricted search (for path reset scenarios)
+        return self._project_progress_limited(
+            path,
+            s_profile,
+            px,
+            py,
+            prev_s,
+            backtrack_window,
+            forward_window=None,
+            heading=heading,
+        )
 
     def _project_progress_limited(
         self,
@@ -387,13 +423,16 @@ class SimpleMultiVehicleController:
             return None, None
         fx, fy, yaw = ref
         prev_s = float(st.get("progress_s", 0.0))
+        # Use lookahead_distance as progress search window (LD-based tracking)
+        # This prevents roundabout shortcuts while allowing recovery if vehicle slides
+        ld = float(self.lookahead_distance)
         proj = self._project_progress(
             path,
             st.get("s_profile") or [],
             fx,
             fy,
             prev_s,
-            self.progress_backtrack_window_m,
+            backtrack_window=ld,  # 후방 LD만큼 허용 (밀림 대응)
             heading=yaw,
         )
         if proj is not None:
@@ -443,6 +482,10 @@ class SimpleMultiVehicleController:
         speed = self._apply_tl_gating(vehicle, fx, fy, speed)
         # Apply forward collision gating (vehicles in front cone within distance)
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
+        # Apply PSIPP wait point gating (stop at planned wait points)
+        speed = self._apply_wait_gating(role, fx, fy, speed)
+        # Apply PSIPP timing control (slow down to match expected arrival times)
+        speed = self._apply_timing_control(role, st, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
         speed = self._apply_parking_speed_limit(role, st, speed)
         return steer, speed
@@ -477,6 +520,122 @@ class SimpleMultiVehicleController:
                     f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",
                 )
                 return 0.0
+        return speed_cmd
+
+    def _get_relative_time(self) -> float:
+        """Return time since program start in seconds"""
+        return (rospy.Time.now() - self._program_start_time).to_sec()
+
+    def _apply_wait_gating(self, role: str, fx: float, fy: float, speed_cmd: float) -> float:
+        """
+        Wait Point 대기 적용: 차량이 wait_point 근처에 있고 아직 wait_until 시간이 안 됐으면 정지
+        """
+        st = self.states.get(role, {})
+        wait_point = st.get("wait_point")
+        if wait_point is None:
+            return speed_cmd
+        
+        # Check distance to wait point
+        dist_to_wait = math.hypot(fx - wait_point["x"], fy - wait_point["y"])
+        wait_radius = 8.0  # 8m 반경 내에서 대기 체크
+        
+        if dist_to_wait > wait_radius:
+            return speed_cmd
+        
+        # Check time
+        current_time = rospy.Time.now().to_sec()
+        wait_until = wait_point["wait_until"]
+        
+        if current_time < wait_until:
+            remaining = wait_until - current_time
+            rospy.loginfo_throttle(
+                1.0,
+                f"[wait] {role}: WAITING at ({wait_point['x']:.1f}, {wait_point['y']:.1f}) "
+                f"for {remaining:.1f}s more (until t={wait_until:.1f}s)"
+            )
+            return 0.0
+        else:
+            # Wait time passed, clear wait point
+            st["wait_point"] = None
+            rospy.loginfo(f"[wait] {role}: Wait completed, resuming at t={current_time:.1f}s")
+        
+        return speed_cmd
+
+    def _apply_timing_control(self, role: str, st: dict, speed_cmd: float) -> float:
+        """
+        Time-Based Speed Control: PSIPP 시간표에 맞춰 속도 조절
+        
+        - 예상 도착 시간보다 일찍 도착할 것 같으면 감속
+        - 예상 도착 시간에 맞춰 속도 조절
+        """
+        timing_plan = st.get("timing_plan")
+        if timing_plan is None:
+            return speed_cmd
+        
+        try:
+            vertex_times = timing_plan.get("vertex_times", [])
+            if len(vertex_times) < 2:
+                return speed_cmd
+            
+            # Get current progress along path
+            path_length = st.get("path_length", 0.0)
+            progress_s = st.get("progress_s", 0.0)
+            
+            if path_length < 1.0:
+                return speed_cmd
+            
+            # Compute progress ratio (0~1)
+            progress_ratio = min(1.0, max(0.0, progress_s / path_length))
+            
+            # Interpolate expected arrival time based on progress
+            # vertex_times spans from start (0) to end (1) of path
+            plan_start = vertex_times[0]
+            plan_end = vertex_times[-1]
+            plan_duration = plan_end - plan_start
+            
+            if plan_duration < 0.1:
+                return speed_cmd
+            
+            # Expected arrival at current progress
+            expected_time = plan_start + progress_ratio * plan_duration
+            
+            # Current absolute time
+            current_time = rospy.Time.now().to_sec()
+            
+            # How far ahead/behind are we?
+            time_diff = current_time - expected_time  # positive = behind schedule
+            
+            # Remaining distance and time
+            remaining_dist = path_length - progress_s
+            remaining_planned_time = plan_end - expected_time
+            
+            if remaining_dist < 1.0 or remaining_planned_time < 0.1:
+                return speed_cmd
+            
+            # If we're ahead of schedule (negative time_diff), slow down
+            if time_diff < -1.0:  # More than 1.0s ahead (relaxed from 0.5s)
+                # Calculate actual time remaining until planned end
+                actual_time_remaining = plan_end - current_time
+                
+                if actual_time_remaining > 0.5:
+                    # Required speed to arrive on time
+                    required_speed = remaining_dist / actual_time_remaining
+                    
+                    # Clamp to reasonable range
+                    min_speed = 0.5
+                    required_speed = max(min_speed, min(required_speed, speed_cmd))
+                    
+                    rospy.loginfo_throttle(
+                        5.0,
+                        f"[timing-ctrl] {role}: Slowing {speed_cmd:.1f}->{required_speed:.1f}m/s "
+                        f"(ahead { -time_diff:.1f}s)"
+                    )
+                    return required_speed
+                    
+        except Exception as e:
+            rospy.logwarn_throttle(1.0, f"[timing-ctrl] Error in timing control for {role}: {e}")
+            return speed_cmd
+        
         return speed_cmd
 
     def _compute_adaptive_lookahead(self, st) -> float:
