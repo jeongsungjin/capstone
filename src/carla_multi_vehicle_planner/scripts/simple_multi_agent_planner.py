@@ -4,11 +4,9 @@ import random
 from typing import Dict, List, Optional, Tuple
 
 import rospy
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import PoseStamped, PoseArray
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
-
-import psipp
 
 try:
     from capstone_msgs.msg import Uplink  # type: ignore
@@ -28,9 +26,19 @@ except Exception as exc:
     rospy.logfatal(f"Failed to import CARLA package: {exc}")
 
 try:
-    from agents.navigation.global_route_planner import GlobalRoutePlanner  # type: ignore
+    from agents.navigation.global_route_planner import GlobalRoutePlanner as CARLAGlobalRoutePlanner  # type: ignore
 except Exception:
-    GlobalRoutePlanner = None  # type: ignore
+    CARLAGlobalRoutePlanner = None  # type: ignore
+
+try:
+    from global_planner import GlobalPlanner
+except Exception:
+    GlobalPlanner = None  # type: ignore
+
+try:
+    from obstacle_planner import ObstaclePlanner
+except Exception:
+    ObstaclePlanner = None  # type: ignore
 
 
 class SimpleMultiAgentPlanner:
@@ -69,6 +77,10 @@ class SimpleMultiAgentPlanner:
         self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -25.0))
         self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
         self.parking_trigger_distance_m = float(rospy.get_param("~parking_trigger_distance_m", 0.5))
+        
+        # Obstacle avoidance parameters
+        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 5.0))
+        self.obstacle_replan_threshold = float(rospy.get_param("~obstacle_replan_threshold", 30.0))
 
         # CARLA world/map
         host = rospy.get_param("~carla_host", "localhost")
@@ -79,17 +91,32 @@ class SimpleMultiAgentPlanner:
         self.world = self.client.get_world()
         self.carla_map = self.world.get_map()
 
-        # Route planner (prefer CARLA agents; fallback to simple lane-follow)
+        # Route planner (GlobalPlanner 우선, 없으면 CARLA GlobalRoutePlanner)
         self.route_planner = None
-        if GlobalRoutePlanner is None:
-            raise RuntimeError("CARLA GlobalRoutePlanner module unavailable")
-        try:
-            self.route_planner = GlobalRoutePlanner(self.carla_map, self.global_route_resolution)
-            if hasattr(self.route_planner, "setup"):
-                self.route_planner.setup()
-            rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
-        except Exception as exc:
-            raise RuntimeError(f"Failed to initialize GlobalRoutePlanner: {exc}")
+        self._obstacle_planner = None
+        
+        if GlobalPlanner is not None:
+            try:
+                self.route_planner = GlobalPlanner(self.carla_map, self.global_route_resolution)
+                rospy.loginfo("SimpleMultiAgentPlanner: using GlobalPlanner")
+                
+                # ObstaclePlanner 초기화
+                if ObstaclePlanner is not None:
+                    self._obstacle_planner = ObstaclePlanner(self.route_planner)
+                    rospy.loginfo("SimpleMultiAgentPlanner: ObstaclePlanner initialized")
+            except Exception as exc:
+                rospy.logwarn(f"Failed to init GlobalPlanner: {exc}, falling back to CARLAGlobalRoutePlanner")
+        
+        if self.route_planner is None:
+            if CARLAGlobalRoutePlanner is None:
+                raise RuntimeError("CARLA GlobalRoutePlanner module unavailable")
+            try:
+                self.route_planner = CARLAGlobalRoutePlanner(self.carla_map, self.global_route_resolution)
+                if hasattr(self.route_planner, "setup"):
+                    self.route_planner.setup()
+                rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
+            except Exception as exc:
+                raise RuntimeError(f"Failed to initialize GlobalRoutePlanner: {exc}")
 
         self.spawn_points = self.carla_map.get_spawn_points()
         if not self.spawn_points:
@@ -113,6 +140,10 @@ class SimpleMultiAgentPlanner:
         # Uplink subscriber
         if Uplink is not None:
             rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
+        
+        # Obstacle subscriber
+        self._obstacles: List[Tuple[float, float, float]] = []
+        rospy.Subscriber("/obstacles", PoseArray, self._obstacle_cb, queue_size=1)
 
         rospy.sleep(0.5)
         self._plan_once()
@@ -120,6 +151,101 @@ class SimpleMultiAgentPlanner:
 
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Obstacle Handling
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _obstacle_cb(self, msg: PoseArray) -> None:
+        """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
+        new_obstacles = []
+        for pose in msg.poses:
+            new_obstacles.append((pose.position.x, pose.position.y, pose.position.z))
+        
+        # 장애물 변화 감지
+        if self._obstacles_changed(new_obstacles):
+            rospy.loginfo(f"Obstacles changed: {len(self._obstacles)} -> {len(new_obstacles)}")
+            self._obstacles = new_obstacles
+            self._update_blocked_nodes()
+            # 필요 시 재계획 트리거
+            self._on_obstacle_change()
+
+    def _obstacles_changed(self, new_obstacles: List[Tuple[float, float, float]]) -> bool:
+        """장애물 목록 변화 여부 확인"""
+        if len(new_obstacles) != len(self._obstacles):
+            return True
+        for new, old in zip(sorted(new_obstacles), sorted(self._obstacles)):
+            if math.hypot(new[0] - old[0], new[1] - old[1]) > 1.0:
+                return True
+        return False
+
+    def _update_blocked_nodes(self) -> None:
+        """장애물 위치로 차단 노드 업데이트"""
+        if not hasattr(self.route_planner, 'clear_obstacles'):
+            return
+        self.route_planner.clear_obstacles()
+        for ox, oy, oz in self._obstacles:
+            loc = carla.Location(x=ox, y=oy, z=oz)
+            blocked = self.route_planner.add_obstacle(loc, self.obstacle_radius)
+            rospy.logdebug(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked} nodes")
+
+    def _on_obstacle_change(self) -> None:
+        """
+        장애물 변화 시 호출되는 콜백
+        TODO: 장애물 회피 알고리즘 구현
+        - 거리 기반 재계획
+        - Local Planning 트리거
+        - 차량별 처리 등
+        """
+        # 현재는 로그만 출력 (알고리즘 추가 예정)
+        rospy.loginfo("Obstacle change detected - avoidance logic placeholder")
+        pass
+
+    def _generate_avoidance_path(self, role: str, obstacle_location: Tuple[float, float, float]) -> Optional[List[Tuple[float, float]]]:
+        """
+        장애물 회피 경로 생성
+        TODO: 회피 알고리즘 구현
+        - FrenetPath 활용
+        - 좌/우 회피 방향 결정
+        - 회피 경로 생성
+        
+        Args:
+            role: 차량 역할명
+            obstacle_location: 장애물 위치 (x, y, z)
+            
+        Returns:
+            회피 경로 [(x, y), ...] 또는 None
+        """
+        # TODO: 실제 회피 알고리즘 구현
+        rospy.logdebug(f"{role}: generate_avoidance_path placeholder for obstacle at {obstacle_location}")
+        return None
+
+    def _should_replan_for_obstacle(self, role: str, vehicle_loc: carla.Location) -> bool:
+        """
+        장애물로 인해 재계획이 필요한지 판단
+        TODO: 판단 로직 구현
+        - 현재 경로와 장애물 충돌 확인
+        - 거리 임계값 확인
+        
+        Args:
+            role: 차량 역할명
+            vehicle_loc: 차량 현재 위치
+            
+        Returns:
+            재계획 필요 여부
+        """
+        if not self._obstacles:
+            return False
+        
+        # 가장 가까운 장애물 거리
+        min_dist = float('inf')
+        for ox, oy, oz in self._obstacles:
+            dist = math.hypot(vehicle_loc.x - ox, vehicle_loc.y - oy)
+            min_dist = min(min_dist, dist)
+        
+        # TODO: 더 정교한 판단 로직 추가
+        return min_dist < self.obstacle_replan_threshold
+
 
     def _replan_check_cb(self, _evt) -> None:
         # Distance-gated replanning per vehicle
