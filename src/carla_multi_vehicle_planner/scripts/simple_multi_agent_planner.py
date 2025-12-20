@@ -144,10 +144,17 @@ class SimpleMultiAgentPlanner:
         # Obstacle subscriber
         self._obstacles: List[Tuple[float, float, float]] = []
         rospy.Subscriber("/obstacles", PoseArray, self._obstacle_cb, queue_size=1)
+        
+        # Vehicle edges tracking for overlap detection
+        self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
 
         rospy.sleep(0.5)
         self._plan_once()
         rospy.Timer(rospy.Duration(self.replan_check_interval), self._replan_check_cb)
+        
+        # Overlap detection logging timer (for debugging)
+        self._overlap_log_interval = float(rospy.get_param("~overlap_log_interval", 5.0))
+        rospy.Timer(rospy.Duration(self._overlap_log_interval), self._log_overlap_detection_cb)
 
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
@@ -246,6 +253,76 @@ class SimpleMultiAgentPlanner:
         # TODO: 더 정교한 판단 로직 추가
         return min_dist < self.obstacle_replan_threshold
 
+    # ─────────────────────────────────────────────────────────────────────────
+    # Overlap Detection (for debugging)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _extract_edges_from_route(self, route) -> List[Tuple[int, int]]:
+        """
+        GlobalPlanner route에서 엣지 리스트 추출
+        
+        Args:
+            route: [(waypoint, RoadOption), ...]
+            
+        Returns:
+            [(n1, n2), ...] 엣지 리스트
+        """
+        if not route or not hasattr(self.route_planner, '_localize'):
+            return []
+        
+        edges = []
+        for wp, _ in route:
+            loc = wp.transform.location
+            edge = self.route_planner._localize(loc)
+            if edge is not None and edge not in edges:
+                edges.append(edge)
+        return edges
+
+    def _update_vehicle_edges_from_route(self, role: str, route) -> None:
+        """route에서 엣지 추출하여 저장"""
+        edges = self._extract_edges_from_route(route)
+        if edges:
+            self._vehicle_route_edges[role] = edges
+            
+            # 엣지 리스트와 차선 정보 로깅
+            rospy.loginfo(f"[EDGES] {role}: {len(edges)} edges in route")
+            lane_info = []
+            for i, edge in enumerate(edges[:10]):  # 최대 10개만 출력
+                lane_key = self.route_planner._edge_to_lane.get(edge, None)
+                if lane_key:
+                    lane_info.append(f"{i}:{lane_key}")
+            rospy.loginfo(f"  Lanes (first 10): {', '.join(lane_info)}")
+
+    def _log_overlap_detection_cb(self, _evt) -> None:
+        """주기적으로 반대 차선 중복 상태 로깅"""
+        if not hasattr(self.route_planner, 'find_opposite_lane_overlaps'):
+            return
+        
+        roles = list(self._vehicle_route_edges.keys())
+        if len(roles) < 2:
+            return
+        
+        for i, role_a in enumerate(roles):
+            edges_a = self._vehicle_route_edges.get(role_a, [])
+            if not edges_a:
+                continue
+            
+            for role_b in roles[i+1:]:
+                edges_b = self._vehicle_route_edges.get(role_b, [])
+                if not edges_b:
+                    continue
+                
+                overlaps = self.route_planner.find_opposite_lane_overlaps(edges_a, edges_b)
+                if overlaps:
+                    rospy.loginfo(
+                        f"[OVERLAP] {role_a} vs {role_b}: {len(overlaps)} opposite-lane overlaps detected"
+                    )
+                    for idx_a, edge_a, idx_b, edge_b in overlaps[:3]:  # 최대 3개만 로깅
+                        lane_a = self.route_planner._edge_to_lane.get(edge_a, "?")
+                        lane_b = self.route_planner._edge_to_lane.get(edge_b, "?")
+                        rospy.loginfo(
+                            f"  - {role_a}[{idx_a}] lane{lane_a} <-> {role_b}[{idx_b}] lane{lane_b}"
+                        )
 
     def _replan_check_cb(self, _evt) -> None:
         # Distance-gated replanning per vehicle
@@ -623,6 +700,8 @@ class SimpleMultiAgentPlanner:
         new_points: List[Tuple[float, float]] = []
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
+            # Update vehicle edges for overlap detection
+            self._update_vehicle_edges_from_route(role, route)
         else:
             # Always use direct line when dest_override is present (e.g., off-road parking), or when GRP fails
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
