@@ -45,6 +45,10 @@ class GlobalPlanner(GlobalRoutePlanner):
         # 반대 차선 맵: (road_id, lane_id) -> opposite (road_id, lane_id) or None
         self._opposite_lane_map: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {}
         self._build_opposite_lane_map()
+        
+        # 엣지 → 차선 매핑: (n1, n2) -> (road_id, lane_id)
+        self._edge_to_lane: Dict[Tuple[int, int], Tuple[int, int]] = {}
+        self._build_edge_to_lane_map()
 
     def add_obstacle(self, location, radius: float = 5.0) -> int:
         """
@@ -248,6 +252,91 @@ class GlobalPlanner(GlobalRoutePlanner):
                 return right
         
         return None
+
+    def _build_edge_to_lane_map(self) -> None:
+        """
+        모든 엣지에 대해 (n1, n2) -> (road_id, lane_id) 매핑 빌드
+        """
+        for n1, n2, edge_data in self._graph.edges(data=True):
+            entry_wp = edge_data.get('entry_waypoint')
+            if entry_wp:
+                lane_key = (entry_wp.road_id, entry_wp.lane_id)
+                self._edge_to_lane[(n1, n2)] = lane_key
+
+    def get_lane_for_edge(self, edge: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        """
+        엣지의 차선 key 반환
+        
+        Args:
+            edge: (n1, n2) 엣지 튜플
+            
+        Returns:
+            (road_id, lane_id) 또는 None
+        """
+        return self._edge_to_lane.get(edge)
+
+    def get_opposite_lane_for_edge(self, edge: Tuple[int, int]) -> Optional[Tuple[int, int]]:
+        """
+        엣지의 반대 차선 key 반환
+        
+        Args:
+            edge: (n1, n2) 엣지 튜플
+            
+        Returns:
+            반대 차선 (road_id, lane_id) 또는 None
+        """
+        lane_key = self.get_lane_for_edge(edge)
+        if lane_key:
+            return self._opposite_lane_map.get(lane_key)
+        return None
+
+    def are_edges_on_opposite_lanes(self, edge_a: Tuple[int, int], edge_b: Tuple[int, int]) -> bool:
+        """
+        두 엣지가 반대 차선 관계인지 확인
+        
+        Returns:
+            True if edge_a and edge_b are on opposite lanes
+        """
+        lane_a = self.get_lane_for_edge(edge_a)
+        lane_b = self.get_lane_for_edge(edge_b)
+        
+        if lane_a is None or lane_b is None:
+            return False
+        
+        opposite_of_a = self._opposite_lane_map.get(lane_a)
+        return opposite_of_a is not None and opposite_of_a == lane_b
+
+    def find_opposite_lane_overlaps(
+        self, 
+        edges_a: List[Tuple[int, int]], 
+        edges_b: List[Tuple[int, int]]
+    ) -> List[Tuple[int, int, int, int]]:
+        """
+        두 엣지 리스트에서 반대 차선 관계인 쌍 찾기
+        
+        Args:
+            edges_a: 첫 번째 엣지 리스트 (예: 차량 A의 회피 경로)
+            edges_b: 두 번째 엣지 리스트 (예: 차량 B의 경로)
+            
+        Returns:
+            [(idx_a, edge_a, idx_b, edge_b), ...] 반대 차선 관계 쌍 목록
+        """
+        overlaps = []
+        
+        for i, edge_a in enumerate(edges_a):
+            lane_a = self.get_lane_for_edge(edge_a)
+            if lane_a is None:
+                continue
+            opposite_of_a = self._opposite_lane_map.get(lane_a)
+            if opposite_of_a is None:
+                continue
+            
+            for j, edge_b in enumerate(edges_b):
+                lane_b = self.get_lane_for_edge(edge_b)
+                if lane_b == opposite_of_a:
+                    overlaps.append((i, edge_a, j, edge_b))
+        
+        return overlaps
 
     def get_lane_key(self, location) -> Optional[Tuple[int, int]]:
         """
