@@ -3,6 +3,7 @@
   <arg name="send_hz" default="30.0" />
   <arg name="drop_stale_sec" default="0.3" />
   <arg name="send_zero_on_missing" default="false" />
+  <arg name="send_speed_as_float" default="false" />
   <!-- Optional per-vehicle IPs (1~6). Default localhost. -->
   <arg name="vehicle_1_ip" default="127.0.0.1" />
   <arg name="vehicle_2_ip" default="127.0.0.1" />
@@ -10,6 +11,20 @@
   <arg name="vehicle_4_ip" default="127.0.0.1" />
   <arg name="vehicle_5_ip" default="127.0.0.1" />
   <arg name="vehicle_6_ip" default="127.0.0.1" />
+
+  <!-- Optional per-vehicle scaling / min speed -->
+  <arg name="vehicle_1_speed_scale" default="1.0" />
+  <arg name="vehicle_2_speed_scale" default="1.0" />
+  <arg name="vehicle_3_speed_scale" default="1.0" />
+  <arg name="vehicle_4_speed_scale" default="1.0" />
+  <arg name="vehicle_5_speed_scale" default="1.0" />
+  <arg name="vehicle_6_speed_scale" default="1.0" />
+  <arg name="vehicle_1_speed_min_abs" default="1" />
+  <arg name="vehicle_2_speed_min_abs" default="1" />
+  <arg name="vehicle_3_speed_min_abs" default="1" />
+  <arg name="vehicle_4_speed_min_abs" default="1" />
+  <arg name="vehicle_5_speed_min_abs" default="1" />
+  <arg name="vehicle_6_speed_min_abs" default="1" />
 
   <node pkg="carla_multi_vehicle_control"
         type="simple_udp_ackermann_sender.py"
@@ -19,21 +34,34 @@
     <param name="send_hz" value="$(arg send_hz)" />
     <param name="drop_stale_sec" value="$(arg drop_stale_sec)" />
     <param name="send_zero_on_missing" value="$(arg send_zero_on_missing)" />
+    <param name="send_speed_as_float" value="$(arg send_speed_as_float)" />
     <!-- Map per-vehicle destination IPs -->
     <rosparam subst_value="true">
       vehicles:
         ego_vehicle_1:
           dest_ip: $(arg vehicle_1_ip)
+          speed_scale: $(arg vehicle_1_speed_scale)
+          speed_min_abs: $(arg vehicle_1_speed_min_abs)
         ego_vehicle_2:
           dest_ip: $(arg vehicle_2_ip)
+          speed_scale: $(arg vehicle_2_speed_scale)
+          speed_min_abs: $(arg vehicle_2_speed_min_abs)
         ego_vehicle_3:
           dest_ip: $(arg vehicle_3_ip)
+          speed_scale: $(arg vehicle_3_speed_scale)
+          speed_min_abs: $(arg vehicle_3_speed_min_abs)
         ego_vehicle_4:
           dest_ip: $(arg vehicle_4_ip)
+          speed_scale: $(arg vehicle_4_speed_scale)
+          speed_min_abs: $(arg vehicle_4_speed_min_abs)
         ego_vehicle_5:
           dest_ip: $(arg vehicle_5_ip)
+          speed_scale: $(arg vehicle_5_speed_scale)
+          speed_min_abs: $(arg vehicle_5_speed_min_abs)
         ego_vehicle_6:
           dest_ip: $(arg vehicle_6_ip)
+          speed_scale: $(arg vehicle_6_speed_scale)
+          speed_min_abs: $(arg vehicle_6_speed_min_abs)
     </rosparam>
   </node>
 </launch>

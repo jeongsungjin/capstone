@@ -4,8 +4,13 @@
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
   <arg name="enable_platooning" default="false" />
   <arg name="enable_manual_goal" default="true" />
-  <arg name="enable_bev_tracking_hold" default="false" />
-  <arg name="enable_bev_pipeline" default="false" />
+  <arg name="enable_bev_tracking_hold" default="true" />
+  <arg name="enable_bev_pipeline" default="true" />
+  <arg name="enable_heading_fuser" default="true" />
+  <!-- raw: camera-only BEV; fused: heading_fuser output -->
+  <arg name="bev_topic_raw" default="/bev_info_raw" />
+  <arg name="bev_topic_teleport" default="/bev_info" />
+  <arg name="enable_pid" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -48,11 +53,27 @@
   </node>
   <node pkg="carla_multi_vehicle_planner" type="key_selector.py" name="key_selector" output="screen" />
 
+  <!-- Optional: IMU uplink + heading fuser -->
+  <node if="$(arg enable_heading_fuser)" pkg="perception" type="imu_uplink_receiver.py" name="imu_uplink_receiver" output="screen">
+    <param name="udp_ip" value="0.0.0.0" />
+    <param name="udp_port" value="5560" />
+    <param name="topic" value="/imu_uplink" />
+    <param name="publish_hz" value="30.0" />
+    <param name="republish_last" value="true" />
+  </node>
+  <node if="$(arg enable_heading_fuser)" pkg="perception" type="heading_fuser.py" name="heading_fuser" output="screen">
+    <param name="imu_topic" value="/imu_uplink" />
+    <param name="bev_topic" value="$(arg bev_topic_raw)" />
+    <param name="out_topic" value="/bev_info" />
+    <param name="k_gain" value="0.1" />
+    <param name="gate_deg" value="20.0" />
+  </node>
+
   <!-- 4) Controller -->
   <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
-    <param name="target_speed" value="4.0" />
+    <param name="target_speed" value="5.0" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
     <param name="low_voltage_threshold" value="5.0" />
     <param name="parking_dest_x" value="-25.0" />
@@ -61,6 +82,45 @@
     <param name="parking_speed_radius" value="8.0" />
     <param name="parking_stop_radius" value="3.0" />
   </node>
+
+  <!-- 4.5) BEV speed PID override (per-vehicle PID params) -->
+  <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+
+    <!-- BEV input -->
+    <param name="bev_topic" value="$(arg bev_topic_raw)" />
+    <param name="use_detection_index" value="true" />
+    <param name="id_offset" value="0" />
+    <!-- BEV speeds already look like m/s (2~13), so use scale 1.0 -->
+    <param name="bev_speed_scale" value="1.0" />
+    <!-- enable PID logging to confirm measurements are used -->
+    <param name="log_missing_measurement" value="true" />
+    <param name="log_measurement" value="true" />
+
+    <!-- Ackermann raw input from controller & final output to UDP sender -->
+    <param name="cmd_raw_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd_raw" />
+    <param name="cmd_out_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd" />
+
+    <!-- default PID / limits (fallback when vehicle override not provided) -->
+    <param name="default/kp" value="1.0" />
+    <param name="default/ki" value="0.2" />
+    <param name="default/kd" value="0.0" />
+    <param name="default/target_speed_mps" value="0.5" />
+    <param name="default/min_speed_cmd" value="0.0" />
+    <param name="default/max_speed_cmd" value="1.0" />
+
+    <!-- teleport/discontinuity safety -->
+    <param name="enable_jump_reset" value="true" />
+    <param name="pos_jump_m" value="1.0" />
+
+    <!-- per-vehicle overrides (A 방식) -->
+    <rosparam param="vehicles">
+      ego_vehicle_1: {kp: 1.0, ki: 0.0, kd: 0.0, target_speed_mps: 5.0, min_speed_cmd: 0.0, max_speed_cmd: 5.0}
+      ego_vehicle_2: {kp: 1.00, ki: 0.20, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
+      ego_vehicle_3: {kp: 1.10, ki: 0.22, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
+    </rosparam>
+  </node>
+
 
   <!-- RViz -->
   <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"

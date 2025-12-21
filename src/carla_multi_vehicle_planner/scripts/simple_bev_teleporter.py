@@ -25,8 +25,8 @@ class SimpleBevTeleporter:
 		if carla is None:
 			raise RuntimeError("CARLA Python API unavailable")
 
-		# minimal parameters
-		self.topic = rospy.get_param("~topic", "/bev_info")
+		# minimal parameters (default to /bev_info_raw to match inference_receiver)
+		self.topic = rospy.get_param("~topic", "/bev_info_raw")
 		self.host = rospy.get_param("~carla_host", "localhost")
 		self.port = int(rospy.get_param("~carla_port", 2000))
 		self.max_vehicle_count = max(1, min(6, int(rospy.get_param("~max_vehicle_count", 1))))

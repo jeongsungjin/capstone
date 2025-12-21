@@ -8,6 +8,7 @@ from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
 from std_msgs.msg import Header
+from std_msgs.msg import Bool
 from capstone_msgs.msg import Uplink  # type: ignore
 
 try:
@@ -43,6 +44,7 @@ class SimpleMultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
         self.ld_min = float(rospy.get_param("~ld_min", 0.5))
@@ -106,7 +108,7 @@ class SimpleMultiVehicleController:
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
-            cmd_topic = f"/carla/{role}/vehicle_control_cmd"
+            cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
             pose_topic = f"/{role}/pose"
             rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
@@ -117,6 +119,7 @@ class SimpleMultiVehicleController:
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
         rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
+        rospy.Subscriber("/emergency_stop", Bool, self._e_stop_cb, queue_size=5)
 
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
@@ -526,6 +529,9 @@ class SimpleMultiVehicleController:
         return max(1e-3, float(self.max_steer))
 
     def _apply_carla_control(self, vehicle, steer, speed):
+        if self.emergency_stop_active:
+            steer = 0.0
+            speed = 0.0
         control = carla.VehicleControl()
         # 차량 물리 최대각으로 정규화하여 CARLA [-1,1]에 매핑
         veh_max = self._get_vehicle_max_steer(vehicle)
@@ -563,6 +569,12 @@ class SimpleMultiVehicleController:
             self._voltage[int(msg.vehicle_id)] = float(msg.voltage)
         except Exception:
             pass
+
+    def _e_stop_cb(self, msg: Bool) -> None:
+        try:
+            self.emergency_stop_active = bool(msg.data)
+        except Exception:
+            self.emergency_stop_active = False
 
     def _is_low_voltage(self, role: str) -> bool:
         try:
@@ -623,8 +635,8 @@ class SimpleMultiVehicleController:
         return rem
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
-        msg.steering_angle = float(steer)
-        msg.speed = float(speed)
+        msg.steering_angle = float(0.0 if self.emergency_stop_active else steer)
+        msg.speed = float(0.0 if self.emergency_stop_active else speed)
         self.control_publishers[role].publish(msg)
 
     def _control_loop(self, _evt) -> None:

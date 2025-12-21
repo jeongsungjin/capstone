@@ -6,8 +6,10 @@ from typing import Dict, List
 
 import rospy
 from ackermann_msgs.msg import AckermannDrive
+from std_msgs.msg import Bool
 
-FMT_FLOAT = "!fiI"  # float angle(rad), int speed, uint32 seq
+FMT_FLOAT_INT = "!fiI"   # float angle(rad), int speed, uint32 seq
+FMT_FLOAT_FLOAT = "!ffI"  # float angle(rad), float speed, uint32 seq
 
 
 class SimpleUdpAckermannSender:
@@ -28,9 +30,14 @@ class SimpleUdpAckermannSender:
         self.drop_stale_sec = float(rospy.get_param("~drop_stale_sec", 0.3))
         self.send_zero_on_missing = bool(rospy.get_param("~send_zero_on_missing", False))
         self.log_throttle_sec = float(rospy.get_param("~log_throttle_sec", 0.5))
+        # speed as float vs int (default int for backward compatibility)
+        self.send_speed_as_float = bool(rospy.get_param("~send_speed_as_float", False))
+        self.e_stop_topic = str(rospy.get_param("~e_stop_topic", "/emergency_stop"))
 
         self.vehicles: Dict[str, Dict] = {}
-        self.cache: Dict[str, Dict] = {}
+        self.cache: Dict[str, Dict] = {}           # main commands
+        self.cache_override: Dict[str, Dict] = {}  # emergency override commands
+        self.e_stop_active: bool = False
         self.roles: List[str] = []
 
         for idx in range(1, self.num_vehicles + 1):
@@ -46,6 +53,7 @@ class SimpleUdpAckermannSender:
             speed_min_abs = int(rospy.get_param(f"{base}/speed_min_abs", 1))
             force_min_speed_on_zero = bool(rospy.get_param(f"{base}/force_min_speed_on_zero", False))
             zero_speed_value = int(rospy.get_param(f"{base}/zero_speed_value", 1))
+            override_topic = rospy.get_param(f"{base}/override_topic", f"/carla/{role}/vehicle_control_cmd_override")
 
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
@@ -68,7 +76,9 @@ class SimpleUdpAckermannSender:
                 "last_log": rospy.Time(0),
             }
             rospy.Subscriber(topic, AckermannDrive, self._cb, callback_args=role, queue_size=10)
+            rospy.Subscriber(override_topic, AckermannDrive, self._cb_override, callback_args=role, queue_size=10)
             self.cache[role] = {"steer": 0.0, "speed": 0.0, "stamp": rospy.Time(0)}
+            self.cache_override[role] = {"steer": 0.0, "speed": 0.0, "stamp": rospy.Time(0)}
             self.roles.append(role)
 
         self.roles.sort(key=lambda r: int(r.split("_")[-1]) if r.split("_")[-1].isdigit() else 999)
@@ -79,10 +89,26 @@ class SimpleUdpAckermannSender:
             tick_hz = self.send_hz * len(self.roles)
             rospy.Timer(rospy.Duration(1.0 / tick_hz), self._tick)
 
+        # Emergency stop latch (e.g., key_selector SPACE)
+        rospy.Subscriber(self.e_stop_topic, Bool, self._cb_e_stop, queue_size=1)
+
         rospy.loginfo(f"[RC-UDP] bound on {self.bind_ip} for {len(self.roles)} vehicles")
 
     def _cb(self, msg: AckermannDrive, role: str) -> None:
         self.cache[role] = {"steer": float(msg.steering_angle), "speed": float(msg.speed), "stamp": rospy.Time.now()}
+
+    def _cb_override(self, msg: AckermannDrive, role: str) -> None:
+        self.cache_override[role] = {
+            "steer": float(msg.steering_angle),
+            "speed": float(msg.speed),
+            "stamp": rospy.Time.now(),
+        }
+
+    def _cb_e_stop(self, msg: Bool) -> None:
+        try:
+            self.e_stop_active = bool(msg.data)
+        except Exception:
+            self.e_stop_active = False
 
     def _tick(self, _evt) -> None:
         if not self.roles:
@@ -94,32 +120,53 @@ class SimpleUdpAckermannSender:
             return
         now = rospy.Time.now()
         cached = self.cache.get(role) or {}
-        steer = float(cached.get("steer", 0.0))
-        speed = float(cached.get("speed", 0.0))
-        stamp = cached.get("stamp", rospy.Time(0))
-        if (now - stamp).to_sec() > self.drop_stale_sec and self.send_zero_on_missing:
-            steer = 0.0
-            speed = 0.0
+        cached_override = self.cache_override.get(role) or {}
+
+        use_override = False
+        if self.e_stop_active:
+            use_override = True
+            cached_override = {"steer": 0.0, "speed": 0.0, "stamp": now}
+        elif (now - cached_override.get("stamp", rospy.Time(0))).to_sec() <= self.drop_stale_sec:
+            use_override = True
+
+        if use_override:
+            steer = float(cached_override.get("steer", 0.0))
+            speed = float(cached_override.get("speed", 0.0))
+        else:
+            steer = float(cached.get("steer", 0.0))
+            speed = float(cached.get("speed", 0.0))
+            stamp = cached.get("stamp", rospy.Time(0))
+            if (now - stamp).to_sec() > self.drop_stale_sec and self.send_zero_on_missing:
+                steer = 0.0
+                speed = 0.0
 
         send_angle = (steer + float(v["angle_center_rad"])) * float(v["angle_scale"])
         if bool(v["angle_invert"]):
             send_angle = -send_angle
         sp = speed * float(v["speed_scale"])
-        xy_speed = int(round(sp))
-        if xy_speed != 0 and abs(xy_speed) < int(v["speed_min_abs"]):
-            xy_speed = (1 if xy_speed > 0 else -1) * int(v["speed_min_abs"])
-        if xy_speed == 0 and bool(v.get("force_min_speed_on_zero", False)):
-            z = int(v.get("zero_speed_value", 1)) or 1
-            xy_speed = (1 if sp >= 0.0 else -1) * abs(z)
-        xy_speed = max(-50, min(50, xy_speed))
+
+        if self.send_speed_as_float:
+            xy_speed = max(-50.0, min(50.0, float(sp)))
+        else:
+            xy_speed = int(round(sp))
+            if xy_speed != 0 and abs(xy_speed) < int(v["speed_min_abs"]):
+                xy_speed = (1 if xy_speed > 0 else -1) * int(v["speed_min_abs"])
+            if xy_speed == 0 and bool(v.get("force_min_speed_on_zero", False)):
+                z = int(v.get("zero_speed_value", 1)) or 1
+                xy_speed = (1 if sp >= 0.0 else -1) * abs(z)
+            xy_speed = max(-50, min(50, xy_speed))
 
         last_log = v.get("last_log", rospy.Time(0))
         if self.log_throttle_sec <= 0.0 or (now - last_log).to_sec() >= self.log_throttle_sec:
             di, dp = v.get("dest", ("", 0))
-            rospy.loginfo(f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp}")
+            rospy.loginfo(
+                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
+                f"(mode={'float' if self.send_speed_as_float else 'int'})"
+            )
             v["last_log"] = now
 
-        pkt = struct.pack(FMT_FLOAT, float(send_angle), int(xy_speed), int(v["seq"]) & 0xFFFFFFFF)
+        fmt = FMT_FLOAT_FLOAT if self.send_speed_as_float else FMT_FLOAT_INT
+        pkt = struct.pack(fmt, float(send_angle), xy_speed, int(v["seq"]) & 0xFFFFFFFF)
         try:
             v["sock"].sendto(pkt, v["dest"])
             v["seq"] = int(v["seq"]) + 1

@@ -4,16 +4,10 @@ import json
 import math
 import select
 import socket
-from typing import List
+from typing import List, Optional, Set, Tuple, Union
 
 import rospy
 from capstone_msgs.msg import BEVInfo
-
-# capstone_msgs BEVInfo message에 차량 별 속도 필드 추가
-# inference_receiver.py 에 속도 필드 추가 반영
-# /bev_info_raw 토픽에 속도 정보 포함하여 발행
-# control 패키지에서 BEVInfo 메시지 구독하여 pid 속도 제어기 구현
-# simple_bev_teleporter에서 불연속 적인 투영에서도 pid제어기가 잘 동작할지?? (확인 필요)
 
 
 class InferenceReceiverNode:
@@ -23,7 +17,7 @@ class InferenceReceiverNode:
         rospy.init_node("inference_receiver", anonymous=True)
 
         self.udp_ip = str(rospy.get_param("~udp_ip", "0.0.0.0"))
-        self.udp_port = int(rospy.get_param("~udp_port", 60200))
+        self.udp_port = int(rospy.get_param("~udp_port", 60050))
         ports_csv = str(rospy.get_param("~udp_ports", "")).strip()
         if ports_csv:
             try:
@@ -35,6 +29,17 @@ class InferenceReceiverNode:
 
         self.input_yaw_degrees = bool(rospy.get_param("~input_yaw_degrees", True))
         self.max_items = int(rospy.get_param("~max_items", 64))
+        allowed_classes_csv = str(rospy.get_param("~allowed_classes", "0")).strip()
+        if allowed_classes_csv:
+            try:
+                self.allowed_classes: Optional[Set[int]] = {
+                    int(c.strip()) for c in allowed_classes_csv.split(",") if c.strip()
+                }
+            except Exception:
+                self.allowed_classes = None
+                rospy.logwarn("InferenceReceiver: failed to parse allowed_classes; disabling class filter")
+        else:
+            self.allowed_classes = None
         self.topic = str(rospy.get_param("~topic", "/bev_info_raw"))
         self.frame_id = str(rospy.get_param("~frame_id", "map"))
 
@@ -51,8 +56,13 @@ class InferenceReceiverNode:
             self.socks.append(sock)
 
         self.pub = rospy.Publisher(self.topic, BEVInfo, queue_size=1)
-        rospy.loginfo("[Inference UDP] listening on %s ports %s -> %s", self.udp_ip,
-                      ",".join(str(p) for p in self.udp_ports), self.topic)
+        rospy.loginfo(
+            "[Inference UDP] listening on %s ports %s -> %s (allowed_classes=%s)",
+            self.udp_ip,
+            ",".join(str(p) for p in self.udp_ports),
+            self.topic,
+            ",".join(str(c) for c in sorted(self.allowed_classes)) if self.allowed_classes else "ANY",
+        )
         rospy.on_shutdown(self._on_shutdown)
 
         self.frame_seq: int = 0
@@ -78,25 +88,78 @@ class InferenceReceiverNode:
                 continue
         return rospy.Time.now()
 
+    def _safe_float(self, v, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    def _extract_speed_mps(self, it: dict) -> float:
+        """
+        Extract speed (m/s) from one item.
+        Priority:
+          1) scalar keys: speed_mps, speed, speed_ms, v_mps
+          2) vector keys: velocity, vel, v  -> if list/tuple len>=2 => sqrt(vx^2+vy^2)
+          3) fallback 0.0
+        """
+        # 1) scalar
+        for k in ("speed_mps", "speed", "speed_ms", "v_mps"):
+            if k in it and it.get(k) is not None:
+                return self._safe_float(it.get(k), 0.0)
+
+        # 2) vector
+        for k in ("velocity", "vel", "v"):
+            vv = it.get(k)
+            if isinstance(vv, (list, tuple)) and len(vv) >= 2:
+                vx = self._safe_float(vv[0], 0.0)
+                vy = self._safe_float(vv[1], 0.0)
+                return float(math.sqrt(vx * vx + vy * vy))
+
+        return 0.0
+
+    def _extract_class_id(self, it: dict) -> Optional[int]:
+        """Read class id from common keys."""
+        for k in ("class_id", "class", "cls", "label", "label_id"):
+            if k not in it:
+                continue
+            try:
+                return int(it.get(k))
+            except Exception:
+                continue
+        return None
+
     def _to_bevinfo(self, items: List[dict], stamp: rospy.Time, frame_seq: int) -> BEVInfo:
         ids: List[int] = []
         xs: List[float] = []
         ys: List[float] = []
         yaws: List[float] = []
         colors: List[str] = []
+        speeds_mps: List[float] = []
 
         for it in items[: max(0, self.max_items)]:
+            # Optional class filter to drop non-vehicle detections (e.g., cones)
+            cls_id = self._extract_class_id(it)
+            if self.allowed_classes is not None and cls_id is not None:
+                if cls_id not in self.allowed_classes:
+                    continue
+
             try:
                 vid = int(it.get("id"))
             except Exception:
                 continue
+
             center = it.get("center", [0.0, 0.0, 0.0])
             if not isinstance(center, (list, tuple)) or len(center) < 2:
                 continue
-            x = float(center[0]) 
-            y = float(center[1]) 
-            yaw_val = float(it.get("yaw", 0.0))
+
+            x = float(center[0])
+            y = float(center[1])
+
+            yaw_val = self._safe_float(it.get("yaw", 0.0), 0.0)
             yaw_rad = math.radians(yaw_val) if self.input_yaw_degrees else yaw_val
+
+            # speed (m/s) - NEW
+            spd = self._extract_speed_mps(it)
 
             color_val = it.get("color")
             if color_val is None:
@@ -115,11 +178,13 @@ class InferenceReceiverNode:
             ys.append(y)
             yaws.append(yaw_rad)
             colors.append(color_str)
+            speeds_mps.append(float(spd))
 
         msg = BEVInfo()
         msg.header.stamp = stamp
         msg.header.seq = frame_seq
         msg.header.frame_id = self.frame_id
+
         msg.frame_seq = frame_seq
         msg.detCounts = len(ids)
         msg.ids = ids
@@ -127,6 +192,10 @@ class InferenceReceiverNode:
         msg.center_ys = ys
         msg.yaws = yaws
         msg.colors = colors
+
+        # NEW FIELD (requires BEVInfo.msg update)
+        msg.speeds_mps = speeds_mps
+
         return msg
 
     def spin(self) -> None:
@@ -135,9 +204,11 @@ class InferenceReceiverNode:
             if not self.socks:
                 rospy.sleep(0.1)
                 continue
+
             readable, _, _ = select.select(self.socks, [], [], 0.5)
             if not readable:
                 continue
+
             for sock in readable:
                 try:
                     data, _addr = sock.recvfrom(65507)
@@ -156,6 +227,7 @@ class InferenceReceiverNode:
 
                 items = payload.get("items", [])
                 stamp = self._extract_stamp(payload)
+
                 frame_seq = self.frame_seq
                 bev_msg = self._to_bevinfo(items, stamp, frame_seq)
                 self.pub.publish(bev_msg)
@@ -169,7 +241,9 @@ class InferenceReceiverNode:
                     bev_msg.detCounts,
                     latency,
                 )
+
                 self.frame_seq += 1
+
             rate.sleep()
 
 
@@ -179,4 +253,3 @@ if __name__ == "__main__":
         node.spin()
     except rospy.ROSInterruptException:
         pass
-

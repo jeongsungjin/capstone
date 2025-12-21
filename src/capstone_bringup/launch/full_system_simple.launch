@@ -1,11 +1,16 @@
 <launch>
-  <arg name="num_vehicles" default="3" />
+  <arg name="num_vehicles" default="1" />
   <arg name="enable_platooning" default="false" />
   <arg name="enable_bev_pipeline" default="true" />
+  <arg name="enable_heading_fuser" default="true" />
+  <!-- raw camera BEV vs fused heading BEV -->
+  <arg name="bev_topic_raw" default="/bev_info_raw" />
+  <arg name="bev_topic_teleport" default="/bev_info" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="bev_topic" value="$(arg bev_topic_teleport)" />
   </include>
 
   <!-- Planner + Controller + Visualization -->
@@ -15,6 +20,9 @@
     <arg name="enable_manual_goal" value="false" />
     <arg name="enable_bev_tracking_hold" value="$(arg enable_bev_pipeline)" />
     <arg name="enable_bev_pipeline" value="$(arg enable_bev_pipeline)" />
+    <arg name="enable_heading_fuser" value="$(arg enable_heading_fuser)" />
+    <arg name="bev_topic_raw" value="$(arg bev_topic_raw)" />
+    <arg name="bev_topic_teleport" value="$(arg bev_topic_teleport)" />
   </include>
 
   <!-- RC UDP senders (simple) -->
