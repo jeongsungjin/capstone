@@ -79,8 +79,11 @@ class SimpleMultiAgentPlanner:
         self.parking_trigger_distance_m = float(rospy.get_param("~parking_trigger_distance_m", 0.5))
         
         # Obstacle avoidance parameters
-        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 5.0))
+        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 5.0))  # 경로 차단용 반경
+        self.obstacle_collision_radius = float(rospy.get_param("~obstacle_collision_radius", 1.0))  # 회피 경로 충돌 검사용 반경
         self.obstacle_replan_threshold = float(rospy.get_param("~obstacle_replan_threshold", 30.0))
+        self.obstacle_stop_distance = float(rospy.get_param("~obstacle_stop_distance", 1.0))  # 장애물 앞 정지 거리
+        self.avoidance_margin_after = float(rospy.get_param("~avoidance_margin_after", 1.0))  # 장애물 뒤 복귀 마진
 
         # CARLA world/map
         host = rospy.get_param("~carla_host", "localhost")
@@ -124,10 +127,19 @@ class SimpleMultiAgentPlanner:
 
         # Publishers
         self.path_publishers: Dict[str, rospy.Publisher] = {}
+        self._avoidance_path_pubs: Dict[str, Dict[float, rospy.Publisher]] = {}  # role -> {d: Publisher}
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
+            
+            # 회피 후보 경로 퍼블리셔 (d=-1.0, -0.5, 0.5, 1.0)
+            self._avoidance_path_pubs[role] = {}
+            for d in range(-20, 40, 5):
+                d /= 10
+                avoidance_topic = f"/avoidance_path_{role}_d{d:.1f}".replace("-", "n").replace(".", "_")
+                self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
+        
         # Destination memory per role (for distance-gated replanning)
         self._current_dest: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
         self._active_paths: Dict[str, List[Tuple[float, float]]] = {}
@@ -205,11 +217,11 @@ class SimpleMultiAgentPlanner:
     def _on_obstacle_change(self) -> None:
         """
         장애물 변화 시 호출되는 콜백
-        - 영향받는 차량의 경로를 장애물 5m 전까지 자름
+        - 영향받는 차량의 경로를 장애물 전에 자름
         - 장애물 해제 시 replan 트리거
         """
         vehicles = self._get_ego_vehicles()
-        stop_distance = 5.0  # 장애물 앞 정지 거리
+        stop_distance = self.obstacle_stop_distance  # 장애물 앞 정지 거리 (rosparam)
         
         if not self._obstacles:
             # 장애물 없음 → 정지 중인 차량들 replan
@@ -282,6 +294,107 @@ class SimpleMultiAgentPlanner:
                 self._store_active_path(role, trimmed_path)
                 self._obstacle_blocked_roles[role] = obstacle_on_path
                 rospy.logwarn(f"[OBSTACLE] {role}: path trimmed to {len(trimmed_path)} points (stop before obstacle)")
+                
+                # 회피 후보 경로 시각화 (정지점부터 시작)
+                self._publish_avoidance_candidates(role, path, stop_idx, obstacle_path_idx)
+
+    def _publish_avoidance_candidates(self, role: str, original_path: List[Tuple[float, float]], stop_idx: int, obstacle_idx: int) -> None:
+        """
+        회피 후보 경로들을 RViz에 시각화용으로 발행
+        - 정지점(stop_idx)에서 시작해서 장애물을 지나 복귀
+        
+        Args:
+            role: 차량 역할명
+            original_path: 원본 경로
+            stop_idx: 정지점 인덱스 (잘린 경로 끝)
+            obstacle_idx: 장애물이 있는 경로 인덱스
+        """
+        if len(original_path) < 10:
+            return
+        
+        try:
+            from frenet_path import FrenetPath
+            
+            # 회피 구간: 정지점 ~ 장애물 뒤 마진
+            margin_after_idx = int(self.avoidance_margin_after / 0.5)  # m → index (0.5m 간격)
+            start_idx = stop_idx
+            end_idx = min(len(original_path), obstacle_idx + margin_after_idx)
+            
+            # 정지점부터 장애물 지난 후까지 경로 추출
+            avoidance_segment = original_path[start_idx:end_idx]
+            
+            if len(avoidance_segment) < 5:
+                return
+            
+            # FrenetPath 생성
+            frenet = FrenetPath(avoidance_segment)
+            
+            # 회피 구간 (전체 구간 사용)
+            s_start = 0.5
+            s_end = frenet.total_length - 0.5
+            
+            if s_end <= s_start:
+                return
+            
+            # 회피 후보 생성 및 평가
+            candidates = []  # [(cost, d, path), ...]
+            
+            for d in range(-20, 40, 5):
+                d /= 10
+                avoidance_path = frenet.generate_avoidance_path(
+                    s_start=s_start,
+                    s_end=s_end,
+                    d_offset=d,
+                    num_points=max(20, int((s_end - s_start) / 0.5)),
+                    smooth_ratio=0.3
+                )
+                
+                if not avoidance_path or len(avoidance_path) < 2:
+                    continue
+                
+                # 충돌 검사: 경로가 장애물과 충돌하는지 확인
+                collision = False
+                for px, py in avoidance_path:
+                    for ox, oy, _ in self._obstacles:
+                        if math.hypot(px - ox, py - oy) < self.obstacle_collision_radius:
+                            collision = True
+                            break
+                    if collision:
+                        break
+                
+                # 코스트 계산: |d| / 0.5 (d=0이 가장 저렴)
+                d_cost = abs(d) / 0.5
+                
+                if not collision:
+                    candidates.append((d_cost, d, avoidance_path))
+                
+                # 시각화용 발행
+                msg = Path()
+                msg.header = Header(frame_id="map", stamp=rospy.Time.now())
+                for x, y in avoidance_path:
+                    p = PoseStamped()
+                    p.header = msg.header
+                    p.pose.position.x = x
+                    p.pose.position.y = y
+                    p.pose.position.z = 0.0
+                    msg.poses.append(p)
+                
+                if role in self._avoidance_path_pubs and d in self._avoidance_path_pubs[role]:
+                    self._avoidance_path_pubs[role][d].publish(msg)
+            
+            # 최적 경로 선택 (가장 낮은 코스트)
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                best_cost, best_d, best_path = candidates[0]
+                rospy.loginfo(f"[AVOIDANCE] {role}: best path d={best_d:.1f} (cost={best_cost:.1f}, {len(candidates)} valid)")
+                # TODO: 선택된 경로를 실제 주행에 사용
+            else:
+                rospy.logwarn(f"[AVOIDANCE] {role}: no collision-free path found!")
+            
+            rospy.loginfo(f"[AVOIDANCE] {role}: avoidance paths from stop_idx={stop_idx} to {end_idx} (obstacle at {obstacle_idx})")
+            
+        except Exception as e:
+            rospy.logwarn(f"[AVOIDANCE] {role}: failed to generate candidates: {e}")
 
     def _generate_avoidance_path(self, role: str, obstacle_location: Tuple[float, float, float]) -> Optional[List[Tuple[float, float]]]:
         """
