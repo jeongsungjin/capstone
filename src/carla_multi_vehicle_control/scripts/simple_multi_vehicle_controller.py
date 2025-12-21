@@ -382,6 +382,7 @@ class SimpleMultiVehicleController:
         ori = st.get("orientation")
         if not path or len(path) < 2 or pos is None or ori is None or vehicle is None:
             return 0.0, 0.0
+        
         ref = self._rear_point(st, vehicle)
         if ref is None:
             return None, None
@@ -445,6 +446,12 @@ class SimpleMultiVehicleController:
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
         speed = self._apply_parking_speed_limit(role, st, speed)
+        
+        # 경로 끝 도달 시 정지 (잘린 경로 끝에서 자연 정지)
+        dist_to_end = self._distance_to_path_end(st)
+        if dist_to_end is not None and dist_to_end <= 2.0:
+            speed = 0.0
+        
         return steer, speed
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
