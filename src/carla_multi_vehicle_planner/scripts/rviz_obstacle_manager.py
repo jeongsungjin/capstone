@@ -10,7 +10,7 @@ import threading
 from typing import List, Tuple
 
 import rospy
-from geometry_msgs.msg import PoseStamped, PoseArray, Pose
+from geometry_msgs.msg import PoseStamped, PointStamped, PoseArray, Pose
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -69,7 +69,7 @@ class RvizObstacleManager:
         # Subscribers
         rospy.Subscriber("/obstacle_mode", String, self._mode_cb, queue_size=1)
         rospy.Subscriber("/move_base_simple/goal", PoseStamped, self._goal_cb, queue_size=10)
-        rospy.Subscriber("/clicked_point", PoseStamped, self._click_cb, queue_size=10)
+        rospy.Subscriber("/clicked_point", PointStamped, self._click_cb, queue_size=10)
 
         # 주기적 발행
         rospy.Timer(rospy.Duration(1.0 / self.publish_rate), self._publish_cb)
@@ -77,6 +77,9 @@ class RvizObstacleManager:
         rospy.loginfo("RvizObstacleManager initialized (mode: %s)", self._mode)
         rospy.loginfo("  - Click on RViz to add obstacles")
         rospy.loginfo("  - Publish to /obstacle_mode: 'add' or 'remove'")
+        
+        # 종료 시 장애물 자동 클리어
+        rospy.on_shutdown(self._on_shutdown)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Helpers
@@ -112,6 +115,14 @@ class RvizObstacleManager:
     # Callbacks
     # ─────────────────────────────────────────────────────────────────────────
 
+    def _on_shutdown(self) -> None:
+        """노드 종료 시 장애물 클리어"""
+        rospy.loginfo("RvizObstacleManager: shutting down, clearing obstacles...")
+        with self._lock:
+            self._obstacles.clear()
+        self._publish_obstacles()
+        rospy.loginfo("RvizObstacleManager: obstacles cleared")
+
     def _mode_cb(self, msg: String) -> None:
         """모드 전환 콜백"""
         mode = msg.data.strip().lower()
@@ -129,9 +140,9 @@ class RvizObstacleManager:
         """2D Nav Goal 클릭 콜백"""
         self._handle_click(msg.pose.position.x, msg.pose.position.y)
 
-    def _click_cb(self, msg: PoseStamped) -> None:
+    def _click_cb(self, msg: PointStamped) -> None:
         """Publish Point 클릭 콜백"""
-        self._handle_click(msg.pose.position.x, msg.pose.position.y)
+        self._handle_click(msg.point.x, msg.point.y)
 
     def _handle_click(self, x: float, y: float) -> None:
         """클릭 처리"""
