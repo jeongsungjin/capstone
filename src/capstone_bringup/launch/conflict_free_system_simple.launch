@@ -2,20 +2,23 @@
   <arg name="num_vehicles" default="3" />
   <arg name="enable_rviz" default="true" />
   <arg name="rviz_config" default="$(find carla_multi_vehicle_planner)/config/multi_vehicle_planner.rviz" />
-  <arg name="enable_platooning" default="false" />
+  <arg name="enable_platooning" default="true" />
   <arg name="enable_manual_goal" default="true" />
   <arg name="enable_bev_tracking_hold" default="true" />
   <arg name="enable_bev_pipeline" default="true" />
-  <arg name="enable_heading_fuser" default="true" />
+  <arg name="enable_heading_fuser" default="false" />
   <!-- raw: camera-only BEV; fused: heading_fuser output -->
   <arg name="bev_topic_raw" default="/bev_info_raw" />
-  <arg name="bev_topic_teleport" default="/bev_info" />
+  <arg name="bev_topic_teleport" default="/bev_info_raw" />
   <arg name="enable_pid" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="vehicle_model" value="vehicle.vehicle.jetracer_red" />
+    <param name="enable_platoon_spawn" value="$(arg enable_platooning)" />
+    <param name="platoon_spawn_gap_m" value="4.0" />
+    <param name="spawn_min_separation_m" value="6.0" />
   </node>
 
   <!-- 2) Planner (simple) -->
@@ -37,9 +40,15 @@
   <node pkg="capstone_visualization" type="occupancy_grid_publisher.py" name="occupancy_grid_publisher" output="screen" />
 
   <!-- 3) Relay global_path_* -> planned_path_* -->
-  <node pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
+  <!-- 군집 OFF: 모든 차량에 대해 릴레이 -->
+  <node unless="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="ignore_roles" value="" />
+  </node>
+  <!-- 군집 ON: 리더(1번)만 릴레이, 팔로워는 플래툰 매니저가 퍼블리시 -->
+  <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_planner" type="path_relay.py" name="path_relay_platoon" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="ignore_roles" value="ego_vehicle_2,ego_vehicle_3" />
   </node>
 
   <!-- 3.5) Visualizer -->
@@ -73,7 +82,9 @@
   <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="4.0" />
-    <param name="target_speed" value="5.0" />
+    <param name="target_speed" value="4.0" />
+    <param name="use_speed_override" value="$(arg enable_platooning)" />
+    <param name="speed_override_timeout" value="0.5" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
     <param name="low_voltage_threshold" value="5.0" />
     <param name="parking_dest_x" value="-25.0" />
@@ -81,6 +92,28 @@
     <param name="parking_speed" value="3.0" />
     <param name="parking_speed_radius" value="8.0" />
     <param name="parking_stop_radius" value="3.0" />
+  </node>
+
+  <!-- 4.2) 간단 플래툰 매니저: 1번 경로 공유 + 속도 오버라이드 -->
+  <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_control" type="simple_platoon_manager.py" name="simple_platoon_manager" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="leader_role" value="ego_vehicle_1" />
+    <param name="follower_roles" value="ego_vehicle_2,ego_vehicle_3" />
+    <!-- path_relay가 planned_path_1을 퍼블리시하므로 이를 소스로 사용 -->
+    <param name="path_source_topic" value="/planned_path_ego_vehicle_1" />
+    <param name="desired_gap_m" value="5.0" />
+    <param name="max_speed_mps" value="10.0" />
+    <!-- 0: 가속 제한 해제 -->
+    <param name="accel_limit_mps2" value="0.0" />
+    <param name="control_hz" value="30.0" />
+    <param name="republish_hz" value="0.0" />
+    <param name="min_follow_speed_mps" value="2.0" />
+    <param name="stop_gap_m" value="1.0" />
+    <param name="force_min_if_lead_moves" value="true" />
+    <param name="kp_follow" value="0.3" />
+    <param name="kd_follow" value="0.1" />
+    <!-- 리더 경로는 path_relay가 퍼블리시하므로 플래툰 매니저는 팔로워만 퍼블리시 -->
+    <param name="publish_leader_path" value="false" />
   </node>
 
   <!-- 4.5) BEV speed PID override (per-vehicle PID params) -->
@@ -94,16 +127,16 @@
     <!-- BEV speeds already look like m/s (2~13), so use scale 1.0 -->
     <param name="bev_speed_scale" value="1.0" />
     <!-- enable PID logging to confirm measurements are used -->
-    <param name="log_missing_measurement" value="true" />
-    <param name="log_measurement" value="true" />
+    <param name="log_missing_measurement" value="false" />
+    <param name="log_measurement" value="false" />
 
     <!-- Ackermann raw input from controller & final output to UDP sender -->
     <param name="cmd_raw_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd_raw" />
     <param name="cmd_out_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd" />
 
     <!-- default PID / limits (fallback when vehicle override not provided) -->
-    <param name="default/kp" value="1.0" />
-    <param name="default/ki" value="0.2" />
+    <param name="default/kp" value="0.0" />
+    <param name="default/ki" value="0.0" />
     <param name="default/kd" value="0.0" />
     <param name="default/target_speed_mps" value="0.5" />
     <param name="default/min_speed_cmd" value="0.0" />

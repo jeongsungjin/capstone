@@ -144,6 +144,8 @@ class SimpleUdpAckermannSender:
         if bool(v["angle_invert"]):
             send_angle = -send_angle
         sp = speed * float(v["speed_scale"])
+        # 강제 속도 범위 클램프(4.0~5.0)
+        sp = max(4.0, min(5.0, float(sp)))
 
         if self.send_speed_as_float:
             xy_speed = max(-50.0, min(50.0, float(sp)))

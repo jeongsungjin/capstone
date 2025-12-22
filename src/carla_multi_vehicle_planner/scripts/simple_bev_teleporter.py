@@ -30,8 +30,12 @@ class SimpleBevTeleporter:
 		self.host = rospy.get_param("~carla_host", "localhost")
 		self.port = int(rospy.get_param("~carla_port", 2000))
 		self.max_vehicle_count = max(1, min(6, int(rospy.get_param("~max_vehicle_count", 1))))
-		self.default_z = float(rospy.get_param("~default_z", 0.5))
+		self.default_z = float(rospy.get_param("~default_z", 0.3))
 		self.yaw_in_degrees = bool(rospy.get_param("~yaw_in_degrees", False))
+		# ENU(CCW) → CARLA(CW) 변환이 필요하면 True로 설정
+		self.yaw_flip_sign = bool(rospy.get_param("~yaw_flip_sign", False))
+		self._last_stamp = None
+		self._last_seq = None
 
 		self.client = carla.Client(self.host, self.port)
 		self.client.set_timeout(5.0)
@@ -41,7 +45,8 @@ class SimpleBevTeleporter:
 		self.role_to_actor: Dict[str, carla.Actor] = {}
 		self._refresh_role_actors()
 
-		rospy.Subscriber(self.topic, BEVInfo, self._bev_cb, queue_size=1)
+		# 최신 메시지만 사용하도록 queue_size=1, tcp_nodelay
+		rospy.Subscriber(self.topic, BEVInfo, self._bev_cb, queue_size=1, tcp_nodelay=True)
 		rospy.loginfo("SimpleBevTeleporter: listening %s for up to %d roles (%s)",
 		              self.topic, self.max_vehicle_count, ",".join(self.role_names))
 
@@ -69,22 +74,49 @@ class SimpleBevTeleporter:
 		return self.role_to_actor.get(role)
 
 	def _bev_cb(self, msg: BEVInfo) -> None:
-		n = int(min(self.max_vehicle_count, msg.detCounts))
+		# 강제로 0번 인덱스만 사용 (단일 차량 텔레포트)
+		n = 1
 		if n <= 0:
 			return
-		if len(msg.center_xs) < n or len(msg.center_ys) < n or len(msg.yaws) < n:
+		if len(msg.center_xs) < 1 or len(msg.center_ys) < 1 or len(msg.yaws) < 1:
+			rospy.logwarn_throttle(1.0, "BEV message missing fields: detCounts=%d, lens=(%d,%d,%d)",
+			                       msg.detCounts, len(msg.center_xs), len(msg.center_ys), len(msg.yaws))
 			return
+		stamp = msg.header.stamp
+		seq = msg.header.seq
+		if self._last_seq is not None and seq <= self._last_seq:
+			return
+		self._last_seq = seq
+		now = rospy.Time.now()
+		age = (now - stamp).to_sec()
+		if age > 0.3:
+			return
+		if self._last_stamp is not None:
+			if stamp == self._last_stamp:
+				return
+			dt = (stamp - self._last_stamp).to_sec()
+			if dt <= 0:
+				return
+		self._last_stamp = stamp
 		for i in range(n):
 			role = self.role_names[i]
 			actor = self._get_actor(role)
 			if actor is None:
+				rospy.logwarn_throttle(1.0, "teleport skip: actor %s not found", role)
 				continue
 			try:
-				x = float(msg.center_xs[i])
-				y = float(msg.center_ys[i])
-				raw_yaw = float(msg.yaws[i])
+				idx = 0  # 강제로 첫 번째 검출만 사용
+				x = float(msg.center_xs[idx])
+				y = float(msg.center_ys[idx])
+				raw_yaw = float(msg.yaws[idx])
 				yaw_rad = math.radians(raw_yaw) if self.yaw_in_degrees else raw_yaw
 				yaw_deg = math.degrees(yaw_rad)
+				if self.yaw_flip_sign:
+					yaw_deg = -yaw_deg
+				while yaw_deg > 180.0:
+					yaw_deg -= 360.0
+				while yaw_deg < -180.0:
+					yaw_deg += 360.0
 				location = carla.Location(x=x, y=y, z=self.default_z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)

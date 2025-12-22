@@ -102,16 +102,16 @@ class HeadingFuserNode:
                 # Optional skew guard (disabled if max_skew<=0)
                 if self.max_skew > 0.0 and st.last_imu_stamp != rospy.Time(0):
                     skew = abs((msg.header.stamp - st.last_imu_stamp).to_sec())
-                    if skew > self.max_skew:
-                        fused_yaws.append(st.psi)
-                        rospy.logwarn_throttle(
-                            1.0,
-                            "[HeadingFuser] skip correction vid=%d skew=%.3fs>%.3fs",
-                            vid,
-                            skew,
-                            self.max_skew,
-                        )
-                        continue
+                    # if skew > self.max_skew:
+                    #     fused_yaws.append(st.psi)
+                    #     rospy.logwarn_throttle(
+                    #         1.0,
+                    #         "[HeadingFuser] skip correction vid=%d skew=%.3fs>%.3fs",
+                    #         vid,
+                    #         skew,
+                    #         self.max_skew,
+                    #     )
+                        # continue
 
                 # Correction
                 e = wrap_angle_rad(yaw_obs - st.psi)
@@ -122,12 +122,12 @@ class HeadingFuserNode:
         out.yaws = fused_yaws
         self.pub.publish(out)
 
-        rospy.logdebug_throttle(
-            1.0,
-            "[HeadingFuser] frame=%d det=%d",
-            out.frame_seq,
-            out.detCounts,
-        )
+        # rospy.loginfo_throttle(
+        #     1.0,
+        #     "[HeadingFuser] frame=%d det=%d",
+        #     out.frame_seq,
+        #     out.detCounts,
+        # )
 
 
 if __name__ == "__main__":

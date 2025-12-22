@@ -88,7 +88,10 @@ class MultiVehicleSpawner:
         self.align_spawn_heading = bool(rospy.get_param("~align_spawn_heading", True))
         self.spawn_heading_offset_deg = float(rospy.get_param("~spawn_heading_offset_deg", 0.0))
 
-        # platoon parameters removed
+        # 간단 플래툰 스폰: 첫 차량 기준으로 일정 간격 뒤에 줄세우기
+        self.enable_platoon_spawn = bool(rospy.get_param("~enable_platoon_spawn", False))
+        self.platoon_spawn_gap_m = float(rospy.get_param("~platoon_spawn_gap_m", 8.0))
+        self.platoon_spawn_use_base_heading = bool(rospy.get_param("~platoon_spawn_use_base_heading", True))
 
         self.client = carla.Client("localhost", 2000)
         self.client.set_timeout(10.0)
@@ -235,12 +238,52 @@ class MultiVehicleSpawner:
         except Exception:
             pass
 
+    @staticmethod
+    def _offset_transform(base_tf: "carla.Transform", back_dist: float, use_base_heading: bool) -> "carla.Transform":
+        tf = carla.Transform(base_tf.location, base_tf.rotation)
+        yaw_deg = tf.rotation.yaw if use_base_heading else base_tf.rotation.yaw
+        yaw_rad = math.radians(yaw_deg)
+        dx = math.cos(yaw_rad)
+        dy = math.sin(yaw_rad)
+        tf.location.x -= dx * back_dist
+        tf.location.y -= dy * back_dist
+        return tf
+
+    def _platoon_transform_from_base(self, base_wp: Optional["carla.Waypoint"], idx: int) -> Optional["carla.Transform"]:
+        """
+        base_wp: 리더 차량이 스폰된 차선상의 waypoint
+        idx: 0-based vehicle index (0 = leader). follower idx>=1
+        """
+        if base_wp is None or self.carla_map is None:
+            return None
+        if idx <= 0:
+            return base_wp.transform
+        dist = max(0.5, float(self.platoon_spawn_gap_m)) * float(idx)
+        try:
+            prev_list = base_wp.previous(dist)
+        except Exception:
+            prev_list = []
+        if not prev_list:
+            return None
+        wp = prev_list[0]
+        tf = wp.transform
+        # optional heading offset
+        tf.rotation.yaw += float(self.spawn_heading_offset_deg)
+        try:
+            tf.location.z = float(tf.location.z) + float(self.spawn_z_offset_m)
+        except Exception:
+            pass
+        return tf
+
     def spawn_vehicles(self):
         self._used_spawn_indices.clear()
         blueprint_library = self.world.get_blueprint_library()
         model_map = self._build_model_map()
         if self.enable_autopilot:
             self._configure_tm_globals()
+
+        base_transform: Optional[carla.Transform] = None
+        base_waypoint: Optional[carla.Waypoint] = None
 
         for index in range(self.num_vehicles):
             role_name = f"ego_vehicle_{index + 1}"
@@ -272,7 +315,26 @@ class MultiVehicleSpawner:
 
             seed_hint = self._spawn_rng.random() if self.randomize_spawn else None
 
+            # 후보 변환 목록 구성: 플래툰 간격 우선, 실패 시 기존 스폰 후보 순회
+            candidates = []
+            if (
+                self.enable_platoon_spawn
+                and base_transform is not None
+                and base_waypoint is not None
+                and self.platoon_spawn_gap_m > 0.0
+            ):
+                platoon_tf = self._platoon_transform_from_base(base_waypoint, index)
+                if platoon_tf is not None:
+                    candidates.append((platoon_tf, None))
+                else:
+                    gap = float(self.platoon_spawn_gap_m) * float(index)
+                    platoon_tf = self._offset_transform(base_transform, gap, self.platoon_spawn_use_base_heading)
+                    candidates.append((platoon_tf, None))
+
             for transform, spawn_index in self._iter_candidate_transforms(seed_hint):
+                candidates.append((transform, spawn_index))
+
+            for transform, spawn_index in candidates:
                 aligned_transform = self._align_heading_to_lane(transform)
                 # Lift Z slightly to avoid immediate collisions with ground/props on custom maps
                 try:
@@ -280,24 +342,37 @@ class MultiVehicleSpawner:
                 except Exception:
                     pass
                 # Enforce minimum separation from previously spawned vehicles
-                too_close = False
-                for _role, (prev_tf, _idx) in self.spawned_transforms.items():
-                    dx = aligned_transform.location.x - prev_tf.location.x
-                    dy = aligned_transform.location.y - prev_tf.location.y
-                    dz = aligned_transform.location.z - prev_tf.location.z
-                    if math.sqrt(dx * dx + dy * dy + dz * dz) < max(0.0, self.spawn_min_separation_m):
-                        too_close = True
-                        break
-                if too_close:
-                    self._consume_spawn_index(spawn_index)
-                    continue
+                if spawn_index is not None:  # 지도 스폰포인트 후보에만 분리 거리 적용
+                    too_close = False
+                    for _role, (prev_tf, _idx) in self.spawned_transforms.items():
+                        dx = aligned_transform.location.x - prev_tf.location.x
+                        dy = aligned_transform.location.y - prev_tf.location.y
+                        dz = aligned_transform.location.z - prev_tf.location.z
+                        if math.sqrt(dx * dx + dy * dy + dz * dz) < max(0.0, self.spawn_min_separation_m):
+                            too_close = True
+                            break
+                    if too_close:
+                        self._consume_spawn_index(spawn_index)
+                        continue
                 vehicle = self.world.try_spawn_actor(blueprint, aligned_transform)
                 if vehicle is not None:
                     chosen_transform = aligned_transform
                     chosen_index = spawn_index
-                    self._consume_spawn_index(spawn_index)
+                    if spawn_index is not None:
+                        self._consume_spawn_index(spawn_index)
+                    if base_transform is None:
+                        base_transform = aligned_transform
+                        try:
+                            base_waypoint = self.carla_map.get_waypoint(
+                                aligned_transform.location,
+                                project_to_road=True,
+                                lane_type=carla.LaneType.Driving,
+                            )
+                        except Exception:
+                            base_waypoint = None
                     break
-                self._consume_spawn_index(spawn_index)
+                if spawn_index is not None:
+                    self._consume_spawn_index(spawn_index)
                 time.sleep(0.1)
 
             if vehicle is None:

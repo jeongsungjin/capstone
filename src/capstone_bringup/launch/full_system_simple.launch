@@ -5,7 +5,7 @@
   <arg name="enable_heading_fuser" default="true" />
   <!-- raw camera BEV vs fused heading BEV -->
   <arg name="bev_topic_raw" default="/bev_info_raw" />
-  <arg name="bev_topic_teleport" default="/bev_info" />
+  <arg name="bev_topic_teleport" default="/bev_info_raw" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">

@@ -25,6 +25,7 @@ catkin_package()
 
 catkin_install_python(PROGRAMS
   scripts/simple_multi_vehicle_controller.py
+  scripts/simple_platoon_manager.py
   scripts/simple_udp_ackermann_sender.py
 DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
