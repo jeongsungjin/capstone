@@ -30,12 +30,13 @@ class SimpleBevTeleporter:
 		self.host = rospy.get_param("~carla_host", "localhost")
 		self.port = int(rospy.get_param("~carla_port", 2000))
 		self.max_vehicle_count = max(1, min(6, int(rospy.get_param("~max_vehicle_count", 1))))
-		self.default_z = float(rospy.get_param("~default_z", 0.3))
+		self.default_z = float(rospy.get_param("~default_z", -1.5))
 		self.yaw_in_degrees = bool(rospy.get_param("~yaw_in_degrees", False))
 		# ENU(CCW) → CARLA(CW) 변환이 필요하면 True로 설정
-		self.yaw_flip_sign = bool(rospy.get_param("~yaw_flip_sign", False))
 		self._last_stamp = None
 		self._last_seq = None
+		self.disable_collisions = bool(rospy.get_param("~disable_collisions", True))
+		self._collision_disabled: Dict[str, bool] = {}
 
 		self.client = carla.Client(self.host, self.port)
 		self.client.set_timeout(5.0)
@@ -104,6 +105,15 @@ class SimpleBevTeleporter:
 			if actor is None:
 				rospy.logwarn_throttle(1.0, "teleport skip: actor %s not found", role)
 				continue
+			if self.disable_collisions and not self._collision_disabled.get(role, False):
+				try:
+					if hasattr(actor, "set_collision_enabled"):
+						actor.set_collision_enabled(False)
+					if hasattr(actor, "set_simulate_physics"):
+						actor.set_simulate_physics(False)
+					self._collision_disabled[role] = True
+				except Exception:
+					pass
 			try:
 				idx = 0  # 강제로 첫 번째 검출만 사용
 				x = float(msg.center_xs[idx])
@@ -111,12 +121,8 @@ class SimpleBevTeleporter:
 				raw_yaw = float(msg.yaws[idx])
 				yaw_rad = math.radians(raw_yaw) if self.yaw_in_degrees else raw_yaw
 				yaw_deg = math.degrees(yaw_rad)
-				if self.yaw_flip_sign:
-					yaw_deg = -yaw_deg
-				while yaw_deg > 180.0:
-					yaw_deg -= 360.0
-				while yaw_deg < -180.0:
-					yaw_deg += 360.0
+
+
 				location = carla.Location(x=x, y=y, z=self.default_z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)

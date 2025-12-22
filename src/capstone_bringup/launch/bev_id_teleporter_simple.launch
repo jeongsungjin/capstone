@@ -1,7 +1,7 @@
 <launch>
   <arg name="num_vehicles" default="3" />
   <!-- Use fused heading BEV (or raw if fuser disabled); default /bev_info -->
-  <arg name="bev_topic" default="/bev_info" />
+  <arg name="bev_topic" default="/bev_info_raw" />
 
   <include file="$(find carla_multi_vehicle_planner)/launch/bev_id_teleporter_simple.launch">
     <arg name="max_vehicle_count" value="$(arg num_vehicles)" />

@@ -9,7 +9,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
 from std_msgs.msg import Header
 from std_msgs.msg import Bool
-from capstone_msgs.msg import Uplink  # type: ignore
+from capstone_msgs.msg import Uplink, BEVInfo  # type: ignore
 
 try:
     from carla_multi_vehicle_control.msg import TrafficLightPhase, TrafficApproach  # type: ignore
@@ -47,19 +47,26 @@ class SimpleMultiVehicleController:
         self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
         # Curvature-adaptive lookahead (straight: large, sharp turn: small)
-        self.ld_min = float(rospy.get_param("~ld_min", 0.5))
-        self.ld_max = float(rospy.get_param("~ld_max", 3.0))
+        self.ld_min = float(rospy.get_param("~ld_min", 0.6))
+        self.ld_max = float(rospy.get_param("~ld_max", 3.5))
         self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
-        self.ld_window_m = float(rospy.get_param("~ld_window_m", 5.0))
+        self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
         # 곡률 기반 조향 스케일링 + 스티어 저역통과 필터
-        self.curv_steer_gain = float(rospy.get_param("~curv_steer_gain", 1.0))  # steer *= 1 + gain*|kappa|
-        self.steer_lpf_alpha = float(rospy.get_param("~steer_lpf_alpha", 0.3))  # 0~1, 작을수록 더 부드럽게
+        self.curv_steer_gain = float(rospy.get_param("~curv_steer_gain", 0.35))  # steer *= 1 + gain*|kappa|
+        self.steer_lpf_alpha = float(rospy.get_param("~steer_lpf_alpha", 0.12))  # 0~1, 작을수록 더 부드럽게
         self._steer_lpf_prev: Dict[str, float] = {}
+        # 오실레이션 억제용
+        self.alpha_deadband = float(rospy.get_param("~alpha_deadband", 0.06))  # rad, 작은 alpha 무시
+        self.steer_rate_limit = float(rospy.get_param("~steer_rate_limit", 0.7))  # rad/s, 0이면 미사용
+        self._last_steer_cmd: Dict[str, float] = {}
+        self._last_steer_time: Dict[str, float] = {}
+        # 포즈 예측(지연 보상) horizon [s]. 0이면 사용 안 함.
+        self.predict_pose_horizon_s = float(rospy.get_param("~predict_pose_horizon_s", 0.2))
         self.target_speed = float(rospy.get_param("~target_speed", 20.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         # Low-voltage speed gating + parking slowdown
@@ -102,6 +109,8 @@ class SimpleMultiVehicleController:
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
         self._speed_override: Dict[str, Dict[str, float]] = {}
+        # 외부 추정 속도(BEV 등) 저장 (m/s)
+        self._ext_speed: Dict[str, float] = {}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -109,6 +118,7 @@ class SimpleMultiVehicleController:
                 "path": [],  # List[(x, y)]
                 "position": None,
                 "orientation": None,
+                "twist": None,
                 "current_index": 0,
                 "s_profile": [],
                 "progress_s": 0.0,
@@ -137,6 +147,8 @@ class SimpleMultiVehicleController:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
         rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
         rospy.Subscriber("/emergency_stop", Bool, self._e_stop_cb, queue_size=5)
+        # 외부 추정 속도(BEV) 입력
+        rospy.Subscriber("/bev_info_raw", BEVInfo, self._ext_speed_cb, queue_size=1)
 
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
@@ -192,11 +204,24 @@ class SimpleMultiVehicleController:
         st = self.states[role]
         st["position"] = msg.pose.pose.position
         st["orientation"] = msg.pose.pose.orientation
+        st["twist"] = msg.twist.twist
         # also publish pose for tools
         pose_msg = PoseStamped()
         pose_msg.header = msg.header
         pose_msg.pose = msg.pose.pose
         self.pose_publishers[role].publish(pose_msg)
+
+    def _ext_speed_cb(self, msg: BEVInfo, role: str = None) -> None:
+        # 단일 차량 기준으로 첫 검출 속도만 사용
+        if msg.detCounts <= 0 or not msg.speeds_mps:
+            return
+        try:
+            v = float(msg.speeds_mps[0])
+        except Exception:
+            return
+        # 모든 차량에 동일한 외부 속도를 공유 (단일차량 사용)
+        for r in self.states.keys():
+            self._ext_speed[r] = v
 
     def _speed_override_cb(self, msg: AckermannDrive, role: str) -> None:
         """
@@ -427,6 +452,29 @@ class SimpleMultiVehicleController:
         if ref is None:
             return None, None
         fx, fy, yaw = ref
+        # 지연 보상을 위한 포즈 예측 (옵션)
+        if self.predict_pose_horizon_s > 1e-3:
+            twist = st.get("twist")
+            v_ext = self._ext_speed.get(role, None)
+            v = None
+            if v_ext is not None:
+                v = float(v_ext)
+            elif twist is not None:
+                vx = float(getattr(twist.linear, "x", 0.0))
+                vy = float(getattr(twist.linear, "y", 0.0))
+                v = math.hypot(vx, vy)
+            if v is not None:
+                wz = 0.0
+                if twist is not None:
+                    wz = float(getattr(twist.angular, "z", 0.0))
+                dt = self.predict_pose_horizon_s
+                fx += v * math.cos(yaw) * dt
+                fy += v * math.sin(yaw) * dt
+                yaw += wz * dt
+                while yaw > math.pi:
+                    yaw -= 2.0 * math.pi
+                while yaw < -math.pi:
+                    yaw += 2.0 * math.pi
         prev_s = float(st.get("progress_s", 0.0))
         proj = self._project_progress(
             path,
@@ -467,17 +515,20 @@ class SimpleMultiVehicleController:
         tx, ty = self._select_target(st, fx, fy, lookahead_override=ld_dynamic)
         dx = tx - fx
         dy = ty - fy
-        alpha = math.atan2(dy, dx) - yaw
-        while alpha > math.pi:
-            alpha -= 2.0 * math.pi
-        while alpha < -math.pi:
-            alpha += 2.0 * math.pi
+        alpha_raw = math.atan2(dy, dx) - yaw
+        while alpha_raw > math.pi:
+            alpha_raw -= 2.0 * math.pi
+        while alpha_raw < -math.pi:
+            alpha_raw += 2.0 * math.pi
+        alpha = alpha_raw
+        if abs(alpha) < self.alpha_deadband:
+            alpha = 0.0
         Ld = math.hypot(dx, dy)
         if Ld < 1e-3:
             return 0.0, 0.0
         steer = math.atan2(2.0 * self.wheelbase * math.sin(alpha), Ld)
         # 곡률 기반 스케일링: 가까운 한 점 대신 조금 더 긴 구간의 경로 곡률을 사용
-        kappa = abs(self._estimate_path_curvature(st, fallback_alpha=alpha, fallback_Ld=Ld))
+        kappa = abs(self._estimate_path_curvature(st, fallback_alpha=alpha_raw, fallback_Ld=Ld))
         steer *= (1.0 + max(0.0, self.curv_steer_gain) * kappa)
         # 명령 상한으로 클램프 (라디안)
         steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
@@ -493,6 +544,27 @@ class SimpleMultiVehicleController:
         prev = self._steer_lpf_prev.get(role, steer)
         steer = alpha_lpf * steer + (1.0 - alpha_lpf) * prev
         self._steer_lpf_prev[role] = steer
+        # 스티어 레이트 리밋 적용
+        if self.steer_rate_limit > 0.0:
+            now = rospy.Time.now().to_sec()
+            last_t = self._last_steer_time.get(role, now)
+            dt = max(1e-3, now - last_t)
+            max_d = self.steer_rate_limit * dt
+            last_steer = self._last_steer_cmd.get(role, steer)
+            steer = max(last_steer - max_d, min(last_steer + max_d, steer))
+            self._last_steer_cmd[role] = steer
+            self._last_steer_time[role] = now
+        rospy.loginfo_throttle(
+            0.5,
+            "%s steer raw=%.3f filt=%.3f kappa=%.3f Ld=%.2f alpha=%.3f v_pred=%.2f",
+            role,
+            prev if alpha_lpf < 1.0 else steer,
+            steer,
+            kappa,
+            Ld,
+            alpha,
+            v if 'v' in locals() and v is not None else -1.0,
+        )
         return steer, speed
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:

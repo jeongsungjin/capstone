@@ -161,10 +161,10 @@ class SimpleUdpAckermannSender:
         last_log = v.get("last_log", rospy.Time(0))
         if self.log_throttle_sec <= 0.0 or (now - last_log).to_sec() >= self.log_throttle_sec:
             di, dp = v.get("dest", ("", 0))
-            rospy.loginfo(
-                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
-                f"(mode={'float' if self.send_speed_as_float else 'int'})"
-            )
+            # rospy.loginfo(
+            #     f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
+            #     f"(mode={'float' if self.send_speed_as_float else 'int'})"
+            # )
             v["last_log"] = now
 
         fmt = FMT_FLOAT_FLOAT if self.send_speed_as_float else FMT_FLOAT_INT
