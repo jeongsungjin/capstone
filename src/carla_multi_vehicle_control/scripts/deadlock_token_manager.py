@@ -33,6 +33,7 @@ class DeadlockTokenManager:
         self.timer_hz = float(rospy.get_param("~check_hz", 5.0))
         self.path_topic_prefix = str(rospy.get_param("~path_topic_prefix", "/global_path_"))
         self.pose_topic_prefix = str(rospy.get_param("~pose_topic_prefix", "/"))
+        self.heading_gate_rad = abs(float(rospy.get_param("~heading_gate_deg", 110.0))) * math.pi / 180.0
 
         # 상태 캐시
         self._poses: Dict[int, Tuple[float, float, float]] = {}  # x, y, stamp_sec
@@ -153,7 +154,7 @@ class DeadlockTokenManager:
         return s, s_profile
 
     def _ahead_samples(self, path: List[Tuple[float, float]], s_profile: List[float], s_now: float, lookahead: float):
-        samples: List[Tuple[float, float]] = []
+        samples: List[Tuple[float, float, float]] = []
         if len(path) < 2 or not s_profile:
             return samples
         target = s_now
@@ -167,16 +168,19 @@ class DeadlockTokenManager:
             s0, s1 = s_profile[i], s_profile[i + 1]
             x0, y0 = path[i]
             x1, y1 = path[i + 1]
+            seg_heading = math.atan2(y1 - y0, x1 - x0)
             if s1 - s0 < 1e-6:
-                samples.append((x0, y0))
+                samples.append((x0, y0, seg_heading))
                 target += 0.5
                 continue
             t = (target - s0) / (s1 - s0)
             t = max(0.0, min(1.0, t))
-            samples.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+            samples.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, seg_heading))
             target += 0.5  # 0.5m 간격 샘플
         if samples:
-            samples.append(path[min(len(path) - 1, i + 1)])
+            end_idx = min(len(path) - 1, i + 1)
+            end_heading = math.atan2(path[end_idx][1] - path[end_idx - 1][1], path[end_idx][0] - path[end_idx - 1][0]) if end_idx >= 1 else 0.0
+            samples.append((path[end_idx][0], path[end_idx][1], end_heading))
         return samples
 
     def _path_clear(self, vid: int) -> bool:
@@ -195,9 +199,14 @@ class DeadlockTokenManager:
             if other_vid == vid:
                 continue
             ox, oy, _ = other_pose
-            for sx, sy in samples:
-                if math.hypot(ox - sx, oy - sy) <= self.safe_distance_m:
-                    return False
+            for sx, sy, shdg in samples:
+                dist = math.hypot(ox - sx, oy - sy)
+                if dist <= self.safe_distance_m:
+                    # 앞쪽 진행 방향 기준으로 헤딩 게이트 내에 있을 때만 차단
+                    bearing = math.atan2(oy - sy, ox - sx)
+                    diff = abs((bearing - shdg + math.pi) % (2.0 * math.pi) - math.pi)
+                    if diff <= self.heading_gate_rad:
+                        return False
         return True
 
     def _publish_override(self, vid: int, value: bool) -> None:
