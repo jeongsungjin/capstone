@@ -105,6 +105,10 @@ class GlobalPlanner(GlobalRoutePlanner):
         self._blocked_edges.clear()
         self._obstacle_locations.clear()
 
+    def mark_edge_blocked(self, edge: Tuple[int, int]) -> None:
+        """엣지를 차단 상태로 마킹"""
+        self._blocked_edges.add(edge)
+
     def is_blocked(self, node_id: int) -> bool:
         """노드가 차단되었는지 확인"""
         return node_id in self._blocked_nodes

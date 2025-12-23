@@ -14,6 +14,9 @@ from typing import List, Tuple, Optional
 import setup_carla_path  # noqa: F401
 import carla
 
+import rospy
+from geometry_msgs.msg import PoseArray, PoseStamped
+
 from frenet_path import FrenetPath
 
 
@@ -24,18 +27,268 @@ class ObstaclePlanner:
     GlobalPlanner와 함께 사용하여 장애물 회피 경로 생성 및 판단.
     """
 
-    def __init__(self, global_planner):
+    def __init__(self, global_planner, num_vehicles):
         """
         Args:
             global_planner: GlobalPlanner 인스턴스
         """
         self._global_planner = global_planner
+        self.route_planner = global_planner  # 호환성 alias
+
+        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 5.0))  # 경로 차단용 반경
+        self.obstacle_collision_radius = float(rospy.get_param("~obstacle_collision_radius", 1.0))  # 회피 경로 충돌 검사용 반경
+        self.obstacle_replan_threshold = float(rospy.get_param("~obstacle_replan_threshold", 30.0))
+        self.obstacle_stop_distance = float(rospy.get_param("~obstacle_stop_distance", 1.0))  # 장애물 앞 정지 거리
+        self.avoidance_margin_after = float(rospy.get_param("~avoidance_margin_after", 1.0))  # 장애물 뒤 복귀 마진
+
+        self.num_vehicles = num_vehicles
+        self._role_name = lambda index: f"ego_vehicle_{index + 1}"
+
+        self._avoidance_path_pubs: Dict[str, Dict[float, rospy.Publisher]] = {}  # role -> {d: Publisher}
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            self._avoidance_path_pubs[role] = {}
+            for d in range(-20, 40, 5):
+                d /= 10
+                avoidance_topic = f"/avoidance_path_{role}_d{d:.1f}".replace("-", "n").replace(".", "_")
+                self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
+
+        # 장애물로 인해 정지 중인 차량 추적 (role -> obstacle_pos)
+        self._obstacle_blocked_roles: Dict[str, Tuple[float, float]] = {}
         
-        # 회피 파라미터
-        self.d_offset = 3.5  # 횡방향 오프셋 (차선 폭의 절반 정도)
-        self.lookahead_m = 15.0  # 장애물 앞 거리
-        self.lookbehind_m = 5.0  # 장애물 뒤 거리
-        self.safety_radius = 2.0  # 점유 확인 시 안전 반경
+        # Obstacle subscriber
+        self.is_obstacle_list_changed = False
+        self._obstacles: List[Tuple[float, float, float]] = []
+        rospy.Subscriber("/obstacles", PoseArray, self._obstacle_cb, queue_size=1)
+
+        # Overlap detection logging timer (for debugging)
+        self._overlap_log_interval = float(rospy.get_param("~overlap_log_interval", 5.0))
+        rospy.Timer(rospy.Duration(self._overlap_log_interval), self._log_overlap_detection_cb)
+        
+        # Vehicle route edges tracking (role -> [(n1, n2), ...])
+        self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
+
+    def _obstacle_cb(self, msg: PoseArray) -> None:
+        """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
+        new_obstacles = []
+        for pose in msg.poses:
+            new_obstacles.append((pose.position.x, pose.position.y, pose.position.z))
+        
+        self.is_obstacle_list_changed = self.obstacle_changed(new_obstacles)
+        
+        # 장애물 변화 감지
+        if self.is_obstacle_list_changed:
+            rospy.loginfo(f"Obstacles changed: {len(self._obstacles)} -> {len(new_obstacles)}")
+            self._obstacles = new_obstacles
+            self._update_blocked_nodes()
+
+    def obstacle_changed(self, new_obstacles):
+        if len(new_obstacles) != len(self._obstacles):
+            return True
+        
+        for new, old in zip(sorted(new_obstacles), sorted(self._obstacles)):
+            if math.hypot(new[0] - old[0], new[1] - old[1]) > 1.0:
+                return True
+
+        return False
+
+    def _update_blocked_nodes(self) -> None:
+        """장애물 위치로 차단 노드/엣지 업데이트 (node_list 기반)"""
+        if not hasattr(self.route_planner, 'clear_obstacles'):
+            rospy.logwarn("route_planner does not have clear_obstacles method")
+            return
+        
+        self.route_planner.clear_obstacles()
+        
+        # 모든 차량의 경로 엣지와 장애물 비교
+        for ox, oy, oz in self._obstacles:
+            obstacle_loc = carla.Location(x=ox, y=oy, z=oz)
+            blocked_count = 0
+            
+            # 각 차량의 route edges에서 장애물과 가까운 엣지 찾기
+            for role, edges in self._vehicle_route_edges.items():
+                for edge in edges:
+                    # 엣지의 waypoints와 장애물 거리 확인
+                    if self._is_edge_blocked_by_obstacle(edge, obstacle_loc):
+                        self.route_planner.mark_edge_blocked(edge)
+                        blocked_count += 1
+            
+            # fallback: edge 기반으로 못 찾으면 기존 방식 사용
+            if blocked_count == 0:
+                blocked = self.route_planner.add_obstacle_on_road(obstacle_loc, self.obstacle_radius)
+                edge = self.route_planner._localize(obstacle_loc)
+                rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked} nodes (fallback), edge={edge}")
+            else:
+                rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked_count} edges (node_list based)")
+
+    def _is_edge_blocked_by_obstacle(self, edge: Tuple[int, int], obstacle_loc) -> bool:
+        """엣지가 장애물에 의해 막혔는지 확인"""
+        if not hasattr(self.route_planner, '_graph'):
+            return False
+        
+        n1, n2 = edge
+        graph = self.route_planner._graph
+        
+        if not graph.has_edge(n1, n2):
+            return False
+        
+        # 엣지의 path (waypoints) 가져오기
+        edge_data = graph.edges[n1, n2]
+        path = edge_data.get('path', [])
+        
+        ox, oy = obstacle_loc.x, obstacle_loc.y
+        
+        for wp in path:
+            loc = wp.transform.location
+            if math.hypot(loc.x - ox, loc.y - oy) < self.obstacle_radius:
+                return True
+        
+        return False
+
+    def update_vehicle_edges_from_nodes(self, role: str, node_list) -> None:
+        """A* 노드 리스트에서 직접 엣지 추출하여 저장"""
+        if not node_list:
+            return
+        
+        # GlobalPlanner의 nodes_to_edges 사용
+        if hasattr(self.route_planner, 'nodes_to_edges'):
+            edges = self.route_planner.nodes_to_edges(node_list)
+        else:
+            # fallback: 직접 변환
+            edges = []
+            for i in range(len(node_list) - 1):
+                edges.append((node_list[i], node_list[i + 1]))
+        
+        if edges:
+            self._vehicle_route_edges[role] = edges
+            rospy.logdebug(f"{role}: updated {len(edges)} edges from node_list")
+
+    def _publish_avoidance_candidates(self, role: str, original_path: List[Tuple[float, float]], stop_idx: int, obstacle_idx: int) -> None:
+        """
+        회피 후보 경로들을 RViz에 시각화용으로 발행
+        - 정지점(stop_idx)에서 시작해서 장애물을 지나 복귀
+        
+        Args:
+            role: 차량 역할명
+            original_path: 원본 경로
+            stop_idx: 정지점 인덱스 (잘린 경로 끝)
+            obstacle_idx: 장애물이 있는 경로 인덱스
+        """
+        if len(original_path) < 10:
+            return
+        
+        try:            
+            # 회피 구간: 정지점 ~ 장애물 뒤 마진
+            margin_after_idx = int(self.avoidance_margin_after / 0.5)  # m → index (0.5m 간격)
+            start_idx = stop_idx
+            end_idx = min(len(original_path), obstacle_idx + margin_after_idx)
+            
+            # 정지점부터 장애물 지난 후까지 경로 추출
+            avoidance_segment = original_path[start_idx:end_idx]
+            
+            if len(avoidance_segment) < 5:
+                return
+            
+            # FrenetPath 생성
+            frenet = FrenetPath(avoidance_segment)
+            
+            # 회피 구간 (전체 구간 사용)
+            s_start = 0.5
+            s_end = frenet.total_length - 0.5
+            
+            if s_end <= s_start:
+                return
+            
+            # 회피 후보 생성 및 평가
+            candidates = []  # [(cost, d, path), ...]
+            
+            for d in range(-20, 40, 5):
+                d /= 10
+                avoidance_path = frenet.generate_avoidance_path(
+                    s_start=s_start,
+                    s_end=s_end,
+                    d_offset=d,
+                    num_points=max(20, int((s_end - s_start) / 0.5)),
+                    smooth_ratio=0.3
+                )
+                
+                if not avoidance_path or len(avoidance_path) < 2:
+                    continue
+                
+                # 충돌 검사: 경로가 장애물과 충돌하는지 확인
+                collision = False
+                for px, py in avoidance_path:
+                    for ox, oy, _ in self._obstacles:
+                        if math.hypot(px - ox, py - oy) < self.obstacle_collision_radius:
+                            collision = True
+                            break
+                    if collision:
+                        break
+                
+                # 코스트 계산: |d| / 0.5 (d=0이 가장 저렴)
+                d_cost = abs(d) / 0.5
+                
+                if not collision:
+                    candidates.append((d_cost, d, avoidance_path))
+                
+                # 시각화용 발행
+                msg = Path()
+                msg.header = Header(frame_id="map", stamp=rospy.Time.now())
+                for x, y in avoidance_path:
+                    p = PoseStamped()
+                    p.header = msg.header
+                    p.pose.position.x = x
+                    p.pose.position.y = y
+                    p.pose.position.z = 0.0
+                    msg.poses.append(p)
+                
+                if role in self._avoidance_path_pubs and d in self._avoidance_path_pubs[role]:
+                    self._avoidance_path_pubs[role][d].publish(msg)
+            
+            # 최적 경로 선택 (가장 낮은 코스트)
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                best_cost, best_d, best_path = candidates[0]
+                rospy.loginfo(f"[AVOIDANCE] {role}: best path d={best_d:.1f} (cost={best_cost:.1f}, {len(candidates)} valid)")
+                # TODO: 선택된 경로를 실제 주행에 사용
+            else:
+                rospy.logwarn(f"[AVOIDANCE] {role}: no collision-free path found!")
+            
+            rospy.loginfo(f"[AVOIDANCE] {role}: avoidance paths from stop_idx={stop_idx} to {end_idx} (obstacle at {obstacle_idx})")
+            
+        except Exception as e:
+            rospy.logwarn(f"[AVOIDANCE] {role}: failed to generate candidates: {e}")
+
+    def _log_overlap_detection_cb(self, _evt) -> None:
+        """주기적으로 반대 차선 중복 상태 로깅"""
+        if not hasattr(self.route_planner, 'find_opposite_lane_overlaps'):
+            return
+        
+        roles = list(self._vehicle_route_edges.keys())
+        if len(roles) < 2:
+            return
+        
+        for i, role_a in enumerate(roles):
+            edges_a = self._vehicle_route_edges.get(role_a, [])
+            if not edges_a:
+                continue
+            
+            for role_b in roles[i+1:]:
+                edges_b = self._vehicle_route_edges.get(role_b, [])
+                if not edges_b:
+                    continue
+                
+                overlaps = self.route_planner.find_opposite_lane_overlaps(edges_a, edges_b)
+                if overlaps:
+                    rospy.loginfo(
+                        f"[OVERLAP] {role_a} vs {role_b}: {len(overlaps)} opposite-lane overlaps detected"
+                    )
+                    for idx_a, edge_a, idx_b, edge_b in overlaps[:3]:  # 최대 3개만 로깅
+                        lane_a = self.route_planner._edge_to_lane.get(edge_a, "?")
+                        lane_b = self.route_planner._edge_to_lane.get(edge_b, "?")
+                        rospy.loginfo(
+                            f"  - {role_a}[{idx_a}] lane{lane_a} <-> {role_b}[{idx_b}] lane{lane_b}"
+                        )
 
     # ─────────────────────────────────────────────────────────────────────────
     # Avoidance Path Generation
