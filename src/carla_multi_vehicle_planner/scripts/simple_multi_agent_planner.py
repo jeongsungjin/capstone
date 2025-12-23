@@ -7,6 +7,7 @@ import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 from std_msgs.msg import Header
+from std_msgs.msg import String
 
 try:
     from capstone_msgs.msg import Uplink  # type: ignore
@@ -107,10 +108,22 @@ class SimpleMultiAgentPlanner:
         self._voltage: Dict[int, float] = {}
         # Low-voltage 단계 관리: idle -> to_buffer(low_voltage_dest) -> to_parking(parking_dest) -> parked
         self._lv_stage: Dict[str, str] = {self._role_name(i): "idle" for i in range(self.num_vehicles)}
+        # 수동 목적지 오버라이드 (PoseStamped에서 받음)
+        self._override_goal: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
+        self._override_active: Dict[str, bool] = {self._role_name(i): False for i in range(self.num_vehicles)}
+        self.override_clear_radius = float(rospy.get_param("~override_clear_radius", 3.0))
+        self.override_hold_sec = float(rospy.get_param("~override_hold_sec", 5.0))
+        self._override_hold_until: Dict[str, float] = {self._role_name(i): 0.0 for i in range(self.num_vehicles)}
 
         # Uplink subscriber
         if Uplink is not None:
             rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
+
+        # Override goal subscribers per vehicle
+        for index in range(self.num_vehicles):
+            role = self._role_name(index)
+            topic = f"/override_goal/{role}"
+            rospy.Subscriber(topic, PoseStamped, self._override_goal_cb, callback_args=role, queue_size=1)
 
         rospy.sleep(0.5)
         self._plan_once()
@@ -127,7 +140,53 @@ class SimpleMultiAgentPlanner:
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             front_loc = self._vehicle_front(vehicle)
+            # hold 중이면 스킵 (정지 유지)
+            hold_until = self._override_hold_until.get(role, 0.0)
+            if hold_until > 0.0:
+                if rospy.Time.now().to_sec() < hold_until:
+                    continue
+                else:
+                    self._override_hold_until[role] = 0.0
+                    # hold 종료 후 기존 path 제거 → 재계획 유도
+                    self._active_paths.pop(role, None)
+                    self._active_path_s.pop(role, None)
+                    self._active_path_len.pop(role, None)
+            # override goal가 있고 도착했다면 해제
+            if self._override_goal.get(role) is not None:
+                if front_loc.distance(self._override_goal[role]) <= max(0.5, float(self.override_clear_radius)):
+                    self._override_goal[role] = None
+                    self._override_active[role] = False
+                    hold_t = rospy.Time.now().to_sec() + max(0.0, float(self.override_hold_sec))
+                    self._override_hold_until[role] = hold_t
+                    # 정지용 path 퍼블리시(1포인트만 넣어 컨트롤러 속도 0 유도)
+                    stop_pts = [(front_loc.x, front_loc.y)]
+                    self._publish_path(stop_pts, role)
+                    self._store_active_path(role, stop_pts)
+                    rospy.loginfo(f"{role}: override goal reached -> hold for {self.override_hold_sec:.1f}s")
+                    continue
             dest_override = None
+            if self._override_active.get(role, False) and self._override_goal.get(role) is not None:
+                dest_override = self._override_goal[role]
+            # override가 활성인 동안에는 일반/저전압 재계획을 막고, 오버라이드 경로만 유지
+            if dest_override is not None:
+                current_path = self._active_paths.get(role)
+                # 이미 목적지가 path 끝에 충분히 가까우면 재계획하지 않음
+                if current_path and len(current_path) >= 2:
+                    last = current_path[-1]
+                    if math.hypot(last[0] - dest_override.x, last[1] - dest_override.y) <= max(1.0, self.start_join_max_gap_m):
+                        continue
+                    # 끝점이 멀면, 기존 경로의 마지막 점을 제외한 prefix로 한번만 append
+                    prefix = current_path[:-1] if len(current_path) > 1 else current_path
+                    if not self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix, dest_override=dest_override, force_direct=False):
+                        rospy.logwarn_throttle(5.0, f"{role}: failed to append override path")
+                    continue
+                else:
+                    # 경로가 없으면 현재 위치 기준으로 계획
+                    if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override, force_direct=False):
+                        rospy.logwarn_throttle(5.0, f"{role}: failed to plan override path")
+                    continue
+
+            # override가 없을 때만 저전압/일반 로직 수행
             stage = self._lv_stage.get(role, "idle")
             is_low = self._is_low_voltage(role)
             if is_low:
@@ -516,6 +575,19 @@ class SimpleMultiAgentPlanner:
         # Remember current destination for distance-gated replanning
         self._current_dest[role] = dest_loc
         return True
+
+    def _override_goal_cb(self, msg: PoseStamped, role: str) -> None:
+        try:
+            loc = carla.Location(
+                x=float(msg.pose.position.x),
+                y=float(msg.pose.position.y),
+                z=float(msg.pose.position.z),
+            )
+            self._override_goal[role] = loc
+            self._override_active[role] = True
+            rospy.loginfo(f"{role}: override goal set to ({loc.x:.2f},{loc.y:.2f})")
+        except Exception as exc:
+            rospy.logwarn_throttle(2.0, f"{role}: failed to set override goal: {exc}")
 
 if __name__ == "__main__":
     try:

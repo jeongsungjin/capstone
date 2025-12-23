@@ -18,6 +18,8 @@ catkin_install_python(PROGRAMS
   scripts/multi_vehicle_spawner.py
   scripts/simple_multi_agent_planner.py
   scripts/simple_bev_teleporter.py
+  scripts/destination_selector.py
+  scripts/destination_selector_gui.py
   scripts/key_selector.py
   scripts/rviz_goal_mux.py
   scripts/path_relay.py

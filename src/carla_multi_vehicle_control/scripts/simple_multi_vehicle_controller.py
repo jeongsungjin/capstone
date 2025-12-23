@@ -527,14 +527,14 @@ class SimpleMultiVehicleController:
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
         speed = self._apply_parking_speed_limit(role, st, speed)
-        rospy.loginfo_throttle(
-            0.5,
-            "%s steer=%.3f Ld=%.2f alpha=%.3f",
-            role,
-            steer,
-            Ld,
-            alpha,
-        )
+        # rospy.loginfo_throttle(
+        #     0.5,
+        #     "%s steer=%.3f Ld=%.2f alpha=%.3f",
+        #     role,
+        #     steer,
+        #     Ld,
+        #     alpha,
+        # )
         return steer, speed
 
 
