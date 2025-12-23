@@ -426,24 +426,11 @@ class GlobalPlanner(GlobalRoutePlanner):
             )
             route.append(end[1])
             return route
+
         except nx.NetworkXNoPath:
             return None
-        except nx.NodeNotFound:
-            return None
 
-    def trace_route_safe(self, origin, destination):
-        """
-        안전한 경로 탐색 - 실패 시 None 반환
-        
-        Returns:
-            [(waypoint, RoadOption), ...] 또는 None
-        """
-        try:
-            route = self._path_search(origin, destination)
-            if route is None:
-                return None
-            return self.trace_route(origin, destination)
-        except Exception:
+        except nx.NodeNotFound:
             return None
 
     def trace_route_with_nodes(self, origin, destination):
@@ -461,6 +448,7 @@ class GlobalPlanner(GlobalRoutePlanner):
                 return None, None
             route = self.trace_route(origin, destination)
             return route, node_list
+            
         except Exception:
             return None, None
 
