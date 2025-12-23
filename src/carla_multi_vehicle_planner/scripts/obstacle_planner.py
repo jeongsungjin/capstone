@@ -16,6 +16,8 @@ import carla
 
 import rospy
 from geometry_msgs.msg import PoseArray, PoseStamped
+from nav_msgs.msg import Path
+from std_msgs.msg import Header
 
 from frenet_path import FrenetPath
 
@@ -27,13 +29,15 @@ class ObstaclePlanner:
     GlobalPlanner와 함께 사용하여 장애물 회피 경로 생성 및 판단.
     """
 
-    def __init__(self, global_planner, num_vehicles):
+    def __init__(self, global_planner, num_vehicles, on_obstacle_change_callback=None):
         """
         Args:
             global_planner: GlobalPlanner 인스턴스
+            num_vehicles: 차량 수
+            on_obstacle_change_callback: 장애물 변화 시 호출할 콜백 함수
         """
-        self._global_planner = global_planner
-        self.route_planner = global_planner  # 호환성 alias
+        self.route_planner = global_planner
+        self._on_obstacle_change_callback = on_obstacle_change_callback
 
         self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 5.0))  # 경로 차단용 반경
         self.obstacle_collision_radius = float(rospy.get_param("~obstacle_collision_radius", 1.0))  # 회피 경로 충돌 검사용 반경
@@ -81,6 +85,13 @@ class ObstaclePlanner:
             rospy.loginfo(f"Obstacles changed: {len(self._obstacles)} -> {len(new_obstacles)}")
             self._obstacles = new_obstacles
             self._update_blocked_nodes()
+            
+            # 콜백 호출 - 즉시 회피 적용
+            if self._on_obstacle_change_callback is not None:
+                try:
+                    self._on_obstacle_change_callback()
+                except Exception as e:
+                    rospy.logwarn(f"on_obstacle_change_callback failed: {e}")
 
     def obstacle_changed(self, new_obstacles):
         if len(new_obstacles) != len(self._obstacles):
@@ -94,8 +105,10 @@ class ObstaclePlanner:
 
     def _update_blocked_nodes(self) -> None:
         """장애물 위치로 차단 노드/엣지 업데이트 (node_list 기반)"""
+        if self.route_planner is None:
+            return
         if not hasattr(self.route_planner, 'clear_obstacles'):
-            rospy.logwarn("route_planner does not have clear_obstacles method")
+            rospy.logwarn_throttle(10.0, "route_planner does not have clear_obstacles method")
             return
         
         self.route_planner.clear_obstacles()
@@ -123,7 +136,7 @@ class ObstaclePlanner:
 
     def _is_edge_blocked_by_obstacle(self, edge: Tuple[int, int], obstacle_loc) -> bool:
         """엣지가 장애물에 의해 막혔는지 확인"""
-        if not hasattr(self.route_planner, '_graph'):
+        if self.route_planner is None or not hasattr(self.route_planner, '_graph'):
             return False
         
         n1, n2 = edge
@@ -162,6 +175,180 @@ class ObstaclePlanner:
         if edges:
             self._vehicle_route_edges[role] = edges
             rospy.logdebug(f"{role}: updated {len(edges)} edges from node_list")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Path Avoidance Application (Main Entry Point)
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def apply_avoidance_to_path(
+        self, 
+        role: str, 
+        path: List[Tuple[float, float]]
+    ) -> Tuple[List[Tuple[float, float]], bool, float]:
+        """
+        경로에 회피 적용 (메인 진입점)
+        
+        Args:
+            role: 차량 역할명
+            path: 원본 경로 [(x, y), ...]
+            
+        Returns:
+            (modified_path, need_stop, stop_arc_length)
+            - modified_path: 회피 적용된 경로 또는 원본
+            - need_stop: 회피 불가능하여 정지 필요 여부
+            - stop_arc_length: 정지 필요 시 정지 지점까지의 arc-length (아니면 -1)
+        """
+        if not path or len(path) < 2:
+            return path, False, -1.0
+        
+        # 1. 경로에서 장애물 찾기
+        obstacle_info = self._find_obstacle_on_path(path)
+        if obstacle_info is None:
+            # 장애물 없음 → 그대로 반환
+            if role in self._obstacle_blocked_roles:
+                self._obstacle_blocked_roles.pop(role)
+            return path, False, -1.0
+        
+        obstacle_pos, obstacle_idx, dist_to_obstacle = obstacle_info
+        rospy.loginfo(f"[AVOIDANCE] {role}: obstacle at ({obstacle_pos[0]:.1f}, {obstacle_pos[1]:.1f}), path_idx={obstacle_idx}")
+        
+        # 2. 회피 경로 생성 시도
+        avoidance_result = self._generate_avoidance_segment(path, obstacle_idx)
+        
+        if avoidance_result is not None:
+            # 회피 성공 → 경로 교체
+            combined_path, best_d = avoidance_result
+            rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d:.1f}")
+            if role in self._obstacle_blocked_roles:
+                self._obstacle_blocked_roles.pop(role)
+            return combined_path, False, -1.0
+        
+        # 3. 회피 불가 → 정지 필요
+        stop_idx = max(0, obstacle_idx - int(self.obstacle_stop_distance / 0.5))
+        trimmed_path = path[:stop_idx + 1]
+        
+        # 정지 지점까지의 arc-length 계산
+        stop_arc_length = self._compute_arc_length(trimmed_path)
+        
+        self._obstacle_blocked_roles[role] = obstacle_pos
+        rospy.logwarn(f"[AVOIDANCE] {role}: no avoidance possible, stop at arc_length={stop_arc_length:.1f}m")
+        
+        return trimmed_path, True, stop_arc_length
+
+    def _find_obstacle_on_path(
+        self, 
+        path: List[Tuple[float, float]]
+    ) -> Optional[Tuple[Tuple[float, float], int, float]]:
+        """
+        경로에서 장애물 찾기
+        
+        Returns:
+            (obstacle_pos, path_idx, distance) 또는 None
+        """
+        if not self._obstacles:
+            return None
+        
+        best_match = None
+        min_dist = float('inf')
+        
+        for ox, oy, oz in self._obstacles:
+            for i, (px, py) in enumerate(path):
+                dist = math.hypot(ox - px, oy - py)
+                if dist < self.obstacle_radius + 2.0 and dist < min_dist:
+                    min_dist = dist
+                    best_match = ((ox, oy), i, dist)
+        
+        return best_match
+
+    def _generate_avoidance_segment(
+        self, 
+        path: List[Tuple[float, float]], 
+        obstacle_idx: int
+    ) -> Optional[Tuple[List[Tuple[float, float]], float]]:
+        """
+        장애물 구간을 Frenet 회피 경로로 교체
+        
+        Returns:
+            (combined_path, best_d) 또는 None (회피 불가)
+        """
+        if len(path) < 10:
+            return None
+        
+        try:
+            # 회피 구간 계산
+            stop_idx = max(0, obstacle_idx - int(self.obstacle_stop_distance / 0.5))
+            margin_after_idx = int(self.avoidance_margin_after / 0.5)
+            end_idx = min(len(path), obstacle_idx + margin_after_idx)
+            
+            avoidance_segment = path[stop_idx:end_idx]
+            if len(avoidance_segment) < 5:
+                return None
+            
+            # FrenetPath 생성
+            frenet = FrenetPath(avoidance_segment)
+            s_start = 0.5
+            s_end = frenet.total_length - 0.5
+            
+            if s_end <= s_start:
+                return None
+            
+            # 회피 후보 생성 및 평가
+            candidates = []
+            
+            for d_int in range(-20, 40, 5):
+                d = d_int / 10.0
+                avoidance_path = frenet.generate_avoidance_path(
+                    s_start=s_start,
+                    s_end=s_end,
+                    d_offset=d,
+                    num_points=max(20, int((s_end - s_start) / 0.5)),
+                    smooth_ratio=0.3
+                )
+                
+                if not avoidance_path or len(avoidance_path) < 2:
+                    continue
+                
+                # 충돌 검사
+                collision = False
+                for px, py in avoidance_path:
+                    for ox, oy, _ in self._obstacles:
+                        if math.hypot(px - ox, py - oy) < self.obstacle_collision_radius:
+                            collision = True
+                            break
+                    if collision:
+                        break
+                
+                if not collision:
+                    d_cost = abs(d) / 0.5
+                    candidates.append((d_cost, d, avoidance_path))
+            
+            if not candidates:
+                return None
+            
+            # 최적 경로 선택
+            candidates.sort(key=lambda x: x[0])
+            best_cost, best_d, best_avoidance = candidates[0]
+            
+            # 경로 조합: [시작~장애물전] + [회피경로] + [장애물후~끝]
+            combined = path[:stop_idx] + list(best_avoidance) + path[end_idx:]
+            
+            return combined, best_d
+            
+        except Exception as e:
+            rospy.logwarn(f"[AVOIDANCE] failed to generate avoidance: {e}")
+            return None
+
+    def _compute_arc_length(self, path: List[Tuple[float, float]]) -> float:
+        """경로의 총 arc-length 계산"""
+        if len(path) < 2:
+            return 0.0
+        
+        total = 0.0
+        for i in range(len(path) - 1):
+            dx = path[i+1][0] - path[i][0]
+            dy = path[i+1][1] - path[i][1]
+            total += math.hypot(dx, dy)
+        return total
 
     def _publish_avoidance_candidates(self, role: str, original_path: List[Tuple[float, float]], stop_idx: int, obstacle_idx: int) -> None:
         """
@@ -261,7 +448,7 @@ class ObstaclePlanner:
 
     def _log_overlap_detection_cb(self, _evt) -> None:
         """주기적으로 반대 차선 중복 상태 로깅"""
-        if not hasattr(self.route_planner, 'find_opposite_lane_overlaps'):
+        if self.route_planner is None or not hasattr(self.route_planner, 'find_opposite_lane_overlaps'):
             return
         
         roles = list(self._vehicle_route_edges.keys())
@@ -318,7 +505,9 @@ class ObstaclePlanner:
         lookbehind_m = lookbehind_m or self.lookbehind_m
         
         # 장애물 위치의 FrenetPath 가져오기
-        frenet = self._global_planner.get_frenet_path_for_location(obstacle_location)
+        if self.route_planner is None or not hasattr(self.route_planner, 'get_frenet_path_for_location'):
+            return None
+        frenet = self.route_planner.get_frenet_path_for_location(obstacle_location)
         if frenet is None:
             return None
         
@@ -351,7 +540,9 @@ class ObstaclePlanner:
         Returns:
             'left', 'right', 또는 None
         """
-        frenet = self._global_planner.get_frenet_path_for_location(obstacle_location)
+        if self.route_planner is None or not hasattr(self.route_planner, 'get_frenet_path_for_location'):
+            return None
+        frenet = self.route_planner.get_frenet_path_for_location(obstacle_location)
         if frenet is None:
             return None
         
