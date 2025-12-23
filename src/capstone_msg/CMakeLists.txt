@@ -52,5 +52,6 @@ include_directories(
 catkin_install_python(
   PROGRAMS
     src/uplink_fixed_publisher.py
+    src/udp_status_broadcaster.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
