@@ -154,7 +154,7 @@ class SimpleMultiAgentPlanner:
 
         # Uplink subscriber
         if Uplink is not None:
-            rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
+            rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
         
         # Obstacle subscriber
         self._obstacles: List[Tuple[float, float, float]] = []

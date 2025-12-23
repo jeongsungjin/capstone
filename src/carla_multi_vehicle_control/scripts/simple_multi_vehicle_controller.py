@@ -7,7 +7,7 @@ import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
-from std_msgs.msg import Header, Float32
+from std_msgs.msg import Header, Float32, Bool
 from capstone_msgs.msg import Uplink  # type: ignore
 
 try:
@@ -43,12 +43,8 @@ class SimpleMultiVehicleController:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
-        # Curvature-adaptive lookahead (straight: large, sharp turn: small)
-        self.ld_min = float(rospy.get_param("~ld_min", 0.5))
-        self.ld_max = float(rospy.get_param("~ld_max", 3.0))
-        self.ld_kappa_max = float(rospy.get_param("~ld_kappa_max", 0.3))  # rad per meter
-        self.ld_window_m = float(rospy.get_param("~ld_window_m", 3.0))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
@@ -70,6 +66,9 @@ class SimpleMultiVehicleController:
             0.0,
             min(math.pi, abs(self.progress_heading_limit_deg) * math.pi / 180.0),
         )
+        # Optional: 외부 속도 오버라이드(플래툰 등)
+        self.use_speed_override = bool(rospy.get_param("~use_speed_override", False))
+        self.speed_override_timeout = float(rospy.get_param("~speed_override_timeout", 0.5))
         # Traffic light gating (region-based hard stop)
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
@@ -92,6 +91,7 @@ class SimpleMultiVehicleController:
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
+        self._speed_override: Dict[str, Dict[str, float]] = {}
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -99,6 +99,7 @@ class SimpleMultiVehicleController:
                 "path": [],  # List[(x, y)]
                 "position": None,
                 "orientation": None,
+                "twist": None,
                 "current_index": 0,
                 "s_profile": [],
                 "progress_s": 0.0,
@@ -107,20 +108,29 @@ class SimpleMultiVehicleController:
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
-            cmd_topic = f"/carla/{role}/vehicle_control_cmd"
+            cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
             pose_topic = f"/{role}/pose"
             stop_topic = f"/obstacle_stop_{role}"
             rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
             rospy.Subscriber(stop_topic, Float32, self._obstacle_stop_cb, callback_args=role, queue_size=1)
+            if self.use_speed_override:
+                override_topic = f"/carla/{role}/vehicle_control_cmd_override"
+                rospy.Subscriber(
+                    override_topic,
+                    AckermannDrive,
+                    self._speed_override_cb,
+                    callback_args=role,
+                    queue_size=5,
+                )
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
 
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
-        rospy.Subscriber("/uplink", Uplink, self._uplink_cb, queue_size=10)
-
+        rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
+        rospy.Subscriber("/emergency_stop", Bool, self._e_stop_cb, queue_size=5)
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
 
@@ -143,6 +153,8 @@ class SimpleMultiVehicleController:
         st["s_profile"] = s_profile
         st["path_length"] = total_len
         st["progress_s"] = 0.0
+        st["progress_fail_count"] = 0
+        rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
         if rear is not None:
@@ -159,11 +171,21 @@ class SimpleMultiVehicleController:
                 s_now, idx = proj
                 st["progress_s"] = s_now
                 st["current_index"] = idx
+            else:
+                # 초기에 경로 투영 실패 시 바로 근처 점으로 스냅
+                snap = self._force_snap_progress(st, rx, ry)
+                if snap is not None:
+                    s_now, idx = snap
+                    st["progress_s"] = s_now
+                    st["current_index"] = idx
+                    st["progress_fail_count"] = 0
+                    rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         st = self.states[role]
         st["position"] = msg.pose.pose.position
         st["orientation"] = msg.pose.pose.orientation
+        st["twist"] = msg.twist.twist
         # also publish pose for tools
         pose_msg = PoseStamped()
         pose_msg.header = msg.header
@@ -179,6 +201,16 @@ class SimpleMultiVehicleController:
             rospy.loginfo_throttle(2.0, f"{role}: obstacle stop_s = {stop_s:.1f}m")
         else:
             rospy.loginfo_throttle(2.0, f"{role}: obstacle stop cleared")
+
+    def _speed_override_cb(self, msg: AckermannDrive, role: str) -> None:
+        """
+        외부에서 들어온 속도 오버라이드(AckermannDrive)의 speed 필드만 사용한다.
+        steering은 기본 컨트롤러 값을 그대로 사용한다.
+        """
+        self._speed_override[role] = {
+            "speed": float(getattr(msg, "speed", 0.0)),
+            "stamp": rospy.Time.now().to_sec(),
+        }
 
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
@@ -421,31 +453,25 @@ class SimpleMultiVehicleController:
                 2.0,
                 f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
             )
-            # If we have too many consecutive failures, try to hard-reset onto the path
-            if count >= 3:
-                reset = self._force_snap_progress(st, fx, fy)
-                if reset is not None:
-                    s_now, idx = reset
-                    st["progress_s"] = s_now
-                    st["current_index"] = idx
-                    st["progress_fail_count"] = 0
-                    rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after repeated projection failures")
+            # 즉시 경로로 스냅하여 조향이 바로 경로를 향하도록
+            reset = self._force_snap_progress(st, fx, fy)
+            if reset is not None:
+                s_now, idx = reset
+                st["progress_s"] = s_now
+                st["current_index"] = idx
+                st["progress_fail_count"] = 0
+                rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
         if proj is not None:
             st["progress_fail_count"] = 0
-        # Curvature-adaptive lookahead: reduce Ld on sharp turns, increase on straights
-        ld_dynamic = self.lookahead_distance
-        try:
-            ld_dynamic = self._compute_adaptive_lookahead(st)
-        except Exception:
-            ld_dynamic = self.lookahead_distance
-        tx, ty = self._select_target(st, fx, fy, lookahead_override=ld_dynamic)
+        tx, ty = self._select_target(st, fx, fy, lookahead_override=self.lookahead_distance)
         dx = tx - fx
         dy = ty - fy
-        alpha = math.atan2(dy, dx) - yaw
-        while alpha > math.pi:
-            alpha -= 2.0 * math.pi
-        while alpha < -math.pi:
-            alpha += 2.0 * math.pi
+        alpha_raw = math.atan2(dy, dx) - yaw
+        while alpha_raw > math.pi:
+            alpha_raw -= 2.0 * math.pi
+        while alpha_raw < -math.pi:
+            alpha_raw += 2.0 * math.pi
+        alpha = alpha_raw
         Ld = math.hypot(dx, dy)
         if Ld < 1e-3:
             return 0.0, 0.0
@@ -472,9 +498,20 @@ class SimpleMultiVehicleController:
         if dist_to_end is not None and dist_to_end <= 2.0:
             speed = 0.0
         
+        rospy.loginfo_throttle(
+            0.5,
+            "%s steer=%.3f Ld=%.2f alpha=%.3f",
+            role,
+            steer,
+            Ld,
+            alpha,
+        )
         return steer, speed
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
+        # 플래툰/외부 속도오버라이드 사용 시 충돌 정지 비활성화 (간섭 방지)
+        if self.use_speed_override:
+            return speed_cmd
         if not self.collision_stop_enable:
             return speed_cmd
         angle_th = abs(float(self.collision_stop_angle_deg)) * math.pi / 180.0
@@ -506,39 +543,6 @@ class SimpleMultiVehicleController:
                 return 0.0
         return speed_cmd
 
-    def _compute_adaptive_lookahead(self, st) -> float:
-        """
-        Compute curvature-adaptive lookahead within [ld_min, ld_max].
-        Map kappa (rad/m) to lookahead: L = Lmax - (Lmax-Lmin) * clamp(kappa/kappa_max, 0, 1)
-        """
-        path = st.get("path") or []
-        s_profile = st.get("s_profile") or []
-        idx = st.get("current_index", 0)
-        if len(path) < 3 or not s_profile:
-            return max(self.ld_min, min(self.ld_max, self.lookahead_distance))
-        # Find a forward index at least ld_window_m ahead in arc-length
-        s_now = float(st.get("progress_s", 0.0))
-        target_s = s_now + max(0.5, float(self.ld_window_m))
-        j = idx
-        while j + 1 < len(s_profile) and float(s_profile[j]) < target_s:
-            j += 1
-        j = min(j, len(path) - 1)
-        if j <= idx:
-            return max(self.ld_min, min(self.ld_max, self.lookahead_distance))
-        # Estimate heading change between segments around idx and j
-        def heading(p, q):
-            return math.atan2(q[1] - p[1], q[0] - p[0])
-        i2 = min(idx + 1, len(path) - 1)
-        j1 = max(j - 1, 0)
-        h0 = heading(path[idx], path[i2])
-        h1 = heading(path[j1], path[j])
-        dtheta = (h1 - h0 + math.pi) % (2.0 * math.pi) - math.pi
-        ds = max(1e-3, float(s_profile[j]) - float(s_profile[idx]))
-        kappa = abs(dtheta) / ds
-        ratio = max(0.0, min(1.0, kappa / max(1e-6, float(self.ld_kappa_max))))
-        L = float(self.ld_max) - (float(self.ld_max) - float(self.ld_min)) * ratio
-        return max(float(self.ld_min), min(float(self.ld_max), L))
-
     def _get_vehicle_max_steer(self, vehicle) -> float:
         # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
         try:
@@ -553,6 +557,9 @@ class SimpleMultiVehicleController:
         return max(1e-3, float(self.max_steer))
 
     def _apply_carla_control(self, vehicle, steer, speed):
+        if self.emergency_stop_active:
+            steer = 0.0
+            speed = 0.0
         control = carla.VehicleControl()
         # 차량 물리 최대각으로 정규화하여 CARLA [-1,1]에 매핑
         veh_max = self._get_vehicle_max_steer(vehicle)
@@ -590,6 +597,12 @@ class SimpleMultiVehicleController:
             self._voltage[int(msg.vehicle_id)] = float(msg.voltage)
         except Exception:
             pass
+
+    def _e_stop_cb(self, msg: Bool) -> None:
+        try:
+            self.emergency_stop_active = bool(msg.data)
+        except Exception:
+            self.emergency_stop_active = False
 
     def _is_low_voltage(self, role: str) -> bool:
         try:
@@ -650,9 +663,23 @@ class SimpleMultiVehicleController:
         return rem
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
-        msg.steering_angle = float(steer)
-        msg.speed = float(speed)
+        msg.steering_angle = float(0.0 if self.emergency_stop_active else steer)
+        msg.speed = float(0.0 if self.emergency_stop_active else speed)
         self.control_publishers[role].publish(msg)
+
+    def _get_speed_override(self, role: str) -> float:
+        if not self.use_speed_override:
+            return None
+        data = self._speed_override.get(role)
+        if not data:
+            return None
+        now = rospy.Time.now().to_sec()
+        if now - float(data.get("stamp", 0.0)) > max(0.0, self.speed_override_timeout):
+            return None
+        try:
+            return float(data.get("speed", 0.0))
+        except Exception:
+            return None
 
     def _control_loop(self, _evt) -> None:
         for role, st in self.states.items():
@@ -662,6 +689,9 @@ class SimpleMultiVehicleController:
             steer, speed = self._compute_control(st, vehicle, role)
             if steer is None:
                 continue
+            override_speed = self._get_speed_override(role)
+            if override_speed is not None:
+                speed = override_speed
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 

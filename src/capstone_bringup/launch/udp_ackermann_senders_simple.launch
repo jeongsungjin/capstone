@@ -1,13 +1,21 @@
 <launch>
   <arg name="num_vehicles" default="3" />
+  <!-- use float speed packets for finer resolution -->
+  <arg name="send_speed_as_float" default="true" />
+  <!-- RC car uses raw integer speed (4 worked as minimum), keep scale at 1 -->
+  <arg name="vehicle_1_speed_scale" default="1.0" />
+  <arg name="vehicle_1_speed_min_abs" default="0" />
   <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-    <arg name="vehicle_1_ip" default="10.30.75.44" />
+    <arg name="vehicle_1_ip" default="192.168.0.11" />
     <arg name="vehicle_2_ip" default="10.10.103.107" />
     <arg name="vehicle_3_ip" default="10.10.103.115" />
     <arg name="vehicle_4_ip" default="10.10.103.113" />
     <arg name="vehicle_5_ip" default="10.10.103.112" />
     <arg name="vehicle_6_ip" default="10.10.103.106" />
+    <arg name="send_speed_as_float" value="$(arg send_speed_as_float)" />
+    <arg name="vehicle_1_speed_scale" value="$(arg vehicle_1_speed_scale)" />
+    <arg name="vehicle_1_speed_min_abs" value="$(arg vehicle_1_speed_min_abs)" />
   </include>
 </launch>
 
