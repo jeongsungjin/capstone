@@ -123,6 +123,17 @@ class SimpleMultiVehicleController:
                 )
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+            # Deadlock/token 기반 충돌 무시 플래그
+            override_col_topic = f"/collision_override/{role}"
+            self._collision_override: Dict[str, bool] = getattr(self, "_collision_override", {})
+            self._collision_override[role] = False
+            rospy.Subscriber(
+                override_col_topic,
+                Bool,
+                self._collision_override_cb,
+                callback_args=role,
+                queue_size=5,
+            )
 
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
@@ -199,6 +210,12 @@ class SimpleMultiVehicleController:
             "speed": float(getattr(msg, "speed", 0.0)),
             "stamp": rospy.Time.now().to_sec(),
         }
+
+    def _collision_override_cb(self, msg: Bool, role: str) -> None:
+        try:
+            self._collision_override[role] = bool(msg.data)
+        except Exception:
+            self._collision_override[role] = False
 
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
@@ -483,6 +500,9 @@ class SimpleMultiVehicleController:
         return steer, speed
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
+        # Deadlock token으로 충돌 정지 해제 요청 시 그대로 통과
+        if self._collision_override.get(role, False):
+            return speed_cmd
         # 플래툰/외부 속도오버라이드 사용 시 충돌 정지 비활성화 (간섭 방지)
         if self.use_speed_override:
             return speed_cmd

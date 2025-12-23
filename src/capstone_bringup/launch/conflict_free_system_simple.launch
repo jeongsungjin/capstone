@@ -94,6 +94,19 @@
     <param name="parking_stop_radius" value="3.0" />
   </node>
 
+  <!-- 4.1) Deadlock token manager (ID 우선, 전방 점유 없을 때 토큰 부여) -->
+  <node pkg="carla_multi_vehicle_control" type="deadlock_token_manager.py" name="deadlock_token_manager" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="lookahead_m" value="8.0" />
+    <param name="safe_distance_m" value="2.5" />
+    <param name="stop_speed_thresh" value="0.3" />
+    <param name="stop_time_thresh" value="2.0" />
+    <param name="token_timeout" value="5.0" />
+    <param name="check_hz" value="5.0" />
+    <param name="path_topic_prefix" value="/global_path_" />
+    <param name="pose_topic_prefix" value="/" />
+  </node>
+
   <!-- 4.2) 간단 플래툰 매니저: 1번 경로 공유 + 속도 오버라이드 -->
   <node if="$(arg enable_platooning)" pkg="carla_multi_vehicle_control" type="simple_platoon_manager.py" name="simple_platoon_manager" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
