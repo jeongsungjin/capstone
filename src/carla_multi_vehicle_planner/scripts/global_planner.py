@@ -16,6 +16,7 @@ from agents.navigation.global_route_planner import GlobalRoutePlanner
 from agents.navigation.local_planner import RoadOption
 from frenet_path import FrenetPath
 
+import rospy
 
 class GlobalPlanner(GlobalRoutePlanner):
     """
@@ -398,6 +399,8 @@ class GlobalPlanner(GlobalRoutePlanner):
         Returns:
             경로 노드 ID 리스트, 또는 경로 없으면 None
         """
+        rospy.loginfo('악!!!!!!!!!!!!!!!')
+
         start = self._localize(origin)
         end = self._localize(destination)
         
@@ -438,6 +441,42 @@ class GlobalPlanner(GlobalRoutePlanner):
             return self.trace_route(origin, destination)
         except Exception:
             return None
+
+    def trace_route_with_nodes(self, origin, destination):
+        """
+        경로 탐색 + A* 노드 리스트 반환
+        
+        Returns:
+            (route, node_list) 또는 (None, None)
+            - route: [(waypoint, RoadOption), ...]
+            - node_list: [node_id, ...] A* 경로의 노드 순서
+        """
+        try:
+            node_list = self._path_search(origin, destination)
+            if node_list is None:
+                return None, None
+            route = self.trace_route(origin, destination)
+            return route, node_list
+        except Exception:
+            return None, None
+
+    def nodes_to_edges(self, node_list: List[int]) -> List[Tuple[int, int]]:
+        """
+        노드 리스트를 엣지 리스트로 변환
+        
+        Args:
+            node_list: [n0, n1, n2, ...] A* 경로 노드 순서
+            
+        Returns:
+            [(n0, n1), (n1, n2), ...] 엣지 리스트
+        """
+        if not node_list or len(node_list) < 2:
+            return []
+        
+        edges = []
+        for i in range(len(node_list) - 1):
+            edges.append((node_list[i], node_list[i + 1]))
+        return edges
 
     def can_reach(self, origin, destination) -> bool:
         """

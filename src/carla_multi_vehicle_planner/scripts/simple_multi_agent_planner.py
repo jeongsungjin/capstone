@@ -395,52 +395,7 @@ class SimpleMultiAgentPlanner:
             
         except Exception as e:
             rospy.logwarn(f"[AVOIDANCE] {role}: failed to generate candidates: {e}")
-
-    def _generate_avoidance_path(self, role: str, obstacle_location: Tuple[float, float, float]) -> Optional[List[Tuple[float, float]]]:
-        """
-        장애물 회피 경로 생성
-        TODO: 회피 알고리즘 구현
-        - FrenetPath 활용
-        - 좌/우 회피 방향 결정
-        - 회피 경로 생성
         
-        Args:
-            role: 차량 역할명
-            obstacle_location: 장애물 위치 (x, y, z)
-            
-        Returns:
-            회피 경로 [(x, y), ...] 또는 None
-        """
-        # TODO: 실제 회피 알고리즘 구현
-        rospy.logdebug(f"{role}: generate_avoidance_path placeholder for obstacle at {obstacle_location}")
-        return None
-
-    def _should_replan_for_obstacle(self, role: str, vehicle_loc: carla.Location) -> bool:
-        """
-        장애물로 인해 재계획이 필요한지 판단
-        TODO: 판단 로직 구현
-        - 현재 경로와 장애물 충돌 확인
-        - 거리 임계값 확인
-        
-        Args:
-            role: 차량 역할명
-            vehicle_loc: 차량 현재 위치
-            
-        Returns:
-            재계획 필요 여부
-        """
-        if not self._obstacles:
-            return False
-        
-        # 가장 가까운 장애물 거리
-        min_dist = float('inf')
-        for ox, oy, oz in self._obstacles:
-            dist = math.hypot(vehicle_loc.x - ox, vehicle_loc.y - oy)
-            min_dist = min(min_dist, dist)
-        
-        # TODO: 더 정교한 판단 로직 추가
-        return min_dist < self.obstacle_replan_threshold
-
     # ─────────────────────────────────────────────────────────────────────────
     # Overlap Detection (for debugging)
     # ─────────────────────────────────────────────────────────────────────────
@@ -467,19 +422,35 @@ class SimpleMultiAgentPlanner:
         return edges
 
     def _update_vehicle_edges_from_route(self, role: str, route) -> None:
-        """route에서 엣지 추출하여 저장"""
+        """route에서 엣지 추출하여 저장 (deprecated - _localize 방식은 부정확할 수 있음)"""
         edges = self._extract_edges_from_route(route)
         if edges:
             self._vehicle_route_edges[role] = edges
             
             # 엣지 리스트와 차선 정보 로깅
-            rospy.loginfo(f"[EDGES] {role}: {len(edges)} edges in route")
-            lane_info = []
-            for i, edge in enumerate(edges[:10]):  # 최대 10개만 출력
-                lane_key = self.route_planner._edge_to_lane.get(edge, None)
-                if lane_key:
-                    lane_info.append(f"{i}:{lane_key}")
-            rospy.loginfo(f"  Lanes (first 10): {', '.join(lane_info)}")
+            for i, edge in enumerate(edges):  # 최대 10개만 출력
+                print(f'edge[{i}] : {edge}')
+
+    def _update_vehicle_edges_from_nodes(self, role: str, node_list) -> None:
+        """A* 노드 리스트에서 직접 엣지 추출하여 저장 (정확한 방식)"""
+        if not node_list:
+            return
+        
+        # GlobalPlanner의 nodes_to_edges 사용
+        if hasattr(self.route_planner, 'nodes_to_edges'):
+            edges = self.route_planner.nodes_to_edges(node_list)
+        else:
+            # fallback: 직접 변환
+            edges = []
+            for i in range(len(node_list) - 1):
+                edges.append((node_list[i], node_list[i + 1]))
+        
+        if edges:
+            self._vehicle_route_edges[role] = edges
+            
+            # 엣지 리스트 로깅
+            for i, edge in enumerate(edges):
+                print(f'edge[{i}] : {edge}')
 
     def _log_overlap_detection_cb(self, _evt) -> None:
         """주기적으로 반대 차선 중복 상태 로깅"""
@@ -659,7 +630,6 @@ class SimpleMultiAgentPlanner:
             z=tf.location.z,
         )
 
-
     def _choose_destination(self, start: carla.Location, max_trials: int = 80) -> Optional[carla.Location]:
         for _ in range(max_trials):
             cand = random.choice(self.spawn_points).location
@@ -669,11 +639,22 @@ class SimpleMultiAgentPlanner:
         return None
 
     def _trace_route(self, start: carla.Location, dest: carla.Location):
+        """
+        경로 탐색 - (route, node_list) 반환
+        
+        Returns:
+            (route, node_list) 또는 (None, None)
+        """
         try:
-            return self.route_planner.trace_route(start, dest)
+            # trace_route_with_nodes가 있으면 사용 (정확한 엣지 추출 가능)
+            if hasattr(self.route_planner, 'trace_route_with_nodes'):
+                return self.route_planner.trace_route_with_nodes(start, dest)
+            # fallback: 기존 방식
+            route = self.route_planner.trace_route(start, dest)
+            return route, None
         except Exception as exc:
             rospy.logwarn(f"trace_route failed: {exc}")
-            return None
+            return None, None
 
     def _route_to_points(self, route) -> List[Tuple[float, float]]:
         points: List[Tuple[float, float]] = []
@@ -878,23 +859,25 @@ class SimpleMultiAgentPlanner:
                                        z=front_loc.z)
         start_loc.z = front_loc.z
         route = None
+        node_list = None
         attempts = 0
         max_attempts = 5
         if not force_direct:
             while attempts < max_attempts:
-                route = self._trace_route(start_loc, dest_loc)
+                route, node_list = self._trace_route(start_loc, dest_loc)
                 if route and len(route) >= 2:
                     break
                 dest_loc = self._choose_destination(front_loc)
                 if dest_loc is None:
                     route = None
+                    node_list = None
                     break
                 attempts += 1
         new_points: List[Tuple[float, float]] = []
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
-            # Update vehicle edges for overlap detection
-            self._update_vehicle_edges_from_route(role, route)
+            # Update vehicle edges for overlap detection (노드 리스트 사용)
+            self._update_vehicle_edges_from_nodes(role, node_list)
         else:
             # Always use direct line when dest_override is present (e.g., off-road parking), or when GRP fails
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
