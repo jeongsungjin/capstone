@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 
 import math
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 import rospy
 from capstone_msgs.msg import BEVInfo
+from nav_msgs.msg import Path
 
 try:
 	# side-effect: insert CARLA API path to sys.path if available
@@ -32,6 +33,8 @@ class SimpleBevTeleporter:
 		self.max_vehicle_count = max(1, min(6, int(rospy.get_param("~max_vehicle_count", 1))))
 		self.default_z = float(rospy.get_param("~default_z", -1.5))
 		self.yaw_in_degrees = bool(rospy.get_param("~yaw_in_degrees", False))
+		# BEV 지연 보상용 경로 기반 lookahead (m)
+		self.lookahead_m = float(rospy.get_param("~lookahead_m", 1.0))
 		# ENU(CCW) → CARLA(CW) 변환이 필요하면 True로 설정
 		self._last_stamp = None
 		self._last_seq = None
@@ -45,9 +48,17 @@ class SimpleBevTeleporter:
 		self.role_names: List[str] = [f"ego_vehicle_{i}" for i in range(1, self.max_vehicle_count + 1)]
 		self.role_to_actor: Dict[str, carla.Actor] = {}
 		self._refresh_role_actors()
+		# 경로 캐시 (lookahead 적용용)
+		self._paths: Dict[str, List[Tuple[float, float]]] = {}
+		self._s_profiles: Dict[str, List[float]] = {}
 
 		# 최신 메시지만 사용하도록 queue_size=1, tcp_nodelay
 		rospy.Subscriber(self.topic, BEVInfo, self._bev_cb, queue_size=1, tcp_nodelay=True)
+		# planned_path_* 구독
+		for idx in range(self.max_vehicle_count):
+			role = self.role_names[idx]
+			topic = f"/planned_path_{role}"
+			rospy.Subscriber(topic, Path, self._path_cb, callback_args=role, queue_size=1)
 		rospy.loginfo("SimpleBevTeleporter: listening %s for up to %d roles (%s)",
 		              self.topic, self.max_vehicle_count, ",".join(self.role_names))
 
@@ -74,15 +85,88 @@ class SimpleBevTeleporter:
 		self._refresh_role_actors()
 		return self.role_to_actor.get(role)
 
+	def _path_cb(self, msg: Path, role: str) -> None:
+		pts: List[Tuple[float, float]] = []
+		for pose in msg.poses:
+			pts.append((float(pose.pose.position.x), float(pose.pose.position.y)))
+		self._paths[role] = pts
+		# s-profile 계산
+		s_profile: List[float] = [0.0]
+		total = 0.0
+		for i in range(1, len(pts)):
+			step = math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1])
+			total += step
+			s_profile.append(total)
+		self._s_profiles[role] = s_profile
+
+	def _project_on_path(self, role: str, x: float, y: float):
+		pts = self._paths.get(role)
+		s_profile = self._s_profiles.get(role)
+		if not pts or not s_profile or len(pts) != len(s_profile) or len(pts) < 2:
+			return None
+		best_dist_sq = float("inf")
+		best_idx = None
+		best_t = 0.0
+		for idx in range(len(pts) - 1):
+			x1, y1 = pts[idx]
+			x2, y2 = pts[idx + 1]
+			dx = x2 - x1
+			dy = y2 - y1
+			seg_len_sq = dx * dx + dy * dy
+			if seg_len_sq < 1e-6:
+				continue
+			t = ((x - x1) * dx + (y - y1) * dy) / seg_len_sq
+			t = max(0.0, min(1.0, t))
+			px = x1 + dx * t
+			py = y1 + dy * t
+			d2 = (px - x) * (px - x) + (py - y) * (py - y)
+			if d2 < best_dist_sq:
+				best_dist_sq = d2
+				best_idx = idx
+				best_t = t
+		if best_idx is None:
+			return None
+		seg_len = math.hypot(pts[best_idx + 1][0] - pts[best_idx][0], pts[best_idx + 1][1] - pts[best_idx][1])
+		if seg_len < 1e-6:
+			s_now = s_profile[best_idx]
+		else:
+			s_now = s_profile[best_idx] + best_t * seg_len
+		return s_now, s_profile, pts
+
+	def _sample_at_s(self, pts: List[Tuple[float, float]], s_profile: List[float], s_target: float):
+		if len(pts) < 2 or not s_profile or len(s_profile) != len(pts):
+			return None
+		if s_target <= s_profile[0]:
+			return pts[0][0], pts[0][1], 0
+		if s_target >= s_profile[-1]:
+			return pts[-1][0], pts[-1][1], len(pts) - 1
+		for i in range(len(s_profile) - 1):
+			if s_profile[i + 1] >= s_target:
+				ds = max(1e-6, s_profile[i + 1] - s_profile[i])
+				t = (s_target - s_profile[i]) / ds
+				x1, y1 = pts[i]
+				x2, y2 = pts[i + 1]
+				tx = x1 + (x2 - x1) * t
+				ty = y1 + (y2 - y1) * t
+				return tx, ty, i
+		return None
+
 	def _bev_cb(self, msg: BEVInfo) -> None:
-		# 강제로 0번 인덱스만 사용 (단일 차량 텔레포트)
-		n = 1
+		# 여러 대 지원: 메시지 길이와 role_names 수 중 작은 값만큼 처리
+		n = min(len(self.role_names), len(msg.center_xs), len(msg.center_ys), len(msg.yaws))
 		if n <= 0:
 			return
-		if len(msg.center_xs) < 1 or len(msg.center_ys) < 1 or len(msg.yaws) < 1:
-			rospy.logwarn_throttle(1.0, "BEV message missing fields: detCounts=%d, lens=(%d,%d,%d)",
-			                       msg.detCounts, len(msg.center_xs), len(msg.center_ys), len(msg.yaws))
+		if len(msg.center_xs) < n or len(msg.center_ys) < n or len(msg.yaws) < n:
+			rospy.logwarn_throttle(
+				1.0,
+				"BEV message missing fields: detCounts=%d, lens=(%d,%d,%d)",
+				msg.detCounts,
+				len(msg.center_xs),
+				len(msg.center_ys),
+				len(msg.yaws),
+			)
 			return
+
 		stamp = msg.header.stamp
 		seq = msg.header.seq
 		if self._last_seq is not None and seq <= self._last_seq:
@@ -115,15 +199,29 @@ class SimpleBevTeleporter:
 				except Exception:
 					pass
 			try:
-				idx = 0  # 강제로 첫 번째 검출만 사용
-				x = float(msg.center_xs[idx])
-				y = float(msg.center_ys[idx])
-				raw_yaw = float(msg.yaws[idx])
+				x = float(msg.center_xs[i])
+				y = float(msg.center_ys[i])
+				raw_yaw = float(msg.yaws[i])
 				yaw_rad = math.radians(raw_yaw) if self.yaw_in_degrees else raw_yaw
-				yaw_deg = math.degrees(yaw_rad)
 
+				# 경로 기반 lookahead 보정: path 투영 후 s+lookahead
+				projected = self._project_on_path(role, x, y)
+				tx, ty, yaw_for_pose = x, y, yaw_rad
+				# if projected is not None:
+				# 	s_now, s_profile, pts = projected
+				# 	s_target = s_now + max(0.0, self.lookahead_m)
+				# 	sample = self._sample_at_s(pts, s_profile, s_target)
+				# 	if sample is not None:
+				# 		tx, ty, seg_idx = sample
+				# 		# 경로 방향으로 yaw 설정
+				# 		if seg_idx < len(pts) - 1:
+				# 			dx = pts[seg_idx + 1][0] - pts[seg_idx][0]
+				# 			dy = pts[seg_idx + 1][1] - pts[seg_idx][1]
+				# 			if abs(dx) + abs(dy) > 1e-6:
+				# 				yaw_for_pose = math.atan2(dy, dx)
 
-				location = carla.Location(x=x, y=y, z=self.default_z)
+				yaw_deg = math.degrees(yaw_for_pose)
+				location = carla.Location(x=tx, y=ty, z=self.default_z)
 				rotation = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
 				tf = carla.Transform(location=location, rotation=rotation)
 				actor.set_transform(tf)
