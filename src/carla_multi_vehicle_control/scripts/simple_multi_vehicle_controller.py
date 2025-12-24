@@ -42,15 +42,22 @@ class SimpleMultiVehicleController:
         if carla is None:
             raise RuntimeError("CARLA Python API unavailable")
 
-        self.num_vehicles = int(rospy.get_param("~num_vehicles", 3))
+        self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.emergency_stop_active = False
-        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 1.0))
+        self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
+        # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
+        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 1.0))
+        self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 4.0))
+        self.heading_ld_gain = float(rospy.get_param("~heading_ld_gain", 2.0))  # ld / (1 + gain * |heading_err|)
+        self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 1.0))) * math.pi / 180.0
+        self.heading_lpf_alpha = float(rospy.get_param("~heading_lpf_alpha", 0.3))  # 0~1, 0=hold, 1=no filter
+        self.heading_lpf_alpha = max(0.0, min(1.0, self.heading_lpf_alpha))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
-        self.target_speed = float(rospy.get_param("~target_speed", 20.0))
+        self.target_speed = float(rospy.get_param("~target_speed", 6.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         # Low-voltage speed gating + parking slowdown
         self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
@@ -125,6 +132,17 @@ class SimpleMultiVehicleController:
                 )
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+            # Deadlock/token 기반 충돌 무시 플래그
+            override_col_topic = f"/collision_override/{role}"
+            self._collision_override: Dict[str, bool] = getattr(self, "_collision_override", {})
+            self._collision_override[role] = False
+            rospy.Subscriber(
+                override_col_topic,
+                Bool,
+                self._collision_override_cb,
+                callback_args=role,
+                queue_size=5,
+            )
 
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
@@ -211,6 +229,12 @@ class SimpleMultiVehicleController:
             "speed": float(getattr(msg, "speed", 0.0)),
             "stamp": rospy.Time.now().to_sec(),
         }
+
+    def _collision_override_cb(self, msg: Bool, role: str) -> None:
+        try:
+            self._collision_override[role] = bool(msg.data)
+        except Exception:
+            self._collision_override[role] = False
 
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
@@ -412,7 +436,11 @@ class SimpleMultiVehicleController:
             return x, y
         # arc-length target selection with interpolation
         s_now = float(st.get("progress_s", 0.0))
-        ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
+        base_ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
+        heading_err = float(st.get("heading_err_filt", st.get("heading_err", 0.0)))
+        # 조향/헤딩 오차 기반 lookahead 축소 (LPF/데드존 반영)
+        ld = base_ld / (1.0 + self.heading_ld_gain * abs(heading_err))
+        ld = max(self.min_lookahead_m, min(self.max_lookahead_m, ld))
         s_target = s_now + max(0.05, ld)
         sample = self._sample_path_at_s(path, s_profile, s_target)
         if sample is None:
@@ -446,6 +474,29 @@ class SimpleMultiVehicleController:
             s_now, idx = proj
             st["progress_s"] = s_now
             st["current_index"] = idx
+            # 현재 진행 세그먼트 헤딩으로 헤딩 오차 추정
+            path_idx = max(0, min(len(path) - 2, idx))
+            seg_dx = path[path_idx + 1][0] - path[path_idx][0]
+            seg_dy = path[path_idx + 1][1] - path[path_idx][1]
+            if abs(seg_dx) + abs(seg_dy) < 1e-6:
+                st["heading_err"] = 0.0
+            else:
+                path_heading = math.atan2(seg_dy, seg_dx)
+                err = path_heading - yaw
+                while err > math.pi:
+                    err -= 2.0 * math.pi
+                while err < -math.pi:
+                    err += 2.0 * math.pi
+                # 데드존 및 LPF 적용
+                if abs(err) < self.heading_deadzone_rad:
+                    err_adj = 0.0
+                else:
+                    err_adj = math.copysign(abs(err) - self.heading_deadzone_rad, err)
+                prev_filt = float(st.get("heading_err_filt", err_adj))
+                filt = prev_filt + self.heading_lpf_alpha * (err_adj - prev_filt)
+                st["heading_err_raw"] = err
+                st["heading_err"] = err_adj
+                st["heading_err_filt"] = filt
         else:
             count = st.setdefault("progress_fail_count", 0) + 1
             st["progress_fail_count"] = count
@@ -463,7 +514,11 @@ class SimpleMultiVehicleController:
                 rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
         if proj is not None:
             st["progress_fail_count"] = 0
-        tx, ty = self._select_target(st, fx, fy, lookahead_override=self.lookahead_distance)
+        else:
+            # 헤딩 오차 정보를 사용할 수 없으므로 리셋
+            st["heading_err"] = 0.0
+            st["heading_err_filt"] = 0.0
+        tx, ty = self._select_target(st, fx, fy, lookahead_override=None)
         dx = tx - fx
         dy = ty - fy
         alpha_raw = math.atan2(dy, dx) - yaw
@@ -485,6 +540,14 @@ class SimpleMultiVehicleController:
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
         speed = self._apply_parking_speed_limit(role, st, speed)
+        # rospy.loginfo_throttle(
+        #     0.5,
+        #     "%s steer=%.3f Ld=%.2f alpha=%.3f",
+        #     role,
+        #     steer,
+        #     Ld,
+        #     alpha,
+        # )
         
         # 장애물 정지 arc-length 체크
         obstacle_stop_s = float(st.get("obstacle_stop_s", -1.0))
@@ -508,7 +571,11 @@ class SimpleMultiVehicleController:
         )
         return steer, speed
 
+
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
+        # Deadlock token으로 충돌 정지 해제 요청 시 그대로 통과
+        if self._collision_override.get(role, False):
+            return speed_cmd
         # 플래툰/외부 속도오버라이드 사용 시 충돌 정지 비활성화 (간섭 방지)
         if self.use_speed_override:
             return speed_cmd
