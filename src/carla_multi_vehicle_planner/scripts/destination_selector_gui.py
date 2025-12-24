@@ -15,6 +15,7 @@ from typing import Dict
 import rospy
 import yaml
 from geometry_msgs.msg import PoseStamped
+from std_msgs.msg import String
 
 try:
     import carla  # type: ignore
@@ -40,8 +41,11 @@ class DestinationSelectorGUI:
         self.world = self.client.get_world()
         self.carla_map = self.world.get_map()
 
+        # 목적지 이름 목록 (길이 7 권장)
+        self.dest_names = list(rospy.get_param("~dest_names", ["home", "hospital", "school", "store", "park", "garage", "lake"]))
         self.destinations: Dict[int, carla.Location] = self._load_destinations()
         self.publishers: Dict[str, rospy.Publisher] = {}
+        self.name_publishers: Dict[str, rospy.Publisher] = {}
         self.current_role = "ego_vehicle_1"
 
         self.root = tk.Tk()
@@ -58,7 +62,7 @@ class DestinationSelectorGUI:
             rospy.logwarn(f"dest_selector_gui: failed to load yaml {self.map_yaml}: {exc}")
             regions = []
         for idx, reg in enumerate(regions, start=1):
-            if idx > 7:
+            if idx > len(self.dest_names):
                 break
             center = reg.get("center")
             if not center or len(center) < 2:
@@ -72,7 +76,8 @@ class DestinationSelectorGUI:
             except Exception:
                 pass
             dests[idx] = loc
-            rospy.loginfo(f"[GUI] dest {idx}: snapped to ({loc.x:.2f},{loc.y:.2f})")
+            name = self.dest_names[idx - 1] if idx - 1 < len(self.dest_names) else f"dest{idx}"
+            rospy.loginfo(f"[GUI] dest {idx}({name}): snapped to ({loc.x:.2f},{loc.y:.2f})")
         return dests
 
     def _build_ui(self) -> None:
@@ -84,8 +89,9 @@ class DestinationSelectorGUI:
 
         frame_dest = tk.LabelFrame(self.root, text="Destination")
         frame_dest.pack(fill="x", padx=8, pady=4)
-        for i in range(1, 8):
-            btn = tk.Button(frame_dest, text=f"{i}", width=6, command=partial(self._send_dest, i))
+        for i in range(1, min(len(self.dest_names), len(self.destinations)) + 1):
+            label = self.dest_names[i - 1] if i - 1 < len(self.dest_names) else str(i)
+            btn = tk.Button(frame_dest, text=label, width=10, command=partial(self._send_dest, i))
             btn.pack(side="left", padx=2, pady=2)
 
         self.label_status = tk.Label(self.root, text="role: ego_vehicle_1  dest: -")
@@ -104,6 +110,10 @@ class DestinationSelectorGUI:
         if topic not in self.publishers:
             self.publishers[topic] = rospy.Publisher(topic, PoseStamped, queue_size=1)
             rospy.sleep(0.05)
+        name_topic = f"/override_goal_name/{self.current_role}"
+        if name_topic not in self.name_publishers:
+            self.name_publishers[name_topic] = rospy.Publisher(name_topic, String, queue_size=1, latch=True)
+            rospy.sleep(0.05)
         msg = PoseStamped()
         msg.header.stamp = rospy.Time.now()
         msg.header.frame_id = "map"
@@ -112,8 +122,13 @@ class DestinationSelectorGUI:
         msg.pose.position.z = loc.z
         msg.pose.orientation.w = 1.0
         self.publishers[topic].publish(msg)
-        rospy.loginfo(f"[GUI] {self.current_role} -> dest {dest_id} ({loc.x:.2f},{loc.y:.2f})")
-        self._update_status(dest_id=dest_id)
+        name = self.dest_names[dest_id - 1] if dest_id - 1 < len(self.dest_names) else str(dest_id)
+        try:
+            self.name_publishers[name_topic].publish(String(data=name))
+        except Exception:
+            pass
+        rospy.loginfo(f"[GUI] {self.current_role} -> dest {dest_id}({name}) ({loc.x:.2f},{loc.y:.2f})")
+        self._update_status(dest_id=name)
 
     def _update_status(self, dest_id=None):
         txt = f"role: {self.current_role}"
