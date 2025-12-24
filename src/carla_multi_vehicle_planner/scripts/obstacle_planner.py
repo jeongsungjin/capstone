@@ -9,7 +9,7 @@ ObstaclePlanner: 장애물 회피 전담 플래너
 """
 
 import math
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import setup_carla_path  # noqa: F401
 import carla
@@ -223,17 +223,11 @@ class ObstaclePlanner:
                 self._obstacle_blocked_roles.pop(role)
             return combined_path, False, -1.0
         
-        # 3. 회피 불가 → 정지 필요
-        stop_idx = max(0, obstacle_idx - int(self.obstacle_stop_distance / 0.5))
-        trimmed_path = path[:stop_idx + 1]
-        
-        # 정지 지점까지의 arc-length 계산
-        stop_arc_length = self._compute_arc_length(trimmed_path)
-        
+        # 3. 회피 불가 → 정지 필요 (경로는 그대로 유지, 컨트롤러에서 정지 처리)
         self._obstacle_blocked_roles[role] = obstacle_pos
-        rospy.logwarn(f"[AVOIDANCE] {role}: no avoidance possible, stop at arc_length={stop_arc_length:.1f}m")
+        rospy.logfatal(f"[MUST STOP] {role}: CANNOT AVOID OBSTACLE at ({obstacle_pos[0]:.1f}, {obstacle_pos[1]:.1f}) - VEHICLE MUST STOP!")
         
-        return trimmed_path, True, stop_arc_length
+        return path, True, -1.0
 
     def _find_obstacle_on_path(
         self, 
@@ -254,7 +248,8 @@ class ObstaclePlanner:
         for ox, oy, oz in self._obstacles:
             for i, (px, py) in enumerate(path):
                 dist = math.hypot(ox - px, oy - py)
-                if dist < self.obstacle_radius + 2.0 and dist < min_dist:
+                # 경로에 실제로 가까운 장애물만 감지 (기본 1.0 + 1.5 = 2.5m)
+                if dist < self.obstacle_collision_radius + 1.5 and dist < min_dist:
                     min_dist = dist
                     best_match = ((ox, oy), i, dist)
         
@@ -267,6 +262,8 @@ class ObstaclePlanner:
     ) -> Optional[Tuple[List[Tuple[float, float]], float]]:
         """
         장애물 구간을 Frenet 회피 경로로 교체
+        - 가까운 장애물들을 그룹으로 병합
+        - 각 그룹마다 하나의 회피 세그먼트
         
         Returns:
             (combined_path, best_d) 또는 None (회피 불가)
@@ -275,67 +272,143 @@ class ObstaclePlanner:
             return None
         
         try:
-            # 회피 구간 계산
-            stop_idx = max(0, obstacle_idx - int(self.obstacle_stop_distance / 0.5))
-            margin_after_idx = int(self.avoidance_margin_after / 0.5)
-            end_idx = min(len(path), obstacle_idx + margin_after_idx)
+            # 경로에 가까운 모든 장애물의 s 좌표 수집
+            obstacle_s_values = []
+            for ox, oy, oz in self._obstacles:
+                min_dist = float('inf')
+                closest_idx = 0
+                for i, (px, py) in enumerate(path):
+                    dist = math.hypot(ox - px, oy - py)
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_idx = i
+                # 경로에 실제로 가까운 장애물만 고려
+                if min_dist < self.obstacle_collision_radius + 1.5:
+                    s_approx = 0.0
+                    for i in range(min(closest_idx, len(path) - 1)):
+                        dx = path[i+1][0] - path[i][0]
+                        dy = path[i+1][1] - path[i][1]
+                        s_approx += math.hypot(dx, dy)
+                    obstacle_s_values.append((s_approx, (ox, oy)))
             
-            avoidance_segment = path[stop_idx:end_idx]
-            if len(avoidance_segment) < 5:
+            if not obstacle_s_values:
                 return None
             
-            # FrenetPath 생성
-            frenet = FrenetPath(avoidance_segment)
-            s_start = 0.5
-            s_end = frenet.total_length - 0.5
+            obstacle_s_values.sort(key=lambda x: x[0])
             
-            if s_end <= s_start:
-                return None
+            # 가까운 장애물들을 그룹으로 병합
+            min_return_gap = max(3.0, self.avoidance_margin_after * 2 + self.obstacle_stop_distance)
+            groups = []  # [(s_start, s_end, [(ox, oy), ...]), ...]
             
-            # 회피 후보 생성 및 평가
-            candidates = []
+            for s_obs, (ox, oy) in obstacle_s_values:
+                if not groups:
+                    # 첫 그룹 생성
+                    groups.append([s_obs, s_obs, [(ox, oy)]])
+                else:
+                    last_group = groups[-1]
+                    # 이전 그룹의 끝과 현재 장애물 거리
+                    gap = s_obs - last_group[1]
+                    
+                    if gap < min_return_gap:
+                        # 기존 그룹에 병합
+                        last_group[1] = s_obs  # s_end 확장
+                        last_group[2].append((ox, oy))
+                    else:
+                        # 새 그룹 생성
+                        groups.append([s_obs, s_obs, [(ox, oy)]])
             
-            for d_int in range(-20, 40, 5):
+            rospy.loginfo(f"[AVOIDANCE] {len(obstacle_s_values)} obstacles -> {len(groups)} groups")
+            
+            # 전체 FrenetPath 생성
+            frenet_full = FrenetPath(path)
+            
+            # 최적 d값 찾기 (모든 장애물에 대해 충돌 없는 최소 d)
+            best_d = None
+            for d_int in range(-40, 65, 5):  # d = -4.0 ~ 6.0m
                 d = d_int / 10.0
-                avoidance_path = frenet.generate_avoidance_path(
-                    s_start=s_start,
-                    s_end=s_end,
-                    d_offset=d,
-                    num_points=max(20, int((s_end - s_start) / 0.5)),
-                    smooth_ratio=0.3
-                )
-                
-                if not avoidance_path or len(avoidance_path) < 2:
+                if d == 0:
                     continue
                 
-                # 충돌 검사
-                collision = False
-                for px, py in avoidance_path:
-                    for ox, oy, _ in self._obstacles:
-                        if math.hypot(px - ox, py - oy) < self.obstacle_collision_radius:
-                            collision = True
-                            break
-                    if collision:
+                all_clear = True
+                for s_obs, (ox, oy) in obstacle_s_values:
+                    x_avoid, y_avoid = frenet_full.frenet_to_cartesian(s_obs, d)
+                    if math.hypot(x_avoid - ox, y_avoid - oy) < self.obstacle_collision_radius:
+                        all_clear = False
                         break
                 
-                if not collision:
-                    d_cost = abs(d) / 0.5
-                    candidates.append((d_cost, d, avoidance_path))
+                if all_clear:
+                    if best_d is None or abs(d) < abs(best_d):
+                        best_d = d
             
-            if not candidates:
+            if best_d is None:
+                rospy.logwarn(f"[AVOIDANCE] No valid d offset found")
                 return None
             
-            # 최적 경로 선택
-            candidates.sort(key=lambda x: x[0])
-            best_cost, best_d, best_avoidance = candidates[0]
+            rospy.loginfo(f"[AVOIDANCE] Using d={best_d:.1f}")
             
-            # 경로 조합: [시작~장애물전] + [회피경로] + [장애물후~끝]
-            combined = path[:stop_idx] + list(best_avoidance) + path[end_idx:]
+            # 그룹별로 회피 세그먼트 생성
+            combined_path = []
+            last_end_idx = 0
             
-            return combined, best_d
+            for group_s_start, group_s_end, group_obstacles in groups:
+                # 그룹의 회피 구간 (앞뒤 마진 포함)
+                s_start = max(0.5, group_s_start - self.obstacle_stop_distance - 1.0)
+                s_end = min(frenet_full.total_length - 0.5, group_s_end + self.avoidance_margin_after + self.obstacle_radius + 1.0)
+                
+                # s 좌표 → path 인덱스 변환
+                start_idx = 0
+                end_idx = len(path) - 1
+                cumulative_s = 0.0
+                for j in range(len(path) - 1):
+                    if cumulative_s <= s_start:
+                        start_idx = j
+                    if cumulative_s >= s_end:
+                        end_idx = j + 1
+                        break
+                    dx = path[j+1][0] - path[j][0]
+                    dy = path[j+1][1] - path[j][1]
+                    cumulative_s += math.hypot(dx, dy)
+                
+                # 겹침 방지: start_idx가 last_end_idx보다 작으면 조정
+                start_idx = max(start_idx, last_end_idx)
+                
+                # 이전 구간의 원본 경로 추가
+                if start_idx > last_end_idx:
+                    combined_path.extend(path[last_end_idx:start_idx])
+                
+                # 회피 세그먼트 생성
+                avoidance_segment = path[start_idx:end_idx + 1]
+                if len(avoidance_segment) >= 5:
+                    frenet = FrenetPath(avoidance_segment)
+                    avoidance_path = frenet.generate_avoidance_path(
+                        s_start=0.5,
+                        s_end=max(1.0, frenet.total_length - 0.5),
+                        d_offset=best_d,
+                        num_points=max(20, int(frenet.total_length / 0.5)),
+                        smooth_ratio=0.25
+                    )
+                    if avoidance_path:
+                        combined_path.extend(avoidance_path)
+                    else:
+                        combined_path.extend(avoidance_segment)
+                else:
+                    combined_path.extend(avoidance_segment)
+                
+                last_end_idx = end_idx + 1
+            
+            # 남은 원본 경로 추가
+            if last_end_idx < len(path):
+                combined_path.extend(path[last_end_idx:])
+            
+            if len(combined_path) < 2:
+                return None
+            
+            return combined_path, best_d
             
         except Exception as e:
             rospy.logwarn(f"[AVOIDANCE] failed to generate avoidance: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _compute_arc_length(self, path: List[Tuple[float, float]]) -> float:
