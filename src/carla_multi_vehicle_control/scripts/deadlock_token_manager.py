@@ -58,15 +58,15 @@ class DeadlockTokenManager:
             self._publishers[vid].publish(Bool(data=False))
 
         rospy.Timer(rospy.Duration(1.0 / max(0.1, self.timer_hz)), self._timer_cb)
-        rospy.loginfo(
-            "[deadlock-token] vehicles=%s lookahead=%.1f safe=%.1f stop(v<=%.2f for %.1fs) timeout=%.1fs",
-            self.vehicle_ids,
-            self.lookahead_m,
-            self.safe_distance_m,
-            self.stop_speed_thresh,
-            self.stop_time_thresh,
-            self.token_timeout,
-        )
+        # rospy.loginfo(
+        #     "[deadlock-token] vehicles=%s lookahead=%.1f safe=%.1f stop(v<=%.2f for %.1fs) timeout=%.1fs",
+        #     self.vehicle_ids,
+        #     self.lookahead_m,
+        #     self.safe_distance_m,
+        #     self.stop_speed_thresh,
+        #     self.stop_time_thresh,
+        #     self.token_timeout,
+        # )
 
     def _parse_vehicle_ids(self):
         raw = rospy.get_param("~vehicle_ids", None)
