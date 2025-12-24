@@ -208,9 +208,11 @@ class GlobalPlanner(GlobalRoutePlanner):
         A* weight 함수로 사용
         """
         if u in self._blocked_nodes or v in self._blocked_nodes:
-            return float('inf')
+            return 10000
+        
         if (u, v) in self._blocked_edges:
-            return float('inf')
+            return 10000
+        
         return edge_data.get('length', 1)
 
     # ─────────────────────────────────────────────────────────────────────────
