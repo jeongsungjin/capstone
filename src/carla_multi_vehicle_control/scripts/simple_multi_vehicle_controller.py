@@ -47,10 +47,10 @@ class SimpleMultiVehicleController:
         self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
         # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
-        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 1.0))
-        self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 4.0))
+        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 2.0))
+        self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 5.0))
         self.heading_ld_gain = float(rospy.get_param("~heading_ld_gain", 2.0))  # ld / (1 + gain * |heading_err|)
-        self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 1.0))) * math.pi / 180.0
+        self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 2.0))) * math.pi / 180.0
         self.heading_lpf_alpha = float(rospy.get_param("~heading_lpf_alpha", 0.3))  # 0~1, 0=hold, 1=no filter
         self.heading_lpf_alpha = max(0.0, min(1.0, self.heading_lpf_alpha))
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
