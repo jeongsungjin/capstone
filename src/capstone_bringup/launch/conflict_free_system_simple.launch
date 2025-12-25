@@ -55,7 +55,7 @@
 
   <!-- 3.5) Visualizer -->
   <node pkg="capstone_visualization" type="bev_visualizer.py" name="bev_visualizer" output="screen" />
-  <node pkg="carla_multi_vehicle_planner" type="rviz_obstacle_manager.py" name="obstacle_manager" output="screen" />
+  <!-- <node pkg="carla_multi_vehicle_planner" type="rviz_obstacle_manager.py" name="obstacle_manager" output="screen" /> -->
 
   <!-- 3.6) Manual goal tools -->
   <!-- <node if="$(arg enable_manual_goal)" pkg="carla_multi_vehicle_planner" type="rviz_goal_mux.py" name="rviz_goal_mux" output="screen">
@@ -174,10 +174,10 @@
 
 
   <!-- RViz -->
-  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
+  <!-- <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
         args="-d $(arg rviz_config)"
         output="screen"
-        required="false" />
+        required="false" /> -->
 </launch>
 
 
