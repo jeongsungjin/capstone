@@ -210,7 +210,7 @@ class SimpleMultiAgentPlanner:
             points = self._unique_points(trimmed_original)
             
             # 트리밍된 원본 경로 기반으로 회피 적용
-            modified_path = self._obstacle_planner.apply_avoidance_to_path(role, points)
+            modified_path, stop_poses = self._obstacle_planner.apply_avoidance_to_path(role, points)
             
             if modified_path != trimmed_original:
                 rospy.loginfo(f"[OBSTACLE] {role}: avoidance path applied")
@@ -680,7 +680,7 @@ class SimpleMultiAgentPlanner:
                     break
         
         new_points: List[Tuple[float, float]] = []
-        obstacles_on_path = None
+        obstacles_on_path = []
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
             self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
@@ -711,7 +711,7 @@ class SimpleMultiAgentPlanner:
         original_points = list(points)
         if self._obstacle_planner is not None and not offroad_override and not force_direct:
             if len(obstacles_on_path) > 0:
-                points = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                points, stop_poses = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
         
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")

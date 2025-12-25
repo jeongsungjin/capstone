@@ -16,9 +16,8 @@ import setup_carla_path  # noqa: F401
 import carla
 
 import rospy
-from geometry_msgs.msg import PoseArray, PoseStamped
+from geometry_msgs.msg import PoseArray
 from nav_msgs.msg import Path
-from std_msgs.msg import Header
 
 from frenet_path import FrenetPath
 
@@ -67,7 +66,7 @@ class ObstaclePlanner:
                 self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
 
         # 장애물로 인해 정지 중인 차량 추적 (role -> obstacle_pos)
-        self._obstacle_blocked_roles: Dict[str, Tuple[float, float]] = {}
+        self._obstacle_blocked_roles: Dict[str, List[Tuple[float, float]]] = {}
         
         # Obstacle subscriber
         self.is_obstacle_list_changed = False
@@ -191,20 +190,8 @@ class ObstaclePlanner:
         path: List[Tuple[float, float]],
         obstacles_on_path: List[Tuple[Tuple[float, float], int]]=None,
     ) -> List[Tuple[float, float]]:
-        """
-        경로에 회피 적용 (메인 진입점)
-        
-        Args:
-            role: 차량 역할명
-            path: 원본 경로 [(x, y), ...]
-            
-        Returns:
-            modified_path: 회피 적용된 경로 또는 원본
-            - need_stop: 회피 불가능하여 정지 필요 여부
-            - stop_arc_length: 정지 필요 시 정지 지점까지의 arc-length (아니면 -1)
-        """
         if not path or len(path) < 10:
-            return path #, False, -1.0
+            return path, (0, 0)
         
         frenet_path = FrenetPath(path)
 
@@ -216,27 +203,19 @@ class ObstaclePlanner:
             if role in self._obstacle_blocked_roles:
                 self._obstacle_blocked_roles.pop(role)
 
-            return path #, False, -1.0
+            return path, [(0, 0)]
         
         rospy.loginfo(f"[AVOIDANCE] {role}: obstacle detected {len(obstacles_on_path)} on path")
         
         # 2. 회피 경로 생성 시도
-        avoidance_result = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
-        if avoidance_result is not None:
-            # 회피 성공 → 경로 교체
-            combined_path, best_d = avoidance_result
-            rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d:.1f}")
-            if role in self._obstacle_blocked_roles:
-                self._obstacle_blocked_roles.pop(role)
+        combined_path, best_d_offsets, stop_poses, need_stop_idx = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
+        rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d_offsets}")
+        if need_stop_idx != -1:
+            self._obstacle_blocked_roles[role] = stop_poses[need_stop_idx]
+            rospy.logfatal(f"[MUST STOP] {role}: CANNOT AVOID OBSTACLE at ({stop_poses[need_stop_idx][0]:.1f}, {stop_poses[need_stop_idx][1]:.1f}) - VEHICLE MUST STOP!")
 
-            return combined_path #, False, -1.0
-        
-        # 3. 회피 불가 → 정지 필요 (경로는 그대로 유지, 컨트롤러에서 정지 처리)
-        # self._obstacle_blocked_roles[role] = obstacle_pos
-        # rospy.logfatal(f"[MUST STOP] {role}: CANNOT AVOID OBSTACLE at ({obstacle_pos[0]:.1f}, {obstacle_pos[1]:.1f}) - VEHICLE MUST STOP!")
-        
-        return path #, True, -1.0
-
+        return combined_path, stop_poses
+    
     def _find_obstacle_on_path(self, frenet_path, is_frenet=True) -> List[Tuple[Tuple[float, float], int]]:
         """
         경로에서 장애물 찾기
@@ -263,7 +242,26 @@ class ObstaclePlanner:
 
     def _generate_avoidance_segment(self, frenet_path, obstacles) -> Optional[Tuple[List[Tuple[float, float]], float]]:
         try:
-            for path_idx, (s_obs, d_obs), (ox, oy) in obstacles:
+            best_d_offsets, stop_poses, need_stop_idx = [], [], -1
+            for idx, (path_idx, (s_obs, d_obs), (ox, oy)) in enumerate(obstacles):
+                # 종방향 경로 계획
+                wheelbase = 1.74
+                delta_max_rad = math.radians(17.5)
+                r_min = wheelbase / math.tan(delta_max_rad)
+    
+                look_ahead = math.sqrt(2 * r_min * best_d_offset)
+                look_behind = wheelbase * 3
+
+                s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
+                stop_poses.append(frenet_path.frenet_to_cartesian(s_start, 0))
+            
+                s_end = min(frenet_path._s_profile[-1] - 0.5, s_obs + (self.obstacle_radius + look_behind))
+
+                rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d_offset:.1f} total_length: {frenet_path.total_length:.1f}')
+
+                s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
+                s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
+
                 # 횡방향 경로 계획
                 safe_d_offsets = []
                 for d_offset in range(self.min_d_offset, self.max_d_offset, self.d_offset_step):
@@ -278,44 +276,20 @@ class ObstaclePlanner:
                 safe_d_offsets = np.array(safe_d_offsets)
                 if len(safe_d_offsets) == 0:
                     rospy.logfatal(f'[AVOIDANCE] failed to find safe d-offset for obstacle at ({ox:.1f}, {oy:.1f})')
-                    return None, 0
+                    need_stop_idx = idx
+                    break
 
-                # 절댓값 기준 가장 가까운 safe_d_offset 선택
-                best_d = safe_d_offsets[np.abs(safe_d_offsets).argmin()]
-                
-                # 종방향 경로 계획
-                wheelbase = 1.74
-                delta_max_rad = math.radians(17.5)
-                r_min = wheelbase / math.tan(delta_max_rad)
-    
-                # 물리적 최소 복구 거리 계산 (s^2 = 2Rd 기반)
-                s_min = math.sqrt(2 * r_min * best_d)
-    
-                # 안정적인 앞뒤 거리 설정
-                # 앞쪽은 복구 거리의 1.5배 (여유분)
-                look_ahead = s_min * 1.5
-                # 뒤쪽은 휠베이스 기반 고정 (곡률 연속성용)
-                look_behind = wheelbase * 1.2
+                best_d_offset = safe_d_offsets[np.abs(safe_d_offsets).argmin()]
+                frenet_path.update_d_offset(s_start_idx, s_end_idx, best_d_offset)
 
-                s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))# self.obstacle_padding + self.vehicle_padding + self.obstacle_stop_distance))
-                s_end = min(frenet_path._s_profile[-1] - 0.5, s_obs + (self.obstacle_radius + look_behind))# self.obstacle_padding + self.vehicle_padding + self.obstacle_stop_distance))
-
-                rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d:.1f} total_length: {frenet_path.total_length:.1f}')
-
-                s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
-                s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
-
-                return frenet_path.generate_avoidance_path(
-                        s_start_idx, s_end_idx, best_d,
-                        weight_data=0.1,
-                        weight_smooth=0.9
-                    ), best_d
+            avoidance_path = frenet_path.generate_avoidance_path()
+            return avoidance_path, best_d_offsets, stop_poses, need_stop_idx
 
         except Exception as e:
             rospy.logwarn(f"[AVOIDANCE] failed to generate avoidance: {e}")
             import traceback
             traceback.print_exc()
-            return None
+            return None, 0, (0, 0)
 
     def _compute_arc_length(self, path: List[Tuple[float, float]]) -> float:
         """경로의 총 arc-length 계산"""
@@ -330,34 +304,6 @@ class ObstaclePlanner:
         return total
 
     def _log_overlap_detection_cb(self, _evt) -> None:
-        return
+        """주기적으로 반대 차선 중복 상태 로깅 (현재 비활성화)"""
+        pass
 
-        """주기적으로 반대 차선 중복 상태 로깅"""
-        if self.route_planner is None or not hasattr(self.route_planner, 'find_opposite_lane_overlaps'):
-            return
-        
-        roles = list(self._vehicle_route_edges.keys())
-        if len(roles) < 2:
-            return
-        
-        for i, role_a in enumerate(roles):
-            edges_a = self._vehicle_route_edges.get(role_a, [])
-            if not edges_a:
-                continue
-            
-            for role_b in roles[i+1:]:
-                edges_b = self._vehicle_route_edges.get(role_b, [])
-                if not edges_b:
-                    continue
-                
-                overlaps = self.route_planner.find_opposite_lane_overlaps(edges_a, edges_b)
-                if overlaps:
-                    rospy.loginfo(
-                        f"[OVERLAP] {role_a} vs {role_b}: {len(overlaps)} opposite-lane overlaps detected"
-                    )
-                    for idx_a, edge_a, idx_b, edge_b in overlaps[:3]:  # 최대 3개만 로깅
-                        lane_a = self.route_planner._edge_to_lane.get(edge_a, "?")
-                        lane_b = self.route_planner._edge_to_lane.get(edge_b, "?")
-                        rospy.loginfo(
-                            f"  - {role_a}[{idx_a}] lane{lane_a} <-> {role_b}[{idx_b}] lane{lane_b}"
-                        )

@@ -7,11 +7,10 @@ FrenetPath: Reference Path 기반 Frenet 좌표계 경로 표현
 - scipy 스플라인 보간
 """
 
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple
 import numpy as np
 
 from scipy.interpolate import CubicSpline
-from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 from scipy.signal import find_peaks
 
@@ -38,6 +37,8 @@ class FrenetPath:
         
         self._path = np.array(reference_path)
         self._s_profile = self._compute_arc_length()
+        self.frenet_path = np.array([self._s_profile, np.zeros(len(self._s_profile), dtype=np.float64)]).T
+
         self._total_length = self._s_profile[-1] if len(self._s_profile) > 0 else 0.0
         
         # 세그먼트 방향 벡터 미리 계산
@@ -195,20 +196,9 @@ class FrenetPath:
         
         return x, y
 
-    def generate_avoidance_path(self, 
-        s_start_idx: float, s_end_idx: float, d_offset: float,
-        weight_data: float, weight_smooth: float,
-        wheelbase=1.74, max_steer_deg=17.5):
+    def update_d_offset(self, s_start_idx: float, s_end_idx: float, d_offset: float):
+        self.frenet_path[s_start_idx:s_end_idx, 1] = d_offset        
 
-        path = np.array([self._s_profile, np.zeros(len(self._s_profile), dtype=np.float64)]).T
-        path[s_start_idx:s_end_idx, 1] = d_offset
-        
-        return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), path))
+    def generate_avoidance_path(self):
 
-        smoothed = np.array(path, copy=True).astype(float)
-
-        for _ in range(100):
-            smoothed[1:-1] += weight_data * (path[1:-1] - smoothed[1:-1])
-            smoothed[1:-1] += weight_smooth * (smoothed[:-2] + smoothed[2:] - 2.0 * smoothed[1:-1])
-        
-        return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), smoothed))
+        return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), self.frenet_path))
