@@ -48,7 +48,7 @@ class RvizObstacleManager:
         self.default_z: float = float(rospy.get_param("~default_z", 0.5))
         self.remove_radius: float = float(rospy.get_param("~remove_radius", 5.0))
         self.obstacle_height: float = float(rospy.get_param("~obstacle_height", 2.0))
-        self.obstacle_radius: float = float(rospy.get_param("~obstacle_radius", 1.0))
+        self.obstacle_radius: float = float(rospy.get_param("~obstacle_radius", 2.5))
         self.publish_rate: float = float(rospy.get_param("~publish_rate", 1.0))
 
         # CARLA client

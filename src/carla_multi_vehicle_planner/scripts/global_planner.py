@@ -14,7 +14,6 @@ import carla
 
 from agents.navigation.global_route_planner import GlobalRoutePlanner
 from agents.navigation.local_planner import RoadOption
-from frenet_path import FrenetPath
 
 import rospy
 
@@ -39,9 +38,6 @@ class GlobalPlanner(GlobalRoutePlanner):
         self._blocked_nodes: Set[int] = set()
         self._blocked_edges: Set[Tuple[int, int]] = set()
         self._obstacle_locations: List[Tuple[float, float, float]] = []
-        
-        # 엣지별 FrenetPath 캐시
-        self._edge_frenet_cache: dict = {}
         
         # 반대 차선 맵: (road_id, lane_id) -> opposite (road_id, lane_id) or None
         self._opposite_lane_map: Dict[Tuple[int, int], Optional[Tuple[int, int]]] = {}
@@ -214,10 +210,6 @@ class GlobalPlanner(GlobalRoutePlanner):
             return 10000
         
         return edge_data.get('length', 1)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Opposite Lane (반대 차선) Management
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _build_opposite_lane_map(self) -> None:
         """
@@ -467,79 +459,4 @@ class GlobalPlanner(GlobalRoutePlanner):
         if not node_list or len(node_list) < 2:
             return []
         
-        edges = []
-        for i in range(len(node_list) - 1):
-            edges.append((node_list[i], node_list[i + 1]))
-        return edges
-
-    def can_reach(self, origin, destination) -> bool:
-        """
-        목적지까지 도달 가능한지 확인 (차단 노드 고려)
-        """
-        route = self._path_search(origin, destination)
-        return route is not None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # FrenetPath 관련 메서드
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def get_frenet_path_for_edge(self, edge: Tuple[int, int]) -> Optional['FrenetPath']:
-        """
-        엣지에 대한 FrenetPath 반환 (캐싱)
-        
-        Args:
-            edge: (node1, node2) 엣지 튜플
-            
-        Returns:
-            FrenetPath 객체 또는 None
-        """
-        # 캐시 확인
-        if edge in self._edge_frenet_cache:
-            return self._edge_frenet_cache[edge]
-        
-        # 엣지의 waypoint path 추출
-        n1, n2 = edge
-        if not self._graph.has_edge(n1, n2):
-            return None
-        
-        edge_data = self._graph.edges[n1, n2]
-        path_wps = edge_data.get('path', [])
-        entry_wp = edge_data.get('entry_waypoint')
-        exit_wp = edge_data.get('exit_waypoint')
-        
-        # waypoint → (x, y) 리스트
-        points = []
-        if entry_wp:
-            loc = entry_wp.transform.location
-            points.append((loc.x, loc.y))
-        for wp in path_wps:
-            loc = wp.transform.location
-            points.append((loc.x, loc.y))
-        if exit_wp:
-            loc = exit_wp.transform.location
-            points.append((loc.x, loc.y))
-        
-        if len(points) < 2:
-            return None
-        
-        # FrenetPath 생성 및 캐싱
-        frenet = FrenetPath(points)
-        self._edge_frenet_cache[edge] = frenet
-        return frenet
-
-    def get_frenet_path_for_location(self, location) -> Optional['FrenetPath']:
-        """
-        위치가 속한 엣지의 FrenetPath 반환
-        
-        Args:
-            location: carla.Location 또는 (x, y, z) 튜플
-        """
-        edge = self.get_occupied_edge(location)
-        if edge is None:
-            return None
-        return self.get_frenet_path_for_edge(edge)
-
-    def clear_frenet_cache(self) -> None:
-        """FrenetPath 캐시 초기화"""
-        self._edge_frenet_cache.clear()
-
+        return [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]

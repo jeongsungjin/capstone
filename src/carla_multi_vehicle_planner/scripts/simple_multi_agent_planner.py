@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import numpy as np
+
 import math
 import random
 from typing import Dict, List, Optional, Tuple
@@ -59,7 +61,7 @@ class SimpleMultiAgentPlanner:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
-        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
+        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 40.0))
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
         
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
@@ -81,6 +83,14 @@ class SimpleMultiAgentPlanner:
         self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
         self.parking_trigger_distance_m = float(rospy.get_param("~parking_trigger_distance_m", 0.5))
         
+         # Destination memory per role (for distance-gated replanning)
+        self._current_dest: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
+        self._active_paths: Dict[str, List[Tuple[float, float]]] = {}
+        self._original_paths: Dict[str, List[Tuple[float, float]]] = {}  # 회피 적용 전 원본 경로
+        self._active_path_s: Dict[str, List[float]] = {}
+        self._active_path_len: Dict[str, float] = {}
+        self._voltage: Dict[int, float] = {}
+
         # CARLA world/map
         host = rospy.get_param("~carla_host", "localhost")
         port = int(rospy.get_param("~carla_port", 2000))
@@ -136,15 +146,7 @@ class SimpleMultiAgentPlanner:
             # 장애물 정지 arc-length 퍼블리셔
             stop_topic = f"/obstacle_stop_{role}"
             self._obstacle_stop_pubs[role] = rospy.Publisher(stop_topic, Float32, queue_size=1, latch=True)
-            
-        # Destination memory per role (for distance-gated replanning)
-        self._current_dest: Dict[str, Optional[carla.Location]] = {self._role_name(i): None for i in range(self.num_vehicles)}
-        self._active_paths: Dict[str, List[Tuple[float, float]]] = {}
-        self._original_paths: Dict[str, List[Tuple[float, float]]] = {}  # 회피 적용 전 원본 경로
-        self._active_path_s: Dict[str, List[float]] = {}
-        self._active_path_len: Dict[str, float] = {}
-        self._voltage: Dict[int, float] = {}
-        
+             
         # Low-voltage 단계 관리: idle -> to_buffer(low_voltage_dest) -> to_parking(parking_dest) -> parked
         self._lv_stage: Dict[str, str] = {self._role_name(i): "idle" for i in range(self.num_vehicles)}
         # 수동 목적지 오버라이드 (PoseStamped에서 받음)
@@ -174,80 +176,19 @@ class SimpleMultiAgentPlanner:
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Overlap Detection (for debugging)
-    # ─────────────────────────────────────────────────────────────────────────
-
-    def _extract_edges_from_route(self, route) -> List[Tuple[int, int]]:
-        """
-        GlobalPlanner route에서 엣지 리스트 추출
-        
-        Args:
-            route: [(waypoint, RoadOption), ...]
-            
-        Returns:
-            [(n1, n2), ...] 엣지 리스트
-        """
-        if not route or not hasattr(self.route_planner, '_localize'):
-            return []
-        
-        edges = []
-        for wp, _ in route:
-            loc = wp.transform.location
-            edge = self.route_planner._localize(loc)
-            if edge is not None and edge not in edges:
-                edges.append(edge)
-        return edges
-
-    def _update_vehicle_edges_from_route(self, role: str, route) -> None:
-        """route에서 엣지 추출하여 저장 (deprecated - _localize 방식은 부정확할 수 있음)"""
-        edges = self._extract_edges_from_route(route)
-        if edges:
-            self._vehicle_route_edges[role] = edges
-            
-            # 엣지 리스트와 차선 정보 로깅
-            for i, edge in enumerate(edges):  # 최대 10개만 출력
-                print(f'edge[{i}] : {edge}')
-
-    def _update_vehicle_edges_from_nodes(self, role: str, node_list) -> None:
-        """A* 노드 리스트에서 직접 엣지 추출하여 저장 (ObstaclePlanner에 위임)"""
-        if self._obstacle_planner is not None:
-            self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
-        
-        # 로컬 캐시도 유지 (호환성)
-        if not node_list:
-            return
-        
-        if hasattr(self.route_planner, 'nodes_to_edges'):
-            edges = self.route_planner.nodes_to_edges(node_list)
-        else:
-            edges = []
-            for i in range(len(node_list) - 1):
-                edges.append((node_list[i], node_list[i + 1]))
-        
-        if edges:
-            self._vehicle_route_edges[role] = edges
-
     def _on_obstacle_change(self) -> None:
         """장애물 변화 시 즉시 호출되는 콜백 - 모든 활성 경로에 회피 적용"""
         vehicles = self._get_ego_vehicles()
-        if vehicles:
-            rospy.loginfo("[OBSTACLE] Obstacle change detected, applying avoidance to all active paths")
-            self._apply_avoidance_to_active_paths(vehicles)
-
-    def _apply_avoidance_to_active_paths(self, vehicles) -> None:
-        """장애물 변화 시 원본 경로 기반으로 회피 재적용 (장애물 삭제 시 복구)"""
-        if self._obstacle_planner is None:
-            return
+        
+        if not vehicles: return
+        if self._obstacle_planner is None: return
         
         for index, vehicle in enumerate(vehicles[:self.num_vehicles]):
             role = self._role_name(index)
             front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._original_paths.get(role)
-            if not original_path or len(original_path) < 2:
-                original_path = self._active_paths.get(role)
+            original_path = self._active_paths.get(role)
             if not original_path or len(original_path) < 2:
                 continue
             
@@ -266,23 +207,20 @@ class SimpleMultiAgentPlanner:
             if len(trimmed_original) < 2:
                 trimmed_original = original_path  # fallback
             
-            # 트리밍된 원본 경로 기반으로 회피 적용
-            modified_path, need_stop, stop_arc_length = self._obstacle_planner.apply_avoidance_to_path(role, trimmed_original)
+            points = self._unique_points(trimmed_original)
             
-            if need_stop:
-                rospy.logwarn(f"[OBSTACLE] {role}: cannot avoid, must stop")
-            elif modified_path != trimmed_original:
+            # 트리밍된 원본 경로 기반으로 회피 적용
+            modified_path = self._obstacle_planner.apply_avoidance_to_path(role, points)
+            
+            if modified_path != trimmed_original:
                 rospy.loginfo(f"[OBSTACLE] {role}: avoidance path applied")
+        
             else:
                 rospy.loginfo(f"[OBSTACLE] {role}: path restored to original (no obstacles)")
             
             # 경로 발행 (원본 또는 회피 경로)
             self._publish_path(modified_path, role)
             self._store_active_path(role, modified_path)
-            
-            # 정지 arc-length 발행
-            if role in self._obstacle_stop_pubs:
-                self._obstacle_stop_pubs[role].publish(Float32(data=stop_arc_length))
 
     def _replan_check_cb(self, _evt) -> None:
         # Distance-gated replanning per vehicle
@@ -301,56 +239,44 @@ class SimpleMultiAgentPlanner:
             
             front_loc = self._vehicle_front(vehicle)
             
-            # hold 중이면 스킵 (정지 유지)
-            hold_until = self._override_hold_until.get(role, 0.0)
-            if hold_until > 0.0:
-                if rospy.Time.now().to_sec() < hold_until:
-                    continue
-            
-                else:
-                    self._override_hold_until[role] = 0.0
-                    # hold 종료 후 기존 path 제거 → 재계획 유도
-                    self._active_paths.pop(role, None)
-                    self._active_path_s.pop(role, None)
-                    self._active_path_len.pop(role, None)
-            
-            # override goal가 있고 도착했다면 해제
-            if self._override_goal.get(role) is not None:
-                if front_loc.distance(self._override_goal[role]) <= max(0.5, float(self.override_clear_radius)):
-                    self._override_goal[role] = None
-                    self._override_active[role] = False
-                    hold_t = rospy.Time.now().to_sec() + max(0.0, float(self.override_hold_sec))
-                    self._override_hold_until[role] = hold_t
-                    # 정지용 path 퍼블리시(1포인트만 넣어 컨트롤러 속도 0 유도)
-                    stop_pts = [(front_loc.x, front_loc.y)]
-                    self._publish_path(stop_pts, role)
-                    self._store_active_path(role, stop_pts)
-                    rospy.loginfo(f"{role}: override goal reached -> hold for {self.override_hold_sec:.1f}s")
-                    continue
-            
             dest_override = None
-            if self._override_active.get(role, False) and self._override_goal.get(role) is not None:
-                dest_override = self._override_goal[role]
-            
-            # override가 활성인 동안에는 일반/저전압 재계획을 막고, 오버라이드 경로만 유지
-            if dest_override is not None:
-                current_path = self._active_paths.get(role)
-            
-                # 이미 목적지가 path 끝에 충분히 가까우면 재계획하지 않음
-                if current_path and len(current_path) >= 2:
-                    last = current_path[-1]
-                    if math.hypot(last[0] - dest_override.x, last[1] - dest_override.y) > max(1.0, self.start_join_max_gap_m):
-                        # 끝점이 멀면, 기존 경로의 마지막 점을 제외한 prefix로 한번만 append
-                        prefix = current_path[:-1] if len(current_path) > 1 else current_path
-                        if not self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix, dest_override=dest_override, force_direct=False):
-                            rospy.logwarn_throttle(5.0, f"{role}: failed to append override path")
-                        continue
+
+            # 사용자가 임의 목적지를 설정한 경우
+            if self._override_active.get(role, False):
+                # 임의 목적지로 향하고 있는 경우
+                if self._override_goal.get(role) is not None:
+                    if front_loc.distance(self._override_goal[role]) <= self.override_clear_radius:
+                        self._override_goal[role] = None
+                        hold_t = rospy.Time.now().to_sec() + max(0.0, float(self.override_hold_sec))
+                        self._override_hold_until[role] = hold_t
+                        
+                        # 정지용 path 퍼블리시(1포인트만 넣어 컨트롤러 속도 0 유도)
+                        stop_pts = [(front_loc.x, front_loc.y)]
+                        self._publish_path(stop_pts, role)
+                        self._store_active_path(role, stop_pts)
+                        rospy.loginfo(f"{role}: override goal reached -> hold for {self.override_hold_sec:.1f}s")
+
+                    else:
+                        dest_override = self._override_goal[role]
+                        current_path = self._active_paths.get(role)
                 
+                        if current_path and len(current_path) >= 2:
+                            # 현재 경로가 사용자의 임의 목적지와 먼 경우에만 재계획하기
+                            if math.hypot(current_path[-1][0] - dest_override.x, current_path[-1][1] - dest_override.y) > self.start_join_max_gap_m:
+                                prefix = current_path[:-1] if len(current_path) > 1 else current_path
+                                if not self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix, dest_override=dest_override, force_direct=False):
+                                    rospy.logwarn_throttle(5.0, f"{role}: failed to append override path")
+                        
+                        else:
+                            # 경로가 없으면 현재 위치 기준으로 계획
+                            if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override, force_direct=False):
+                                rospy.logwarn_throttle(5.0, f"{role}: failed to plan override path")
+
+                # 도착해서 대기 중인 경우
                 else:
-                    # 경로가 없으면 현재 위치 기준으로 계획
-                    if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override, force_direct=False):
-                        rospy.logwarn_throttle(5.0, f"{role}: failed to plan override path")
-                    continue
+                    if rospy.Time.now().to_sec() >= self._override_hold_until[role]:
+                        self._override_hold_until[role] = 0.0
+                        self._override_active[role] = False
 
             # override가 없을 때만 저전압/일반 로직 수행
             elif self._is_low_voltage(role):
@@ -404,33 +330,35 @@ class SimpleMultiAgentPlanner:
             else:
                 current_path = self._active_paths.get(role)
                 fail_inital_path = not current_path or len(current_path) < 2
-                
-                # 기존 목적지 유지 (None이면 랜덤 선택됨)
-                dest_override = self._current_dest.get(role)
 
                 remaining = self._remaining_path_distance(role, front_loc)
                 fail_remaining_none = remaining is None
 
+                # (현재 Path가 없거나 매우 짧음) 이거나 (남은 거리 계산 불가) -> 전체 재계획
                 if fail_inital_path or fail_remaining_none:
-                    if not self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
+                    if not self._plan_for_role(vehicle, role, front_loc):
                         msg = "failed to plan initial path" if fail_inital_path else "failed to replan after progress loss"
                         rospy.logwarn_throttle(5.0, f"{role}: {msg}")
                 
+                # 남은 거리가 소프트 임계값 이하 -> 경로 연장 시도
                 elif remaining <= max(0.0, float(self.replan_soft_distance_m)):
                     rospy.loginfo(f"{role}: remaining {remaining:.1f} m <= soft {self.replan_soft_distance_m:.1f} m -> path extension")
-                    if not self._extend_path(vehicle, role, front_loc, dest_override=dest_override):
+                    if not self._extend_path(vehicle, role, front_loc):
                         rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
-                        if self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override):
-                            pass
+                        self._plan_for_role(vehicle, role, front_loc)
 
     def _extend_path(self, vehicle, role: str, front_loc: carla.Location, dest_override: Optional[carla.Location] = None) -> bool:
         current = self._active_paths.get(role)
         if not current or len(current) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: no active path to extend; full replan")
-            return self._plan_for_role(vehicle, role, front_loc, dest_override=dest_override)
+            return False
+        
         s_profile = self._active_path_s.get(role)
         suffix = current
+        
+        # 머랑 머가 겹치는 지??
         if s_profile and len(s_profile) == len(current):
+            # 현재 위치 기준으로 겹치는 부분 제거?
             progress = self._project_progress_on_path(current, s_profile, front_loc.x, front_loc.y)
             if progress is not None:
                 overlap_target = max(0.0, progress - float(self.path_extension_overlap_m))
@@ -440,19 +368,21 @@ class SimpleMultiAgentPlanner:
                         start_idx = i
                         break
                 suffix = current[start_idx:]
-        attempts = 0
-        while attempts < max(1, int(self.max_extend_attempts)):
-            prefix_copy = list(suffix)
-            if len(prefix_copy) < 2:
-                rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
-                return self._plan_for_role(vehicle, role, front_loc)
+
+        if len(suffix) < 2:
+            rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
+            return self._plan_for_role(vehicle, role, front_loc)
+            
+        for attempt in range(max(1, int(self.max_extend_attempts))):
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is not None:
-                rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
-            if self._plan_for_role(vehicle, role, front_loc, prefix_points=prefix_copy):
+                rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempt + 1})")
+            
+            if self._plan_for_role(vehicle, role, front_loc, prefix_points=suffix[:]):
                 return True
-            attempts += 1
-            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
+            
+            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempt} failed; retrying")
+        
         rospy.logwarn_throttle(5.0, f"{role}: all extension attempts failed; falling back to fresh plan")
         return self._plan_for_role(vehicle, role, front_loc)
 
@@ -525,6 +455,7 @@ class SimpleMultiAgentPlanner:
         points: List[Tuple[float, float]] = []
         if not route:
             return points
+        
         last_x, last_y = None, None
         for wp, _ in route:
             loc = wp.transform.location
@@ -533,13 +464,13 @@ class SimpleMultiAgentPlanner:
                 points.append((x, y))
                 last_x, last_y = x, y
                 continue
+        
             dx, dy = x - last_x, y - last_y
             # Thin only when spacing exceeds configured threshold
             if dx * dx + dy * dy >= float(self.path_thin_min_m) * float(self.path_thin_min_m):
                 points.append((x, y))
                 last_x, last_y = x, y
-        if len(points) >= 2:
-            return points
+        
         return points
 
     def _straight_line_points(self, start_loc: carla.Location, dest_loc: carla.Location, spacing: float = 1.0) -> List[Tuple[float, float]]:
@@ -596,6 +527,7 @@ class SimpleMultiAgentPlanner:
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
             return [], 0.0
+        
         cumulative = [0.0]
         total = 0.0
         for i in range(1, len(points)):
@@ -605,40 +537,44 @@ class SimpleMultiAgentPlanner:
         return cumulative, total
 
     def _project_progress_on_path(self, points: List[Tuple[float, float]], s_profile: List[float], px: float, py: float):
-        if len(points) < 2:
-            return None
+        if len(points) < 2: return None
+        
         if not s_profile or len(s_profile) != len(points):
             s_profile, _ = self._compute_path_profile(points)
             if not s_profile or len(s_profile) != len(points):
                 return None
+        
         best_dist_sq = float("inf")
         best_index = None
         best_t = 0.0
+        
         for idx in range(len(points) - 1):
             x1, y1 = points[idx]
             x2, y2 = points[idx + 1]
             dx = x2 - x1
             dy = y2 - y1
             seg_len_sq = dx * dx + dy * dy
+        
             if seg_len_sq < 1e-6:
                 continue
+        
             t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
             t = max(0.0, min(1.0, t))
             proj_x = x1 + dx * t
             proj_y = y1 + dy * t
             dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+        
             if dist_sq < best_dist_sq:
                 best_dist_sq = dist_sq
                 best_index = idx
                 best_t = t
+        
         if best_index is None:
             rospy.logwarn_throttle(2.0, "SimpleMultiAgentPlanner: unable to project progress (disjoint path)")
             return None
+        
         seg_length = math.hypot(points[best_index + 1][0] - points[best_index][0], points[best_index + 1][1] - points[best_index][1])
-        if seg_length < 1e-6:
-            s_now = s_profile[best_index]
-        else:
-            s_now = s_profile[best_index] + best_t * seg_length
+        s_now = s_profile[best_index] + best_t * seg_length * int(seg_length >= 1e-6)
         return s_now
 
     def _remaining_path_distance(self, role: str, front_loc: carla.Location):
@@ -662,6 +598,7 @@ class SimpleMultiAgentPlanner:
             self._active_path_s.pop(role, None)
             self._active_path_len.pop(role, None)
             return
+        
         s_profile, total_len = self._compute_path_profile(points)
         self._active_paths[role] = points
         self._active_path_s[role] = s_profile
@@ -670,6 +607,7 @@ class SimpleMultiAgentPlanner:
     def _publish_path(self, points: List[Tuple[float, float]], role: str) -> None:
         if role not in self.path_publishers:
             return
+        
         msg = Path()
         msg.header = Header(frame_id="map", stamp=rospy.Time.now())
         for x, y in points:
@@ -679,6 +617,7 @@ class SimpleMultiAgentPlanner:
             p.pose.position.y = y
             p.pose.position.z = 0.0
             msg.poses.append(p)
+            
         self.path_publishers[role].publish(msg)
 
     def _plan_once(self) -> None:
@@ -741,48 +680,53 @@ class SimpleMultiAgentPlanner:
                     break
         
         new_points: List[Tuple[float, float]] = []
+        obstacles_on_path = None
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
-            self._update_vehicle_edges_from_nodes(role, node_list)
-        
+            self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
+            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(new_points, is_frenet=False)
+
         else:
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
             rospy.logwarn_throttle(2.0, f"{role}: using direct line to dest ({dest_loc.x:.2f},{dest_loc.y:.2f}) (force_direct={force_direct}, route_ok={route is not None and len(route)>=2})")
         
+        dont_snap = offroad_override or force_direct or len(obstacles_on_path) > 0 
         if prefix_points is not None and len(prefix_points) >= 1:
             combined = prefix_points[:-1] + new_points
-            points = combined # if (offroad_override or force_direct) else self._snap_points_to_lane(combined)
+            points = combined if dont_snap else self._snap_points_to_lane(combined)
         
         else:
             points = self._ensure_path_starts_at_vehicle(new_points, (front_loc.x, front_loc.y))
-            points = points # if (offroad_override or force_direct) else self._snap_points_to_lane(points)
+            points = points if dont_snap else self._snap_points_to_lane(points)
+        
+        if dont_snap:
+            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
         
         if len(points) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
             return False
         
-        # 장애물 회피 적용
-        need_stop = False
-        stop_arc_length = -1.0
-        original_points = list(points)  # 원본 저장
-        if self._obstacle_planner is not None and not force_direct:
-            points, need_stop, stop_arc_length = self._obstacle_planner.apply_avoidance_to_path(role, points)
-            # 원본 경로 저장 (회피 전)
-            self._original_paths[role] = original_points
+        points = self._unique_points(points)
+
+        original_points = list(points)
+        if self._obstacle_planner is not None and not offroad_override and not force_direct:
+            if len(obstacles_on_path) > 0:
+                points = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                self._original_paths[role] = original_points
         
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
-        if offroad_override or force_direct:
-            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
-        
+
         self._publish_path(points, role)
         self._store_active_path(role, points)
         self._current_dest[role] = dest_loc
-        
-        # 장애물 정지 arc-length 발행
-        if role in self._obstacle_stop_pubs:
-            self._obstacle_stop_pubs[role].publish(Float32(data=stop_arc_length))
-        
         return True
+
+    def _unique_points(self, points):
+        points = np.array(points)
+        dist = np.linalg.norm(np.diff(points, axis=0), axis=1)
+        points = points[np.append([True], dist > 1e-6), :].tolist()
+        
+        return points
 
     def _override_goal_cb(self, msg: PoseStamped, role: str) -> None:
         try:
@@ -794,6 +738,7 @@ class SimpleMultiAgentPlanner:
             self._override_goal[role] = loc
             self._override_active[role] = True
             rospy.loginfo(f"{role}: override goal set to ({loc.x:.2f},{loc.y:.2f})")
+
         except Exception as exc:
             rospy.logwarn_throttle(2.0, f"{role}: failed to set override goal: {exc}")
 

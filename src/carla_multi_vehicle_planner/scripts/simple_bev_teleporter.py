@@ -107,6 +107,7 @@ class SimpleBevTeleporter:
 		best_dist_sq = float("inf")
 		best_idx = None
 		best_t = 0.0
+		best_proj = (x, y)
 		for idx in range(len(pts) - 1):
 			x1, y1 = pts[idx]
 			x2, y2 = pts[idx + 1]
@@ -124,6 +125,7 @@ class SimpleBevTeleporter:
 				best_dist_sq = d2
 				best_idx = idx
 				best_t = t
+				best_proj = (px, py)
 		if best_idx is None:
 			return None
 		seg_len = math.hypot(pts[best_idx + 1][0] - pts[best_idx][0], pts[best_idx + 1][1] - pts[best_idx][1])
@@ -131,7 +133,8 @@ class SimpleBevTeleporter:
 			s_now = s_profile[best_idx]
 		else:
 			s_now = s_profile[best_idx] + best_t * seg_len
-		return s_now, s_profile, pts
+		heading = math.atan2(pts[best_idx + 1][1] - pts[best_idx][1], pts[best_idx + 1][0] - pts[best_idx][0])
+		return s_now, s_profile, pts, best_proj[0], best_proj[1], heading
 
 	def _sample_at_s(self, pts: List[Tuple[float, float]], s_profile: List[float], s_target: float):
 		if len(pts) < 2 or not s_profile or len(s_profile) != len(pts):
@@ -207,18 +210,21 @@ class SimpleBevTeleporter:
 				# 경로 기반 lookahead 보정: path 투영 후 s+lookahead
 				projected = self._project_on_path(role, x, y)
 				tx, ty, yaw_for_pose = x, y, yaw_rad
-				# if projected is not None:
-				# 	s_now, s_profile, pts = projected
-				# 	s_target = s_now + max(0.0, self.lookahead_m)
-				# 	sample = self._sample_at_s(pts, s_profile, s_target)
-				# 	if sample is not None:
-				# 		tx, ty, seg_idx = sample
-				# 		# 경로 방향으로 yaw 설정
-				# 		if seg_idx < len(pts) - 1:
-				# 			dx = pts[seg_idx + 1][0] - pts[seg_idx][0]
-				# 			dy = pts[seg_idx + 1][1] - pts[seg_idx][1]
-				# 			if abs(dx) + abs(dy) > 1e-6:
-				# 				yaw_for_pose = math.atan2(dy, dx)
+				if projected is not None:
+					s_now, s_profile, pts, px, py, heading_proj = projected
+					# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
+					dx_off = x - px
+					dy_off = y - py
+					nx = -math.sin(heading_proj)
+					ny = math.cos(heading_proj)
+					lat_off = dx_off * nx + dy_off * ny
+					s_target = s_now + max(0.0, self.lookahead_m)
+					sample = self._sample_at_s(pts, s_profile, s_target)
+					if sample is not None:
+						bx, by, seg_idx = sample
+						# 목표 지점에서 동일한 lateral offset 적용
+						tx = bx + nx * lat_off
+						ty = by + ny * lat_off
 
 				yaw_deg = math.degrees(yaw_for_pose)
 				location = carla.Location(x=tx, y=ty, z=self.default_z)

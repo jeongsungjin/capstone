@@ -11,8 +11,9 @@ from typing import List, Tuple, Optional, Dict
 import numpy as np
 
 from scipy.interpolate import CubicSpline
+from scipy.optimize import minimize
 from scipy.spatial import cKDTree
-
+from scipy.signal import find_peaks
 
 class FrenetPath:
     """
@@ -25,8 +26,6 @@ class FrenetPath:
     Usage:
         frenet_path = FrenetPath(edge_waypoints)
         s, d = frenet_path.cartesian_to_frenet(x, y)
-        direction = frenet_path.get_avoidance_direction(obs_x, obs_y)
-        avoidance = frenet_path.generate_avoidance_path(...)
     """
 
     def __init__(self, reference_path: List[Tuple[float, float]]):
@@ -104,6 +103,19 @@ class FrenetPath:
         heading = np.arctan2(dy_ds, dx_ds)
         
         return x, y, heading
+
+    def get_multiple_s_values(self, target_x, target_y, target_radius, lane_width):
+        # 1. 모든 경로 포인트와의 거리 계산
+        distances = np.hypot(self._path[:, 0] - target_x, self._path[:, 1] - target_y)
+        distances -= target_radius
+        distances -= lane_width / 2.0
+
+        # 2. 로컬 미니마를 찾기 위해 거리의 역수(또는 마이너스)를 취함
+        # find_peaks는 '높은' 곳을 찾으므로 거리가 '낮은' 곳을 찾기 위해 -를 붙임
+        # distance가 threshold보다 작은 것들 중에서만 찾음
+        peaks, _ = find_peaks(-distances, height=0)
+    
+        return peaks
 
     def get_curvature_at_s(self, s: float) -> float:
         """
@@ -183,175 +195,20 @@ class FrenetPath:
         
         return x, y
 
-    def obstacle_to_frenet(self, obs_x: float, obs_y: float) -> Tuple[float, float]:
-        """장애물 좌표 → Frenet 변환"""
-        return self.cartesian_to_frenet(obs_x, obs_y)
+    def generate_avoidance_path(self, 
+        s_start_idx: float, s_end_idx: float, d_offset: float,
+        weight_data: float, weight_smooth: float,
+        wheelbase=1.74, max_steer_deg=17.5):
 
-    def generate_avoidance_path(
-        self,
-        s_start: float,
-        s_end: float,
-        d_offset: float,
-        num_points: int = 20,
-        smooth_ratio: float = 0.3
-    ) -> List[Tuple[float, float]]:
-        """
-        회피 경로 생성
+        path = np.array([self._s_profile, np.zeros(len(self._s_profile), dtype=np.float64)]).T
+        path[s_start_idx:s_end_idx, 1] = d_offset
         
-        Args:
-            s_start: 회피 시작 s
-            s_end: 회피 종료 s
-            d_offset: 횡방향 오프셋 (양수=우측, 음수=좌측)
-            num_points: 경로점 수
-            smooth_ratio: 진입/복귀 구간 비율 (0~0.5)
-        """
-        path = []
-        smooth_ratio = max(0.1, min(0.5, smooth_ratio))
-        
-        for i in range(num_points):
-            t = i / (num_points - 1) if num_points > 1 else 0
-            s = s_start + t * (s_end - s_start)
-            
-            # 진입 구간 (처음 smooth_ratio): d=0 → d_offset
-            if t < smooth_ratio:
-                d_ratio = t / smooth_ratio  # 0 → 1
-                d = d_offset * self._smooth_step(d_ratio)
-            # 복귀 구간 (마지막 smooth_ratio): d_offset → 0
-            elif t > (1.0 - smooth_ratio):
-                d_ratio = (t - (1.0 - smooth_ratio)) / smooth_ratio  # 0 → 1
-                d = d_offset * (1.0 - self._smooth_step(d_ratio))
-            # 유지 구간 (중간): d=d_offset
-            else:
-                d = d_offset
-            
-            x, y = self.frenet_to_cartesian(s, d)
-            path.append((x, y))
-        
-        return path
+        return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), path))
 
-    def _smooth_step(self, t: float) -> float:
-        """Smoothstep 함수 (부드러운 0→1 전환)"""
-        t = max(0.0, min(1.0, t))
-        return t * t * (3 - 2 * t)
+        smoothed = np.array(path, copy=True).astype(float)
 
-    def generate_lane_offset_path(
-        self,
-        d_offset: float,
-        s_start: Optional[float] = None,
-        s_end: Optional[float] = None,
-        num_points: Optional[int] = None
-    ) -> List[Tuple[float, float]]:
-        """
-        전체 경로를 d만큼 오프셋한 경로 생성
-        """
-        s_start = s_start if s_start is not None else 0.0
-        s_end = s_end if s_end is not None else self._total_length
+        for _ in range(100):
+            smoothed[1:-1] += weight_data * (path[1:-1] - smoothed[1:-1])
+            smoothed[1:-1] += weight_smooth * (smoothed[:-2] + smoothed[2:] - 2.0 * smoothed[1:-1])
         
-        # 끝점 근처 스플라인 불안정 방지를 위해 약간 잘라냄
-        end_padding = 0.5  # 끝에서 0.5m 패딩
-        s_end = min(s_end, self._total_length - end_padding) if s_end >= self._total_length else s_end
-        s_start = max(s_start, end_padding) if s_start <= 0 else s_start
-        
-        if s_end <= s_start:
-            return []
-        
-        if num_points is None:
-            num_points = max(10, int((s_end - s_start) / 0.5))
-        
-        path = []
-        for i in range(num_points):
-            t = i / (num_points - 1) if num_points > 1 else 0
-            s = s_start + t * (s_end - s_start)
-            x, y = self.frenet_to_cartesian(s, d_offset)
-            path.append((x, y))
-        
-        return path
-
-    def generate_avoidance_candidates(
-        self,
-        d_min: float = -1.0,
-        d_max: float = 1.0,
-        d_step: float = 0.5,
-        num_points: Optional[int] = None
-    ) -> Dict[float, List[Tuple[float, float]]]:
-        """
-        회피 후보 경로들 생성 (d offset 별)
-        
-        Args:
-            d_min: 최소 d 오프셋 (음수 = 왼쪽)
-            d_max: 최대 d 오프셋 (양수 = 오른쪽)
-            d_step: d 간격
-            num_points: 경로점 수
-            
-        Returns:
-            {d_offset: [(x, y), ...], ...} 딕셔너리
-        """
-        candidates = {}
-        
-        # d 값 리스트 생성 (d_min, d_min+step, ..., d_max)
-        d = d_min
-        while d <= d_max + 1e-6:
-            candidates[d] = self.generate_lane_offset_path(d, num_points=num_points)
-            d += d_step
-        
-        return candidates
-
-    def get_avoidance_path(self, d_offset: float, num_points: Optional[int] = None) -> List[Tuple[float, float]]:
-        """
-        특정 d 오프셋의 회피 경로 반환
-        캐시가 없으면 새로 생성
-        """
-        if not hasattr(self, '_avoidance_cache'):
-            self._avoidance_cache = {}
-        
-        key = (d_offset, num_points)
-        if key not in self._avoidance_cache:
-            self._avoidance_cache[key] = self.generate_lane_offset_path(d_offset, num_points=num_points)
-        
-        return self._avoidance_cache[key]
-
-
-    def is_obstacle_in_lane(
-        self,
-        obs_x: float,
-        obs_y: float,
-        lane_width: float = 3.5
-    ) -> bool:
-        """장애물이 경로 차선 내에 있는지 확인"""
-        s, d = self.cartesian_to_frenet(obs_x, obs_y)
-        return abs(d) <= lane_width / 2
-
-    def get_avoidance_direction(
-        self,
-        obs_x: float,
-        obs_y: float,
-        default_direction: str = "right"
-    ) -> str:
-        """장애물 회피 방향 결정"""
-        s, d = self.cartesian_to_frenet(obs_x, obs_y)
-        
-        if abs(d) < 0.5:
-            return default_direction
-        elif d > 0:
-            return "left"
-        else:
-            return "right"
-
-    def sample_path(self, ds: float = 0.5) -> List[Tuple[float, float]]:
-        """
-        경로를 일정 간격으로 샘플링 (스플라인 사용으로 부드러운 경로)
-        
-        Args:
-            ds: 샘플링 간격 (m)
-        """
-        num_points = max(2, int(self._total_length / ds) + 1)
-        path = []
-        
-        for i in range(num_points):
-            s = i * ds
-            if s > self._total_length:
-                s = self._total_length
-            x, y, _ = self.get_point_at_s(s)
-            path.append((x, y))
-        
-        return path
+        return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), smoothed))

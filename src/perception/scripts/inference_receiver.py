@@ -9,6 +9,8 @@ from typing import List, Optional, Set, Tuple, Union
 import rospy
 from capstone_msgs.msg import BEVInfo
 
+from geometry_msgs.msg import Pose, PoseArray
+from visualization_msgs.msg import MarkerArray, Marker
 
 class InferenceReceiverNode:
     """Receives global_tracks inference over UDP and publishes BEVInfo."""
@@ -54,6 +56,11 @@ class InferenceReceiverNode:
             sock.bind((self.udp_ip, int(port)))
             sock.setblocking(False)
             self.socks.append(sock)
+
+        self.obstacle_pub = rospy.Publisher("/obstacles", PoseArray, queue_size=1)
+        self.marker_pub = rospy.Publisher("/obstacle_markers", MarkerArray, queue_size=1, latch=True)
+
+        self.obstacle_height = 2.0
 
         self.pub = rospy.Publisher(self.topic, BEVInfo, queue_size=1)
         rospy.loginfo(
@@ -198,6 +205,67 @@ class InferenceReceiverNode:
 
         return msg
 
+    def _to_obstacle_info(self, items, stamp, frame_seq):
+        msg = PoseArray()
+        msg.header.stamp = stamp
+        msg.header.seq = frame_seq
+        msg.header.frame_id = self.frame_id
+        widths = []
+
+        for it in items:
+            cls_id = self._extract_class_id(it)
+            if cls_id == 0:
+                continue
+            
+            center_pt = it.get("center")
+            widths.append(it.get("width"))
+
+            pose = Pose()
+            pose.position.x = center_pt[0]
+            pose.position.y = center_pt[1]
+            pose.position.z = center_pt[2]
+            pose.orientation.w = 1.0
+
+            msg.poses.append(pose)
+
+        self.obstacle_pub.publish(msg)
+
+        markers = MarkerArray()
+        
+        # 기존 마커 삭제
+        delete_marker = Marker()
+        delete_marker.header.frame_id = self.frame_id
+        delete_marker.action = Marker.DELETEALL
+        markers.markers.append(delete_marker)
+        
+        # 새 마커 추가
+        for i, pose in enumerate(msg.poses):
+            marker = Marker()
+            marker.header.frame_id = self.frame_id
+            marker.header.stamp = stamp
+            marker.header.seq = frame_seq
+            marker.ns = "obstacles"
+            marker.id = i
+            marker.type = Marker.CYLINDER
+            marker.action = Marker.ADD
+            marker.pose.position.x = pose.position.x
+            marker.pose.position.y = pose.position.y
+            marker.pose.position.z = pose.position.z + self.obstacle_height / 2
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = widths[i] * 2
+            marker.scale.y = widths[i] * 2
+            marker.scale.z = self.obstacle_height
+            marker.color.r = 1.0
+            marker.color.g = 0.3
+            marker.color.b = 0.0
+            marker.color.a = 0.8
+            marker.lifetime = rospy.Duration(0)
+            markers.markers.append(marker)
+
+        self.marker_pub.publish(markers)
+
+        return len(msg.poses)
+
     def spin(self) -> None:
         rate = rospy.Rate(30)
         while not rospy.is_shutdown():
@@ -230,6 +298,7 @@ class InferenceReceiverNode:
 
                 frame_seq = self.frame_seq
                 bev_msg = self._to_bevinfo(items, stamp, frame_seq)
+                obstacle_count = self._to_obstacle_info(items, stamp, frame_seq)
                 self.pub.publish(bev_msg)
 
                 now = rospy.Time.now()
@@ -238,7 +307,7 @@ class InferenceReceiverNode:
                     1.0,
                     "[Frame %d] published detCounts=%d latency=%.3fs",
                     frame_seq,
-                    bev_msg.detCounts,
+                    bev_msg.detCounts + obstacle_count,
                     latency,
                 )
 
