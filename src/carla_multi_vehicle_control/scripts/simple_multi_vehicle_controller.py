@@ -172,7 +172,7 @@ class SimpleMultiVehicleController:
         st["path_length"] = total_len
         st["progress_s"] = 0.0
         st["progress_fail_count"] = 0
-        rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
+        # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
         if rear is not None:
@@ -197,7 +197,7 @@ class SimpleMultiVehicleController:
                     st["progress_s"] = s_now
                     st["current_index"] = idx
                     st["progress_fail_count"] = 0
-                    rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
+                    # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         st = self.states[role]
@@ -511,7 +511,7 @@ class SimpleMultiVehicleController:
                 st["progress_s"] = s_now
                 st["current_index"] = idx
                 st["progress_fail_count"] = 0
-                rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
+                # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
         if proj is not None:
             st["progress_fail_count"] = 0
         else:
@@ -535,7 +535,7 @@ class SimpleMultiVehicleController:
         steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
         speed = self.target_speed
         # Apply traffic light gating
-        speed = self._apply_tl_gating(vehicle, fx, fy, speed)
+        speed = self._apply_tl_gating(role, vehicle, st, fx, fy, speed)
         # Apply forward collision gating (vehicles in front cone within distance)
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
@@ -679,19 +679,59 @@ class SimpleMultiVehicleController:
         except Exception:
             return False
 
-    def _apply_tl_gating(self, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
+    def _apply_tl_gating(self, role: str, vehicle, st, fx: float, fy: float, speed_cmd: float) -> float:
         if not self._tl_phase:
             return speed_cmd
+        pos = st.get("position")
+        # rear 기준뿐 아니라 차량 중심 좌표도 함께 검사해 영역 누락 방지
+        check_points = [("rear", fx, fy)]
+        if pos is not None:
+            check_points.append(("center", float(pos.x), float(pos.y)))
+        hit = False
+        min_gap = float("inf")
+        min_info = None
         for data in self._tl_phase.values():
             approaches = data.get("approaches", [])
             for ap in approaches:
-                if fx >= ap["xmin"] and fx <= ap["xmax"] and fy >= ap["ymin"] and fy <= ap["ymax"]:
-                    color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
-                    # Region-based hard stop
-                    if color == 0:
-                        return 0.0
-                    if color == 1 and self.tl_yellow_policy.lower() != "permissive":
-                        return 0.0
+                for label, px, py in check_points:
+                    if px >= ap["xmin"] and px <= ap["xmax"] and py >= ap["ymin"] and py <= ap["ymax"]:
+                        color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
+                        color_name = "red" if color == 0 else ("yellow" if color == 1 else "green")
+                        # Region-based hard stop
+                        if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
+                            rospy.loginfo_throttle(
+                                0.5,
+                                f"{role}: TL HIT ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) speed_in={speed_cmd:.2f} -> 0",
+                            )
+                            hit = True
+                            return 0.0
+                        # In region but not stopping (green or permissive yellow)
+                        rospy.loginfo_throttle(
+                            0.5,
+                            f"{role}: TL IN ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) keep speed={speed_cmd:.2f}",
+                        )
+                        hit = True
+                    # gap to bbox (0 if inside); use L2 of outside deltas
+                    dx = 0.0
+                    if px < ap["xmin"]:
+                        dx = ap["xmin"] - px
+                    elif px > ap["xmax"]:
+                        dx = px - ap["xmax"]
+                    dy = 0.0
+                    if py < ap["ymin"]:
+                        dy = ap["ymin"] - py
+                    elif py > ap["ymax"]:
+                        dy = py - ap["ymax"]
+                    gap = math.hypot(dx, dy)
+                    if gap < min_gap:
+                        min_gap = gap
+                        min_info = (label, px, py, ap, ap.get("color", 0))
+        if not hit and min_info is not None:
+            label, px, py, ap, color = min_info
+            rospy.logdebug_throttle(
+                1.0,
+                f"{role}: TL no-hit ({label}) pos=({px:.2f},{py:.2f}) closest region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) gap={min_gap:.2f} color={int(color)} phase_cache={len(self._tl_phase)}",
+            )
         return speed_cmd
 
     def _apply_parking_speed_limit(self, role: str, st, speed_cmd: float) -> float:
@@ -761,6 +801,10 @@ class SimpleMultiVehicleController:
                 speed = override_speed
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
+            rospy.loginfo_throttle(
+                0.5,
+                f"{role}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
+            )
 
 
 if __name__ == "__main__":

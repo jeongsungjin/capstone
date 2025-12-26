@@ -10,7 +10,6 @@
   <!-- raw: camera-only BEV; fused: heading_fuser output -->
   <arg name="bev_topic_raw" default="/bev_info_raw" />
   <arg name="bev_topic_teleport" default="/bev_info_raw" />
-  <arg name="enable_pid" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -135,7 +134,7 @@
   </node>
 
   <!-- 4.5) BEV speed PID override (per-vehicle PID params) -->
-  <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid">
+  <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
 
     <!-- BEV input -->

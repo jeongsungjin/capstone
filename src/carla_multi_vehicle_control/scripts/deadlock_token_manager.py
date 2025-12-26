@@ -226,7 +226,7 @@ class DeadlockTokenManager:
             timed_out = (now - self._token_stamp) >= self.token_timeout
             clear = self._path_clear(self._token_vid)
             if timed_out or not clear:
-                rospy.loginfo("[deadlock-token] revoke vid=%d reason=%s", self._token_vid, "timeout" if timed_out else "blocked")
+                # rospy.loginfo("[deadlock-token] revoke vid=%d reason=%s", self._token_vid, "timeout" if timed_out else "blocked")
                 self._publish_override(self._token_vid, False)
                 self._token_vid = None
         # 토큰 없으면 선택
@@ -237,7 +237,7 @@ class DeadlockTokenManager:
                 if self._path_clear(cand):
                     self._token_vid = cand
                     self._token_stamp = now
-                    rospy.loginfo("[deadlock-token] grant vid=%d", cand)
+                    # rospy.loginfo("[deadlock-token] grant vid=%d", cand)
                     # 다른 차량은 False
                     self._revoke_all()
                     self._publish_override(cand, True)
