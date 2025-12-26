@@ -210,21 +210,21 @@ class SimpleBevTeleporter:
 				# 경로 기반 lookahead 보정: path 투영 후 s+lookahead
 				projected = self._project_on_path(role, x, y)
 				tx, ty, yaw_for_pose = x, y, yaw_rad
-				if projected is not None:
-					s_now, s_profile, pts, px, py, heading_proj = projected
-					# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
-					dx_off = x - px
-					dy_off = y - py
-					nx = -math.sin(heading_proj)
-					ny = math.cos(heading_proj)
-					lat_off = dx_off * nx + dy_off * ny
-					s_target = s_now + max(0.0, self.lookahead_m)
-					sample = self._sample_at_s(pts, s_profile, s_target)
-					if sample is not None:
-						bx, by, seg_idx = sample
-						# 목표 지점에서 동일한 lateral offset 적용
-						tx = bx + nx * lat_off
-						ty = by + ny * lat_off
+				# if projected is not None:
+				# 	s_now, s_profile, pts, px, py, heading_proj = projected
+				# 	# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
+				# 	dx_off = x - px
+				# 	dy_off = y - py
+				# 	nx = -math.sin(heading_proj)
+				# 	ny = math.cos(heading_proj)
+				# 	lat_off = dx_off * nx + dy_off * ny
+				# 	s_target = s_now + max(0.0, self.lookahead_m)
+				# 	sample = self._sample_at_s(pts, s_profile, s_target)
+				# 	if sample is not None:
+				# 		bx, by, seg_idx = sample
+				# 		# 목표 지점에서 동일한 lateral offset 적용
+				# 		tx = bx + nx * lat_off
+				# 		ty = by + ny * lat_off
 
 				yaw_deg = math.degrees(yaw_for_pose)
 				location = carla.Location(x=tx, y=ty, z=self.default_z)

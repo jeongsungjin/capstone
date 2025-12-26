@@ -170,7 +170,7 @@ class SimpleMultiVehicleController:
         st["path_length"] = total_len
         st["progress_s"] = 0.0
         st["progress_fail_count"] = 0
-        rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
+        # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
         if rear is not None:
@@ -195,7 +195,7 @@ class SimpleMultiVehicleController:
                     st["progress_s"] = s_now
                     st["current_index"] = idx
                     st["progress_fail_count"] = 0
-                    rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
+                    # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
         st = self.states[role]
@@ -498,7 +498,7 @@ class SimpleMultiVehicleController:
                 st["progress_s"] = s_now
                 st["current_index"] = idx
                 st["progress_fail_count"] = 0
-                rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
+                # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
         if proj is not None:
             st["progress_fail_count"] = 0
         else:
