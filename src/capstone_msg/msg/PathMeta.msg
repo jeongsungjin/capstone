@@ -1,0 +1,5 @@
+std_msgs/Header header
+std_msgs/String category
+std_msgs/Float64 resolution
+std_msgs/Float32MultiArray s_starts
+std_msgs/Float32MultiArray s_ends

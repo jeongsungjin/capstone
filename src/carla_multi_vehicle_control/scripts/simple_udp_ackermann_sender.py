@@ -43,7 +43,7 @@ class SimpleUdpAckermannSender:
         for idx in range(1, self.num_vehicles + 1):
             role = f"ego_vehicle_{idx}"
             base = f"~vehicles/{role}"
-            topic = rospy.get_param(f"{base}/topic", f"/carla/{role}/vehicle_control_cmd")
+            topic = rospy.get_param(f"{base}/topic", f"/carla/{role}/vehicle_control_cmd_raw")
             dest_ip = str(rospy.get_param(f"{base}/dest_ip", "127.0.0.1"))
             dest_port = int(rospy.get_param(f"{base}/dest_port", 5555))
             angle_scale = float(rospy.get_param(f"{base}/angle_scale", 1.0))
@@ -145,7 +145,7 @@ class SimpleUdpAckermannSender:
             send_angle = -send_angle
         sp = speed * float(v["speed_scale"])
         # 강제 속도 범위 클램프(4.0~5.0)
-        sp = max(4.0, min(5.0, float(sp)))
+        # sp = max(4.0, min(5.0, float(sp)))
 
         if self.send_speed_as_float:
             xy_speed = max(-50.0, min(50.0, float(sp)))

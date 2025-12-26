@@ -34,24 +34,28 @@ type:
 import json
 import socket
 from typing import Dict, List, Tuple
+import message_filters
 
 import rospy
 import yaml
-from capstone_msgs.msg import Uplink
+from capstone_msgs.msg import Uplink, PathMeta
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
+from carla_multi_vehicle_control.msg import TrafficLightPhase
 
 
 class UdpStatusBroadcaster:
     def __init__(self) -> None:
         rospy.init_node("udp_status_broadcaster", anonymous=True)
 
-        self.dest_ip = str(rospy.get_param("~dest_ip", "127.0.0.1"))
+        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.7"))
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
+        self.traffic_hz = float(max(0.1, rospy.get_param("~traffic_hz", 1.0)))
         self.path_max_points = int(rospy.get_param("~path_max_points", 0))
+        self.path_resolution = float(rospy.get_param("~path_resolution", 0.1))
 
         # 차량 ID 결정
         vehicle_ids = self._parse_vehicle_ids()
@@ -60,52 +64,72 @@ class UdpStatusBroadcaster:
         # 토픽 이름 구성
         self.uplink_topic = str(rospy.get_param("~uplink_topic", "/imu_uplink"))
         self.path_topic_prefix = str(rospy.get_param("~path_topic_prefix", "/global_path_"))
+        self.path_meta_topic_prefix = str(rospy.get_param("~path_meta_topic_prefix", "/global_path_meta_"))
+        
         # 기본값은 슬래시 형태로 맞추고, 호환을 위해 언더스코어 형태도 함께 구독
         self.override_prefix = str(rospy.get_param("~override_prefix", "/override_goal/"))
         self.override_name_prefix = str(rospy.get_param("~override_name_prefix", "/override_goal_name/"))
         self.map_yaml = str(rospy.get_param("~map_yaml", ""))
         self.dest_names = list(rospy.get_param("~dest_names", ["home", "hospital", "school", "store", "park", "garage", "lake"]))
+        self.traffic_topic = str(rospy.get_param("~traffic_topic", "/traffic_phase"))
 
         # 최신 상태 캐시
         self._voltages: Dict[int, float] = {}
-        self._paths: Dict[int, List[Tuple[float, float]]] = {}
+        # TODO : !!!!!!!!!!!!!!
+        self._paths: Dict[int, dict] = {vid: {"path": [], "category": "", "resolution": 0.1, "s_start": [], "s_end": []} for vid in self.vehicle_ids}
+
         self._path_sig: Dict[int, Tuple[int, Tuple[float, float], Tuple[float, float]]] = {}
         self._path_dirty: Dict[int, bool] = {vid: False for vid in self.vehicle_ids}
         self._path_seen: Dict[int, bool] = {vid: False for vid in self.vehicle_ids}
         self._initial_route_sent = False
-        # 수동 목적지 이름 캐시
         self._override_names: Dict[int, str] = {}
-        # 목적지 이름 매핑
         self._dest_centers: List[Tuple[str, float, float]] = self._load_destinations(self.map_yaml, self.dest_names)
+        self._traffic_phase: TrafficLightPhase = None  # type: ignore
+        self._traffic_phases: Dict[str, TrafficLightPhase] = {}
+        self._tl_name_to_id: Dict[str, int] = {}
+        self._tl_fourway_ids: set = set()
+        self._next_tl_id = 1
 
         # 소켓은 1개를 재사용
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
         rospy.Subscriber(self.uplink_topic, Uplink, self._uplink_cb, queue_size=20)
         for vid in self.vehicle_ids:
-            topic = f"{self.path_topic_prefix}{self._role_name(vid)}"
-            rospy.Subscriber(topic, Path, self._path_cb, callback_args=vid, queue_size=1)
-            rospy.logdebug("Subscribed path topic: %s (car_id=%d)", topic, vid)
+            path_topic = f"{self.path_topic_prefix}{self._role_name(vid)}"
+            path_meta_topic = f"{self.path_meta_topic_prefix}{self._role_name(vid)}"
+
+            path_sub = message_filters.Subscriber(path_topic, Path)
+            meta_sub = message_filters.Subscriber(path_meta_topic, PathMeta)
+            ts = message_filters.TimeSynchronizer([path_sub, meta_sub], 10)
+            ts.registerCallback(self._path_cb, callback_args=vid)
+
+            rospy.logdebug("Subscribed path topic: %s (car_id=%d)", path_topic, vid)
+        
         for vid in self.vehicle_ids:
             role = self._role_name(vid)
-            # pose override: 슬래시형/언더스코어형 모두 구독
+
             topics_pose = {
                 f"{self.override_prefix}{role}",
                 f"/override_goal_{role}",
             }
+
             for t in topics_pose:
                 rospy.Subscriber(t, PoseStamped, self._override_cb, callback_args=vid, queue_size=1)
-            # name override: 슬래시형/언더스코어형 모두 구독
+
             topics_name = {
                 f"{self.override_name_prefix}{role}",
                 f"/override_goal_name_{role}",
             }
+
             for t in topics_name:
                 rospy.Subscriber(t, String, self._override_name_cb, callback_args=vid, queue_size=1)
+
+        rospy.Subscriber(self.traffic_topic, TrafficLightPhase, self._traffic_cb, queue_size=5)
 
         # 타이머: status 주기 송신, route 이벤트 감시
         rospy.Timer(rospy.Duration(1.0 / self.rate_status_hz), self._timer_status)
         rospy.Timer(rospy.Duration(1.0 / self.route_check_hz), self._timer_route)
+        rospy.Timer(rospy.Duration(1.0 / self.traffic_hz), self._timer_traffic)
 
     def _parse_vehicle_ids(self) -> List[int]:
         raw = rospy.get_param("~vehicle_ids", None)
@@ -163,28 +187,32 @@ class UdpStatusBroadcaster:
         except Exception:
             pass
 
-    def _path_cb(self, msg: Path, vehicle_id: int) -> None:
-        pts: List[Tuple[float, float]] = []
-        for pose in msg.poses:
-            try:
-                pts.append((float(pose.pose.position.x), float(pose.pose.position.y)))
-            except Exception:
-                continue
-        vid = int(vehicle_id)
-        self._paths[vid] = pts
-        rospy.logdebug(
-            "[car %d] path received (%d pts)", vid, len(pts)
+    def _path_cb(self, path: Path, meta: PathMeta, vehicle_id: int) -> None:
+        pts: Tuple[Tuple[float, float]] = tuple(
+            (float(pose.pose.position.x), float(pose.pose.position.y)) for pose in path.poses
         )
+
+        category = meta.category.data
+        resolution = meta.resolution.data
+        s_starts = meta.s_starts.data
+        s_ends = meta.s_ends.data
+
+        self._paths[vehicle_id]["path"] = path
+        self._paths[vehicle_id]["category"] = category
+        self._paths[vehicle_id]["resolution"] = resolution
+        self._paths[vehicle_id]["s_start"] = s_starts if category == "obstacle" else []
+        self._paths[vehicle_id]["s_end"] = s_ends if category == "obstacle" else []
+
+        rospy.logdebug("[car %d] path received (%d pts)", vehicle_id, len(pts))
+
         # 경로 변경 감지: 길이, 시작/끝 좌표로 단순 서명
-        if pts:
-            sig = (len(pts), pts[0], pts[-1])
-        else:
-            sig = (0, (0.0, 0.0), (0.0, 0.0))
-        prev = self._path_sig.get(vid)
+        sig = (len(pts), pts) if pts else (0, ((0.0, 0.0),))
+        prev = self._path_sig.get(vehicle_id)
         if prev is None or prev != sig:
-            self._path_dirty[vid] = True
-            self._path_sig[vid] = sig
-        self._path_seen[vid] = True
+            self._path_dirty[vehicle_id] = True
+            self._path_sig[vehicle_id] = sig
+
+        self._path_seen[vehicle_id] = True
 
     def _build_port_a_payload(self):
         # carStatus payload: 개별 메시지로 송신
@@ -194,37 +222,55 @@ class UdpStatusBroadcaster:
         return cars
 
     def _build_port_b_payload(self):
-        cars_status = []
-        planning = []
+        cars_status, planning = [], []
+
+        ret = {
+            "type": "route",
+            "resolution": self.path_resolution,
+            "payload": []
+        }
+
         for vid in self.vehicle_ids:
-            cars_status.append({"car_id": vid, "routeChanged": False})
-            path = self._paths.get(vid, [])
-            limited = path
-            if self.path_max_points > 0 and len(path) > self.path_max_points:
-                limited = path[: self.path_max_points]
-            planning.append(
-                {"car_id": vid, "path": [[float(x), float(y)] for x, y in limited]}
-            )
-        return {"payload": {"carsStatus": cars_status, "planning": planning}}
+            if not self._path_dirty.get(vid):
+                continue
+
+            info = self._paths.get(vid, {"category": "", "path": []})
+            
+            ret["payload"].append({
+                "vid": vid,
+                "category": info["category"],
+                "optional": {
+                    "s_start": info["s_start"],
+                    "s_end": info["s_end"]
+                },
+                "planning": info["path"]
+            })
+
+        return ret
 
     def _send_payload(self, payload) -> None:
         try:
             data_str = json.dumps(payload, separators=(",", ":"))
             self.sock.sendto(data_str.encode("utf-8"), (self.dest_ip, self.port))
+            
             msg_type = payload.get("type", "unknown") if isinstance(payload, dict) else "unknown"
             if msg_type == "carStatus":
                 rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
+            
             elif msg_type == "route":
                 # route는 길어질 수 있어 타입과 차량 수만 요약
                 try:
-                    cars = payload.get("payload", {}).get("carsStatus", [])
+                    cars = payload.get("payload")
                     rospy.loginfo("UDP route -> port=%d cars=%d", self.port, len(cars))
                 except Exception:
                     rospy.loginfo("UDP route -> port=%d", self.port)
+            
             elif msg_type == "end":
                 rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
+            
             else:
                 rospy.loginfo("UDP send -> port=%d data=%s", self.port, data_str)
+        
         except Exception as exc:
             rospy.logwarn_throttle(2.0, "UDP send failed (port=%d): %s", self.port, exc)
 
@@ -238,7 +284,6 @@ class UdpStatusBroadcaster:
         # 경로 재계획(변경) 발생 시에만 전송
         if any(self._path_dirty.values()) or (not self._initial_route_sent and all(self._path_seen.values())):
             payload = self._build_port_b_payload()
-            payload["type"] = "route"
             self._send_payload(payload)
             self._initial_route_sent = True
             self._clear_dirty()
@@ -274,6 +319,65 @@ class UdpStatusBroadcaster:
                 self._send_payload(payload)
         except Exception:
             pass
+
+    def _traffic_cb(self, msg: TrafficLightPhase) -> None:
+        # 매 수신 시 intersection_id + 이름/인덱스 조합으로 신규 ID를 고정 배정 (교차로 추가도 반영)
+        if msg is not None:
+            keys = []
+            for idx, ap in enumerate(msg.approaches):
+                nm = ap.name or f"ap{idx}"
+                key = f"{msg.intersection_id}:{nm}"
+                keys.append(key)
+            for key in sorted(keys):
+                if key not in self._tl_name_to_id:
+                    self._tl_name_to_id[key] = self._next_tl_id
+                    # 4구 신호(좌회전 화살표 포함) 여부 기록
+                    if idx == 0 or "LEFT" in nm.upper() or "M_LR" in nm.upper():
+                        self._tl_fourway_ids.add(self._next_tl_id)
+                    self._next_tl_id += 1
+            iid = str(msg.intersection_id or "default")
+            self._traffic_phases[iid] = msg
+        self._traffic_phase = msg
+
+    def _timer_traffic(self, _evt) -> None:
+        if not self._traffic_phases:
+            return
+        # 모든 교차로 메시지를 순회하며 송신 (ID는 교차로+어프로치 이름 기준으로 고정)
+        for iid in sorted(self._traffic_phases.keys()):
+            phase_msg = self._traffic_phases[iid]
+            for idx, ap in enumerate(phase_msg.approaches):
+                name = ap.name or f"ap{idx}"
+                key = f"{iid}:{name}"
+                tl_id = self._tl_name_to_id.get(key)
+                if tl_id is None:
+                    tl_id = self._next_tl_id
+                    self._tl_name_to_id[key] = tl_id
+                    if idx == 0 or "LEFT" in name_upper or "M_LR" in name_upper:
+                        self._tl_fourway_ids.add(tl_id)
+                    self._next_tl_id += 1
+                name_upper = name.upper()
+                color_int = int(ap.color)
+                if color_int == 0:
+                    light = "red"
+                    left_green = False
+                elif color_int == 1:
+                    light = "yellow"
+                    left_green = False
+                elif color_int == 2:
+                    # 4구 신호(좌회전 포함): light는 green, 좌회전은 별도 필드로 표기
+                    if tl_id in self._tl_fourway_ids:
+                        light = "green"
+                        left_green = True
+                    else:
+                        light = "green"
+                        left_green = False
+                else:
+                    light = "red"
+                    left_green = False
+                payload = {"type": "trafficLight", "trafficLight_id": tl_id, "light": light}
+                if tl_id in self._tl_fourway_ids:
+                    payload["left_green"] = bool(left_green)
+                self._send_payload(payload)
 
     def _guess_dest_name(self, x: float, y: float) -> str:
         if not self._dest_centers:

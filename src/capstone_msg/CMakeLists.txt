@@ -22,6 +22,7 @@ add_message_files(
   Uplink.msg
   WaitPoint.msg
   TimingPlan.msg
+  PathMeta.msg
 )
 
 generate_messages(
