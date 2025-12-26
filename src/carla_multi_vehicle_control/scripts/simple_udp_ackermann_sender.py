@@ -43,7 +43,7 @@ class SimpleUdpAckermannSender:
         for idx in range(1, self.num_vehicles + 1):
             role = f"ego_vehicle_{idx}"
             base = f"~vehicles/{role}"
-            topic = rospy.get_param(f"{base}/topic", f"/carla/{role}/vehicle_control_cmd")
+            topic = rospy.get_param(f"{base}/topic", f"/carla/{role}/vehicle_control_cmd_raw")
             dest_ip = str(rospy.get_param(f"{base}/dest_ip", "127.0.0.1"))
             dest_port = int(rospy.get_param(f"{base}/dest_port", 5555))
             angle_scale = float(rospy.get_param(f"{base}/angle_scale", 1.0))
@@ -145,7 +145,7 @@ class SimpleUdpAckermannSender:
             send_angle = -send_angle
         sp = speed * float(v["speed_scale"])
         # 강제 속도 범위 클램프(4.0~5.0)
-        sp = max(4.0, min(5.0, float(sp)))
+        # sp = max(4.0, min(5.0, float(sp)))
 
         if self.send_speed_as_float:
             xy_speed = max(-50.0, min(50.0, float(sp)))
@@ -161,10 +161,10 @@ class SimpleUdpAckermannSender:
         last_log = v.get("last_log", rospy.Time(0))
         if self.log_throttle_sec <= 0.0 or (now - last_log).to_sec() >= self.log_throttle_sec:
             di, dp = v.get("dest", ("", 0))
-            # rospy.loginfo(
-            #     f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
-            #     f"(mode={'float' if self.send_speed_as_float else 'int'})"
-            # )
+            rospy.loginfo(
+                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
+                f"(mode={'float' if self.send_speed_as_float else 'int'})"
+            )
             v["last_log"] = now
 
         fmt = FMT_FLOAT_FLOAT if self.send_speed_as_float else FMT_FLOAT_INT

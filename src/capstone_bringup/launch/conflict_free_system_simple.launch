@@ -10,7 +10,6 @@
   <!-- raw: camera-only BEV; fused: heading_fuser output -->
   <arg name="bev_topic_raw" default="/bev_info_raw" />
   <arg name="bev_topic_teleport" default="/bev_info_raw" />
-  <arg name="enable_pid" default="true" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -127,44 +126,6 @@
     <param name="kd_follow" value="0.1" />
     <!-- 리더 경로는 path_relay가 퍼블리시하므로 플래툰 매니저는 팔로워만 퍼블리시 -->
     <param name="publish_leader_path" value="false" />
-  </node>
-
-  <!-- 4.5) BEV speed PID override (per-vehicle PID params) -->
-  <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid" output="screen">
-    <param name="num_vehicles" value="$(arg num_vehicles)" />
-
-    <!-- BEV input -->
-    <param name="bev_topic" value="$(arg bev_topic_raw)" />
-    <param name="use_detection_index" value="true" />
-    <param name="id_offset" value="0" />
-    <!-- BEV speeds already look like m/s (2~13), so use scale 1.0 -->
-    <param name="bev_speed_scale" value="1.0" />
-    <!-- enable PID logging to confirm measurements are used -->
-    <param name="log_missing_measurement" value="false" />
-    <param name="log_measurement" value="false" />
-
-    <!-- Ackermann raw input from controller & final output to UDP sender -->
-    <param name="cmd_raw_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd_raw" />
-    <param name="cmd_out_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd" />
-
-    <!-- default PID / limits (fallback when vehicle override not provided) -->
-    <param name="default/kp" value="0.0" />
-    <param name="default/ki" value="0.0" />
-    <param name="default/kd" value="0.0" />
-    <param name="default/target_speed_mps" value="0.5" />
-    <param name="default/min_speed_cmd" value="0.0" />
-    <param name="default/max_speed_cmd" value="1.0" />
-
-    <!-- teleport/discontinuity safety -->
-    <param name="enable_jump_reset" value="true" />
-    <param name="pos_jump_m" value="1.0" />
-
-    <!-- per-vehicle overrides (A 방식) -->
-    <rosparam param="vehicles">
-      ego_vehicle_1: {kp: 1.0, ki: 0.0, kd: 0.0, target_speed_mps: 5.0, min_speed_cmd: 0.0, max_speed_cmd: 5.0}
-      ego_vehicle_2: {kp: 1.00, ki: 0.20, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
-      ego_vehicle_3: {kp: 1.10, ki: 0.22, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
-    </rosparam>
   </node>
 
 
