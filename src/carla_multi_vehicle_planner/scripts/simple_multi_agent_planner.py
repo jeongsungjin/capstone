@@ -65,7 +65,7 @@ class SimpleMultiAgentPlanner:
         self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
         self.low_voltage_dest_x = float(rospy.get_param("~low_voltage_dest_x", -12.5))
         self.low_voltage_dest_y = float(rospy.get_param("~low_voltage_dest_y", -16.5))
-        self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -25.0))
+        self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -27.0))
         self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
         self.parking_trigger_distance_m = float(rospy.get_param("~parking_trigger_distance_m", 0.5))
 
@@ -115,9 +115,10 @@ class SimpleMultiAgentPlanner:
         self.override_hold_sec = float(rospy.get_param("~override_hold_sec", 5.0))
         self._override_hold_until: Dict[str, float] = {self._role_name(i): 0.0 for i in range(self.num_vehicles)}
 
-        # Uplink subscriber
-        if Uplink is not None:
-            rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
+        # Uplink subscriber (voltage)
+        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink"))
+        if Uplink is not None and self.uplink_topic:
+            rospy.Subscriber(self.uplink_topic, Uplink, self._uplink_cb, queue_size=10)
 
         # Override goal subscribers per vehicle
         for index in range(self.num_vehicles):

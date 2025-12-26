@@ -35,11 +35,22 @@ class SimpleBevTeleporter:
 		self.yaw_in_degrees = bool(rospy.get_param("~yaw_in_degrees", False))
 		# BEV 지연 보상용 경로 기반 lookahead (m)
 		self.lookahead_m = float(rospy.get_param("~lookahead_m", 1.0))
+		# BEV lateral offset 보정 필터/클램프
+		self.lat_offset_max = float(rospy.get_param("~lat_offset_max", 0.75))  # m, 허용 횡편차 상한
+		self.lat_offset_alpha = float(rospy.get_param("~lat_offset_alpha", 0.3))  # 0~1, 0=hold, 1=no filter
+		# 소프트 데드존/램프: 작은 횡오차는 무시, 커질수록 더 크게 반영
+		self.lat_offset_deadzone = float(rospy.get_param("~lat_offset_deadzone", 0.10))  # m
+		self.lat_offset_ramp = float(rospy.get_param("~lat_offset_ramp", 1.0))  # m to reach full weight
+		self.lat_offset_power = float(rospy.get_param("~lat_offset_power", 1.5))  # >1이면 큰 오차를 더 강하게
+		# ID 매핑: 입력 id를 ego_vehicle_{id}로 매핑 (offset 가능)
+		self.use_ids = bool(rospy.get_param("~use_ids", True))
+		self.id_offset = int(rospy.get_param("~id_offset", 0))
 		# ENU(CCW) → CARLA(CW) 변환이 필요하면 True로 설정
 		self._last_stamp = None
 		self._last_seq = None
 		self.disable_collisions = bool(rospy.get_param("~disable_collisions", True))
 		self._collision_disabled: Dict[str, bool] = {}
+		self._lat_off_filt: Dict[str, float] = {}
 
 		self.client = carla.Client(self.host, self.port)
 		self.client.set_timeout(5.0)
@@ -155,11 +166,11 @@ class SimpleBevTeleporter:
 		return None
 
 	def _bev_cb(self, msg: BEVInfo) -> None:
-		# 여러 대 지원: 메시지 길이와 role_names 수 중 작은 값만큼 처리
-		n = min(len(self.role_names), len(msg.center_xs), len(msg.center_ys), len(msg.yaws))
-		if n <= 0:
+		# 여러 대 지원: 길이 확인
+		min_len = min(len(msg.ids), len(msg.center_xs), len(msg.center_ys), len(msg.yaws))
+		if min_len <= 0:
 			return
-		if len(msg.center_xs) < n or len(msg.center_ys) < n or len(msg.yaws) < n:
+		if len(msg.center_xs) < min_len or len(msg.center_ys) < min_len or len(msg.yaws) < min_len:
 			rospy.logwarn_throttle(
 				1.0,
 				"BEV message missing fields: detCounts=%d, lens=(%d,%d,%d)",
@@ -186,8 +197,32 @@ class SimpleBevTeleporter:
 			if dt <= 0:
 				return
 		self._last_stamp = stamp
-		for i in range(n):
-			role = self.role_names[i]
+		used_roles = set()
+		for i in range(min_len):
+			role = None
+			if self.use_ids and i < len(msg.ids):
+				try:
+					vid = int(msg.ids[i]) + self.id_offset
+					if 1 <= vid <= len(self.role_names):
+						candidate = self.role_names[vid - 1]
+						if candidate not in used_roles:
+							role = candidate
+				except Exception:
+					role = None
+				# use_ids가 켜진 경우, id 매핑 실패/중복이면 해당 항목은 스킵
+				if role is None:
+					continue
+			else:
+				# fallback: 인덱스 기반 (use_ids가 꺼진 경우에만)
+				if i < len(self.role_names):
+					candidate = self.role_names[i]
+					if candidate in used_roles:
+						continue
+					role = candidate
+			if role is None:
+				continue
+			used_roles.add(role)
+
 			actor = self._get_actor(role)
 			if actor is None:
 				rospy.logwarn_throttle(1.0, "teleport skip: actor %s not found", role)
@@ -210,21 +245,30 @@ class SimpleBevTeleporter:
 				# 경로 기반 lookahead 보정: path 투영 후 s+lookahead
 				projected = self._project_on_path(role, x, y)
 				tx, ty, yaw_for_pose = x, y, yaw_rad
-				# if projected is not None:
-				# 	s_now, s_profile, pts, px, py, heading_proj = projected
-				# 	# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
-				# 	dx_off = x - px
-				# 	dy_off = y - py
-				# 	nx = -math.sin(heading_proj)
-				# 	ny = math.cos(heading_proj)
-				# 	lat_off = dx_off * nx + dy_off * ny
-				# 	s_target = s_now + max(0.0, self.lookahead_m)
-				# 	sample = self._sample_at_s(pts, s_profile, s_target)
-				# 	if sample is not None:
-				# 		bx, by, seg_idx = sample
-				# 		# 목표 지점에서 동일한 lateral offset 적용
-				# 		tx = bx + nx * lat_off
-				# 		ty = by + ny * lat_off
+				if projected is not None:
+					s_now, s_profile, pts, px, py, heading_proj = projected
+					# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
+					dx_off = x - px
+					dy_off = y - py
+					nx = -math.sin(heading_proj)
+					ny = math.cos(heading_proj)
+					lat_off_raw = dx_off * nx + dy_off * ny
+					# 소프트 데드존 + 램프: 작은 오차는 무시, 커질수록 가중 반영
+					sign = 1.0 if lat_off_raw >= 0.0 else -1.0
+					abs_off = abs(lat_off_raw)
+					active = max(0.0, abs_off - self.lat_offset_deadzone)
+					norm = min(1.0, active / max(1e-3, self.lat_offset_ramp))
+					weight = norm ** max(1.0, self.lat_offset_power)
+					target_off = sign * min(self.lat_offset_max, weight * abs_off)
+					# LPF 제거: 바로 램프+클램프 값 사용
+					lat_off = max(-self.lat_offset_max, min(self.lat_offset_max, target_off))
+					s_target = s_now + max(0.0, self.lookahead_m)
+					sample = self._sample_at_s(pts, s_profile, s_target)
+					if sample is not None:
+						bx, by, seg_idx = sample
+						# 목표 지점에서 동일한 lateral offset 적용
+						tx = bx + nx * lat_off
+						ty = by + ny * lat_off
 
 				yaw_deg = math.degrees(yaw_for_pose)
 				location = carla.Location(x=tx, y=ty, z=self.default_z)

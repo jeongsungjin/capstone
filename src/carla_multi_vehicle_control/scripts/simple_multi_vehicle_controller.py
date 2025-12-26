@@ -48,11 +48,16 @@ class SimpleMultiVehicleController:
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
         # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
         self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 2.0))
-        self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 5.0))
+        self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 7.0))
         self.heading_ld_gain = float(rospy.get_param("~heading_ld_gain", 2.0))  # ld / (1 + gain * |heading_err|)
         self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 2.0))) * math.pi / 180.0
         self.heading_lpf_alpha = float(rospy.get_param("~heading_lpf_alpha", 0.3))  # 0~1, 0=hold, 1=no filter
         self.heading_lpf_alpha = max(0.0, min(1.0, self.heading_lpf_alpha))
+        # 곡률 기반 LD 조절
+        self.curv_ld_enable = bool(rospy.get_param("~curv_ld_enable", True))
+        self.curv_ld_min = float(rospy.get_param("~curv_ld_min", 2.0))   # 최소 2m
+        self.curv_ld_max = float(rospy.get_param("~curv_ld_max", 7.0))   # 직선에서 7m
+        self.curv_ld_gain = float(rospy.get_param("~curv_ld_gain", 8.0))  # ld = max / (1 + gain*|kappa|)
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
@@ -145,7 +150,10 @@ class SimpleMultiVehicleController:
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
-        rospy.Subscriber("/imu_uplink", Uplink, self._uplink_cb, queue_size=10)
+        # Uplink (voltage) subscriber: topic configurable
+        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink")).strip()
+        if self.uplink_topic:
+            rospy.Subscriber(self.uplink_topic, Uplink, self._uplink_cb, queue_size=10)
         rospy.Subscriber("/emergency_stop", Bool, self._e_stop_cb, queue_size=5)
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
@@ -379,6 +387,27 @@ class SimpleMultiVehicleController:
         proj_y = path[best_index][1] + best_seg[1] * best_t
         return best_index, best_t, proj_x, proj_y, best_seg[0], best_seg[1]
 
+    def _estimate_curvature(self, path, idx: int):
+        """세 점(앞/현재/뒤)을 사용해 단순 곡률 κ(1/m)를 추정한다."""
+        if len(path) < 3:
+            return None
+        i = max(1, min(len(path) - 2, idx))
+        x1, y1 = path[i - 1]
+        x2, y2 = path[i]
+        x3, y3 = path[i + 1]
+        a = math.hypot(x2 - x1, y2 - y1)
+        b = math.hypot(x3 - x2, y3 - y2)
+        c = math.hypot(x3 - x1, y3 - y1)
+        if a < 1e-3 or b < 1e-3 or c < 1e-3:
+            return None
+        area = abs(x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) / 2.0
+        denom = a * b * c
+        if denom < 1e-6:
+            return None
+        kappa = 4.0 * area / denom  # 2R = abc/area -> k = 1/R = 4*area/(abc)
+        
+        return kappa
+
     def _force_snap_progress(self, st, px: float, py: float):
         path = st.get("path") or []
         s_profile = st.get("s_profile") or []
@@ -425,10 +454,22 @@ class SimpleMultiVehicleController:
         # arc-length target selection with interpolation
         s_now = float(st.get("progress_s", 0.0))
         base_ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
+        ld = base_ld
+        # 곡률 기반 LD 축소: 직선(κ≈0)에서 ld≈curv_ld_max, 곡률 커지면 최소 curv_ld_min
+        if self.curv_ld_enable:
+            kappa = self._estimate_curvature(path, st.get("current_index", 0))
+            if kappa is not None:
+                ld_curv = self.curv_ld_max / (1.0 + self.curv_ld_gain * abs(kappa))
+                ld = max(self.curv_ld_min, min(self.curv_ld_max, ld_curv))
+        # 헤딩 오차 기반 추가 축소 (LPF/데드존 반영)
         heading_err = float(st.get("heading_err_filt", st.get("heading_err", 0.0)))
-        # 조향/헤딩 오차 기반 lookahead 축소 (LPF/데드존 반영)
-        ld = base_ld / (1.0 + self.heading_ld_gain * abs(heading_err))
+        ld = ld / (1.0 + self.heading_ld_gain * abs(heading_err))
         ld = max(self.min_lookahead_m, min(self.max_lookahead_m, ld))
+        # 디버그: 최종 ld 출력
+        rospy.loginfo_throttle(
+            0.5,
+            f"{st.get('role','?')}: ld={ld:.2f} (curv={kappa if 'kappa' in locals() else None}, head_err={heading_err:.3f})",
+        )
         s_target = s_now + max(0.05, ld)
         sample = self._sample_path_at_s(path, s_profile, s_target)
         if sample is None:
@@ -641,6 +682,7 @@ class SimpleMultiVehicleController:
         try:
             vid = int(role.split("_")[-1])
             v = self._voltage.get(vid, float("inf"))
+            print(f"Voltage: {v}")
             return v <= float(self.low_voltage_threshold)
         except Exception:
             return False

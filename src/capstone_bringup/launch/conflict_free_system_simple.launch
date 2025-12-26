@@ -80,7 +80,7 @@
   <!-- 4) Controller -->
   <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="lookahead_distance" value="4.0" />
+    <param name="lookahead_distance" value="8.0" />
     <param name="target_speed" value="5.0" />
     <param name="use_speed_override" value="$(arg enable_platooning)" />
     <param name="speed_override_timeout" value="0.5" />
