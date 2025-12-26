@@ -522,7 +522,7 @@ class SimpleMultiVehicleController:
         steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
         speed = self.target_speed
         # Apply traffic light gating
-        speed = self._apply_tl_gating(role, vehicle, fx, fy, speed)
+        speed = self._apply_tl_gating(vehicle, fx, fy, speed)
         # Apply forward collision gating (vehicles in front cone within distance)
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
         # Apply parking slowdown when low-voltage path ends at parking dest
@@ -645,7 +645,7 @@ class SimpleMultiVehicleController:
         except Exception:
             return False
 
-    def _apply_tl_gating(self, role: str, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
+    def _apply_tl_gating(self, vehicle, fx: float, fy: float, speed_cmd: float) -> float:
         if not self._tl_phase:
             return speed_cmd
         for data in self._tl_phase.values():
@@ -655,16 +655,8 @@ class SimpleMultiVehicleController:
                     color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
                     # Region-based hard stop
                     if color == 0:
-                        rospy.loginfo_throttle(
-                            0.5,
-                            f"{role}: TL gate STOP (red) region=({ap['xmin']:.1f},{ap['xmax']:.1f},{ap['ymin']:.1f},{ap['ymax']:.1f}) pos=({fx:.1f},{fy:.1f}) name={ap.get('name','')}",
-                        )
                         return 0.0
                     if color == 1 and self.tl_yellow_policy.lower() != "permissive":
-                        rospy.loginfo_throttle(
-                            0.5,
-                            f"{role}: TL gate STOP (yellow) region=({ap['xmin']:.1f},{ap['xmax']:.1f},{ap['ymin']:.1f},{ap['ymax']:.1f}) pos=({fx:.1f},{fy:.1f}) name={ap.get('name','')}",
-                        )
                         return 0.0
         return speed_cmd
 
@@ -735,10 +727,6 @@ class SimpleMultiVehicleController:
                 speed = override_speed
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
-            rospy.loginfo_throttle(
-                0.5,
-                f"{role}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
-            )
 
 
 if __name__ == "__main__":

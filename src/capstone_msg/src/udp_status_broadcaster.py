@@ -41,7 +41,6 @@ from capstone_msgs.msg import Uplink
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
-from carla_multi_vehicle_control.msg import TrafficLightPhase
 
 
 class UdpStatusBroadcaster:
@@ -52,7 +51,6 @@ class UdpStatusBroadcaster:
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
-        self.traffic_hz = float(max(0.1, rospy.get_param("~traffic_hz", 1.0)))
         self.path_max_points = int(rospy.get_param("~path_max_points", 0))
 
         # 차량 ID 결정
@@ -67,7 +65,6 @@ class UdpStatusBroadcaster:
         self.override_name_prefix = str(rospy.get_param("~override_name_prefix", "/override_goal_name/"))
         self.map_yaml = str(rospy.get_param("~map_yaml", ""))
         self.dest_names = list(rospy.get_param("~dest_names", ["home", "hospital", "school", "store", "park", "garage", "lake"]))
-        self.traffic_topic = str(rospy.get_param("~traffic_topic", "/traffic_phase"))
 
         # 최신 상태 캐시
         self._voltages: Dict[int, float] = {}
@@ -80,12 +77,6 @@ class UdpStatusBroadcaster:
         self._override_names: Dict[int, str] = {}
         # 목적지 이름 매핑
         self._dest_centers: List[Tuple[str, float, float]] = self._load_destinations(self.map_yaml, self.dest_names)
-        # 신호등 상태
-        self._traffic_phase: TrafficLightPhase = None  # type: ignore
-        self._traffic_phases: Dict[str, TrafficLightPhase] = {}
-        self._tl_name_to_id: Dict[str, int] = {}
-        self._tl_fourway_ids: set = set()
-        self._next_tl_id = 1
 
         # 소켓은 1개를 재사용
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -111,12 +102,10 @@ class UdpStatusBroadcaster:
             }
             for t in topics_name:
                 rospy.Subscriber(t, String, self._override_name_cb, callback_args=vid, queue_size=1)
-        rospy.Subscriber(self.traffic_topic, TrafficLightPhase, self._traffic_cb, queue_size=5)
 
         # 타이머: status 주기 송신, route 이벤트 감시
         rospy.Timer(rospy.Duration(1.0 / self.rate_status_hz), self._timer_status)
         rospy.Timer(rospy.Duration(1.0 / self.route_check_hz), self._timer_route)
-        rospy.Timer(rospy.Duration(1.0 / self.traffic_hz), self._timer_traffic)
 
     def _parse_vehicle_ids(self) -> List[int]:
         raw = rospy.get_param("~vehicle_ids", None)
@@ -285,65 +274,6 @@ class UdpStatusBroadcaster:
                 self._send_payload(payload)
         except Exception:
             pass
-
-    def _traffic_cb(self, msg: TrafficLightPhase) -> None:
-        # 매 수신 시 intersection_id + 이름/인덱스 조합으로 신규 ID를 고정 배정 (교차로 추가도 반영)
-        if msg is not None:
-            keys = []
-            for idx, ap in enumerate(msg.approaches):
-                nm = ap.name or f"ap{idx}"
-                key = f"{msg.intersection_id}:{nm}"
-                keys.append(key)
-            for key in sorted(keys):
-                if key not in self._tl_name_to_id:
-                    self._tl_name_to_id[key] = self._next_tl_id
-                    # 4구 신호(좌회전 화살표 포함) 여부 기록
-                    if idx == 0 or "LEFT" in nm.upper() or "M_LR" in nm.upper():
-                        self._tl_fourway_ids.add(self._next_tl_id)
-                    self._next_tl_id += 1
-            iid = str(msg.intersection_id or "default")
-            self._traffic_phases[iid] = msg
-        self._traffic_phase = msg
-
-    def _timer_traffic(self, _evt) -> None:
-        if not self._traffic_phases:
-            return
-        # 모든 교차로 메시지를 순회하며 송신 (ID는 교차로+어프로치 이름 기준으로 고정)
-        for iid in sorted(self._traffic_phases.keys()):
-            phase_msg = self._traffic_phases[iid]
-            for idx, ap in enumerate(phase_msg.approaches):
-                name = ap.name or f"ap{idx}"
-                key = f"{iid}:{name}"
-                tl_id = self._tl_name_to_id.get(key)
-                if tl_id is None:
-                    tl_id = self._next_tl_id
-                    self._tl_name_to_id[key] = tl_id
-                    if idx == 0 or "LEFT" in name_upper or "M_LR" in name_upper:
-                        self._tl_fourway_ids.add(tl_id)
-                    self._next_tl_id += 1
-                name_upper = name.upper()
-                color_int = int(ap.color)
-                if color_int == 0:
-                    light = "red"
-                    left_green = False
-                elif color_int == 1:
-                    light = "yellow"
-                    left_green = False
-                elif color_int == 2:
-                    # 4구 신호(좌회전 포함): light는 green, 좌회전은 별도 필드로 표기
-                    if tl_id in self._tl_fourway_ids:
-                        light = "green"
-                        left_green = True
-                    else:
-                        light = "green"
-                        left_green = False
-                else:
-                    light = "red"
-                    left_green = False
-                payload = {"type": "trafficLight", "trafficLight_id": tl_id, "light": light}
-                if tl_id in self._tl_fourway_ids:
-                    payload["left_green"] = bool(left_green)
-                self._send_payload(payload)
 
     def _guess_dest_name(self, x: float, y: float) -> str:
         if not self._dest_centers:
