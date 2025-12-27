@@ -66,7 +66,7 @@ class ObstaclePlanner:
                 self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
 
         # 장애물로 인해 정지 중인 차량 추적 (role -> obstacle_pos)
-        self._obstacle_blocked_roles: Dict[str, carla.Location] = {}
+        self._obstacle_blocked_roles: Dict[str, List[Tuple[carla.Location, float]]] = {}
         
         # Obstacle subscriber
         self.is_obstacle_list_changed = False
@@ -195,6 +195,13 @@ class ObstaclePlanner:
                 
                 self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)].add(role)
 
+    def get_stop_pos(self, role: str) -> carla.Location:
+        return self._obstacle_blocked_roles[role][0]
+
+    def stop_done(self, role: str):
+        self._obstacle_blocked_roles[role].pop(0)
+        if not self._obstacle_blocked_roles[role]:
+            self._obstacle_blocked_roles.pop(role)
 
     def apply_avoidance_to_path(
         self, 
@@ -217,12 +224,10 @@ class ObstaclePlanner:
         rospy.loginfo(f"[AVOIDANCE] {role}: obstacle detected {len(obstacles_on_path)} on path")
         
         # 2. 회피 경로 생성 시도
-        combined_path, best_d_offsets, stop_poses, need_stop_idx, s_starts, s_ends = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
+        combined_path, best_d_offsets, stop_poses, s_starts, s_ends = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
+        self._obstacle_blocked_roles[role] = stop_poses
         rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d_offsets}")
-        if need_stop_idx != -1:
-            self._obstacle_blocked_roles[role] = stop_poses[need_stop_idx]
-            rospy.logfatal(f"[MUST STOP] {role}: CANNOT AVOID OBSTACLE at ({stop_poses[need_stop_idx].x:.1f}, {stop_poses[need_stop_idx].y:.1f}) - VEHICLE MUST STOP!")
-
+        
         return combined_path, stop_poses, s_starts, s_ends
     
     def _find_obstacle_on_path(self, frenet_path, is_frenet=True) -> List[Tuple[Tuple[float, float], int]]:
@@ -251,7 +256,7 @@ class ObstaclePlanner:
 
     def _generate_avoidance_segment(self, frenet_path, obstacles):
         try:
-            best_d_offsets, stop_poses, need_stop_idx = [], [], -1
+            best_d_offsets, stop_poses = [], []
             s_starts, s_ends = [], []
             for idx, (path_idx, (s_obs, d_obs), (ox, oy)) in enumerate(obstacles):
                 # 횡방향 경로 계획
@@ -268,10 +273,8 @@ class ObstaclePlanner:
                 safe_d_offsets = np.array(safe_d_offsets)
                 if len(safe_d_offsets) == 0:
                     rospy.logfatal(f'[AVOIDANCE] failed to find safe d-offset for obstacle at ({ox:.1f}, {oy:.1f})')
-                    need_stop_idx = idx
-                    break
 
-                best_d_offset = safe_d_offsets[np.abs(safe_d_offsets).argmin()]
+                best_d_offset = safe_d_offsets[np.abs(safe_d_offsets).argmin()] if len(safe_d_offsets) > 0 else None
                 best_d_offsets.append(best_d_offset)
 
                 # 종방향 경로 계획
@@ -279,29 +282,33 @@ class ObstaclePlanner:
                 delta_max_rad = math.radians(17.5)
                 r_min = wheelbase / math.tan(delta_max_rad)
     
-                look_ahead = math.sqrt(2 * r_min * abs(best_d_offset))
+                look_ahead = math.sqrt(2 * r_min * abs(best_d_offset if best_d_offset else (self.max_d_offset / self.d_offset_scale)))
                 look_behind = wheelbase * 3
 
                 s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
                 s_starts.append(s_start)
                 stop_pos = frenet_path.frenet_to_cartesian(s_start, 0)
-                stop_poses.append(carla.Location(
-                    x=stop_pos[0],
-                    y=stop_pos[1]
+
+                # 연속 장애물 구간 처리를 어떻게 해야할까?
+                stop_poses.append((
+                    carla.Location(
+                        x=stop_pos[0],
+                        y=stop_pos[1]
+                    ),
+                    best_d_offset
                 ))
             
                 s_end = min(frenet_path._s_profile[-1] - 0.5, s_obs + (self.obstacle_radius + look_behind))
                 s_ends.append(s_end)
 
-                rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d_offset:.1f} total_length: {frenet_path.total_length:.1f}')
-
-                s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
-                s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
-
-                frenet_path.update_d_offset(s_start_idx, s_end_idx, best_d_offset)
+                if best_d_offset:
+                    s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
+                    s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
+                    rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d_offset:.1f} total_length: {frenet_path.total_length:.1f}')
+                    frenet_path.update_d_offset(s_start_idx, s_end_idx, best_d_offset)
 
             avoidance_path = frenet_path.generate_avoidance_path()
-            return avoidance_path, best_d_offsets, stop_poses, need_stop_idx, s_starts, s_ends
+            return avoidance_path, best_d_offsets, stop_poses, s_starts, s_ends
 
         # TODO: 여기서 None 이 반환되는 건에 대해 이후 로직에 대한 처리하 한 곳도 되어 있지 않음!!
         except Exception as e:
