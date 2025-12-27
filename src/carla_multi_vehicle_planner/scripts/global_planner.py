@@ -127,6 +127,20 @@ class GlobalPlanner(GlobalRoutePlanner):
 
         return (entry_wp.road_id, entry_wp.lane_id)
 
+    def get_edges_at_location(self, x: float, y: float, radius: float = 1.0) -> List[Tuple[int, int]]:
+        """해당 위치를 지나는 모든 edge 반환"""
+        edges = []
+        loc = carla.Location(x=x, y=y, z=0.0)
+        
+        for n1, n2, data in self._graph.edges(data=True):
+            path = data.get('path', [])
+            for wp in path:
+                if wp.transform.location.distance(loc) < radius:
+                    edges.append((n1, n2))
+                    break  # 이 edge는 찾았으니 다음 edge로
+        
+        return edges
+
     def are_edges_on_opposite_lanes(self, edge_a: Tuple[int, int], edge_b: Tuple[int, int]) -> bool:
         """
         두 엣지가 반대 차선 관계인지 확인
