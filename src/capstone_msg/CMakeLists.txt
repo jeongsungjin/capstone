@@ -20,6 +20,9 @@ add_message_files(
   FILES
   BEVInfo.msg
   Uplink.msg
+  WaitPoint.msg
+  TimingPlan.msg
+  PathMeta.msg
 )
 
 generate_messages(

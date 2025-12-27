@@ -468,7 +468,7 @@ class SimpleMultiVehicleController:
         # 디버그: 최종 ld 출력
         rospy.loginfo_throttle(
             0.5,
-            f"{st.get('role','?')}: ld={ld:.2f} (curv={kappa if 'kappa' in locals() else None}, head_err={heading_err:.3f})",
+            f"{st.get('role','')}: ld={ld:.2f} (curv={kappa if 'kappa' in locals() else None}, head_err={heading_err:.3f})",
         )
         s_target = s_now + max(0.05, ld)
         sample = self._sample_path_at_s(path, s_profile, s_target)
@@ -682,7 +682,7 @@ class SimpleMultiVehicleController:
         try:
             vid = int(role.split("_")[-1])
             v = self._voltage.get(vid, float("inf"))
-            print(f"Voltage: {v}")
+            # print(f"Voltage: {v}")
             return v <= float(self.low_voltage_threshold)
         except Exception:
             return False
