@@ -79,6 +79,7 @@ class ObstaclePlanner:
         
         # Vehicle route edges tracking (role -> [(n1, n2), ...])
         self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
+        self._blocked_opposite_ids: Dict[Tuple[int, int], Set[str]] = {}
 
     def _obstacle_cb(self, msg: PoseArray) -> None:
         """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
@@ -174,15 +175,26 @@ class ObstaclePlanner:
         # GlobalPlanner의 nodes_to_edges 사용
         if hasattr(self.route_planner, 'nodes_to_edges'):
             edges = self.route_planner.nodes_to_edges(node_list)
+        
         else:
             # fallback: 직접 변환
-            edges = []
-            for i in range(len(node_list) - 1):
-                edges.append((node_list[i], node_list[i + 1]))
-        
+            edges = [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]
+            
         if edges:
+            if role in self._vehicle_route_edges and len(self._vehicle_route_edges[role]) > 0:
+                for edge in self._vehicle_route_edges[role]:
+                    if self.route_planner.get_id_for_edge(edge) in self._blocked_opposite_ids:
+                        self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)].remove(role)
+
             self._vehicle_route_edges[role] = edges
-            rospy.logdebug(f"{role}: updated {len(edges)} edges from node_list")
+            rospy.logwarn(f"{role}: updated {len(edges)} edges from node_list")
+
+            for edge in edges:
+                if self.route_planner.get_id_for_edge(edge) not in self._blocked_opposite_ids:
+                    self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)] = set()
+                
+                self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)].add(role)
+
 
     def apply_avoidance_to_path(
         self, 
