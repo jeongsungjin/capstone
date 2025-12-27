@@ -7,7 +7,7 @@
   <arg name="bev_topic_raw" default="/bev_info_raw" />
   <arg name="bev_topic_teleport" default="/bev_info_raw" />
   <arg name="udp_port" default="60050" />
-  <arg name="enable_traffic_manager" default="true" />
+  <arg name="enable_traffic_manager" default="false" />
   <arg name="tm_signals_yaml" default="$(find traffic_manager)/config/traffic_signals.yaml" />
   <arg name="tm_publish_hz" default="10.0" />
   <arg name="enable_status_udp" default="true" />

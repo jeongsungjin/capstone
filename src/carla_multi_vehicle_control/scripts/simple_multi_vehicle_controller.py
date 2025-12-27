@@ -47,7 +47,7 @@ class SimpleMultiVehicleController:
         self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
         # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
-        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 2.0))
+        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 3.0))
         self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 7.0))
         self.heading_ld_gain = float(rospy.get_param("~heading_ld_gain", 2.0))  # ld / (1 + gain * |heading_err|)
         self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 2.0))) * math.pi / 180.0
@@ -57,7 +57,7 @@ class SimpleMultiVehicleController:
         self.curv_ld_enable = bool(rospy.get_param("~curv_ld_enable", True))
         self.curv_ld_min = float(rospy.get_param("~curv_ld_min", 2.0))   # 최소 2m
         self.curv_ld_max = float(rospy.get_param("~curv_ld_max", 7.0))   # 직선에서 7m
-        self.curv_ld_gain = float(rospy.get_param("~curv_ld_gain", 8.0))  # ld = max / (1 + gain*|kappa|)
+        self.curv_ld_gain = float(rospy.get_param("~curv_ld_gain", 10.0))  # ld = max / (1 + gain*|kappa|)
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
@@ -69,7 +69,7 @@ class SimpleMultiVehicleController:
         self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
         self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -23.0))
         self.parking_dest_y = float(rospy.get_param("~parking_dest_y", -16.5))
-        self.parking_speed = float(rospy.get_param("~parking_speed", 3.0))
+        self.parking_speed = float(rospy.get_param("~parking_speed", 5.0))
         self.parking_speed_radius = float(rospy.get_param("~parking_speed_radius", 5.0))
         self.parking_stop_radius = float(rospy.get_param("~parking_stop_radius", 0.5))
         self.progress_backtrack_window_m = float(rospy.get_param("~progress_backtrack_window_m", 5.0))
