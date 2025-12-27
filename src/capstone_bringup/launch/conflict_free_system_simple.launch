@@ -30,7 +30,7 @@
     <param name="low_voltage_threshold" value="5.0" />
     <param name="low_voltage_dest_x" value="-12.5" />
     <param name="low_voltage_dest_y" value="-16.5" />
-    <param name="parking_dest_x" value="-23.0" />
+    <param name="parking_dest_x" value="-27.0" />
     <param name="parking_dest_y" value="-16.5" />
     <param name="parking_trigger_distance_m" value="3.0" />
     <param name="obstacle_stop_distance" value="3.0"/>
@@ -86,7 +86,7 @@
   <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="8.0" />
-    <param name="target_speed" value="6.0" />
+    <param name="target_speed" value="5.0" />
     <param name="use_speed_override" value="$(arg enable_platooning)" />
     <param name="speed_override_timeout" value="0.5" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->

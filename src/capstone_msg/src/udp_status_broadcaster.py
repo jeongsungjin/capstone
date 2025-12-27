@@ -49,7 +49,7 @@ class UdpStatusBroadcaster:
     def __init__(self) -> None:
         rospy.init_node("udp_status_broadcaster", anonymous=True)
 
-        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.7"))
+        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.5"))
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
@@ -101,7 +101,7 @@ class UdpStatusBroadcaster:
             path_sub = message_filters.Subscriber(path_topic, Path)
             meta_sub = message_filters.Subscriber(path_meta_topic, PathMeta)
             ts = message_filters.TimeSynchronizer([path_sub, meta_sub], 10)
-            ts.registerCallback(self._path_cb, callback_args=vid)
+            ts.registerCallback(lambda path, meta, vid=vid: self._path_cb(path, meta, vid))
 
             rospy.logdebug("Subscribed path topic: %s (car_id=%d)", path_topic, vid)
         
@@ -402,4 +402,3 @@ if __name__ == "__main__":
         main()
     except rospy.ROSInterruptException:
         pass
-

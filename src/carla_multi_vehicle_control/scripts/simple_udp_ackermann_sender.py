@@ -7,9 +7,12 @@ from typing import Dict, List
 import rospy
 from ackermann_msgs.msg import AckermannDrive
 from std_msgs.msg import Bool
+from capstone_msgs.msg import BEVInfo  # type: ignore
 
-FMT_FLOAT_INT = "!fiI"   # float angle(rad), int speed, uint32 seq
-FMT_FLOAT_FLOAT = "!ffI"  # float angle(rad), float speed, uint32 seq
+FMT_FLOAT_INT = "!fiI"            # angle, speed(int), seq
+FMT_FLOAT_FLOAT = "!ffI"          # angle, speed(float), seq
+FMT_FLOAT_INT_FLOAT = "!fifi"     # angle(float), speed(int), obs_speed(float), seq(uint32)
+FMT_FLOAT_FLOAT_FLOAT = "!fffI"   # angle(float), speed(float), obs_speed(float), seq(uint32)
 
 
 class SimpleUdpAckermannSender:
@@ -33,10 +36,15 @@ class SimpleUdpAckermannSender:
         # speed as float vs int (default int for backward compatibility)
         self.send_speed_as_float = bool(rospy.get_param("~send_speed_as_float", False))
         self.e_stop_topic = str(rospy.get_param("~e_stop_topic", "/emergency_stop"))
+        # BEV observed speed (float32) forwarding
+        self.use_bev_speed = bool(rospy.get_param("~use_bev_speed", True))
+        self.bev_topic = str(rospy.get_param("~bev_topic", "/bev_info_raw"))
+        self.bev_speed_timeout = float(rospy.get_param("~bev_speed_timeout", 0.3))
 
         self.vehicles: Dict[str, Dict] = {}
         self.cache: Dict[str, Dict] = {}           # main commands
         self.cache_override: Dict[str, Dict] = {}  # emergency override commands
+        self.cache_bev_speed: Dict[str, Dict] = {}  # observed speed from BEV
         self.e_stop_active: bool = False
         self.roles: List[str] = []
 
@@ -79,6 +87,7 @@ class SimpleUdpAckermannSender:
             rospy.Subscriber(override_topic, AckermannDrive, self._cb_override, callback_args=role, queue_size=10)
             self.cache[role] = {"steer": 0.0, "speed": 0.0, "stamp": rospy.Time(0)}
             self.cache_override[role] = {"steer": 0.0, "speed": 0.0, "stamp": rospy.Time(0)}
+            self.cache_bev_speed[role] = {"speed": 0.0, "stamp": rospy.Time(0)}
             self.roles.append(role)
 
         self.roles.sort(key=lambda r: int(r.split("_")[-1]) if r.split("_")[-1].isdigit() else 999)
@@ -91,6 +100,9 @@ class SimpleUdpAckermannSender:
 
         # Emergency stop latch (e.g., key_selector SPACE)
         rospy.Subscriber(self.e_stop_topic, Bool, self._cb_e_stop, queue_size=1)
+        # Observed speed from BEV detections (index-based mapping)
+        if self.use_bev_speed and self.bev_topic:
+            rospy.Subscriber(self.bev_topic, BEVInfo, self._cb_bev_speed, queue_size=1, tcp_nodelay=True)
 
         rospy.loginfo(f"[RC-UDP] bound on {self.bind_ip} for {len(self.roles)} vehicles")
 
@@ -110,6 +122,17 @@ class SimpleUdpAckermannSender:
         except Exception:
             self.e_stop_active = False
 
+    def _cb_bev_speed(self, msg: BEVInfo) -> None:
+        n = min(len(self.roles), len(msg.speeds_mps))
+        now = rospy.Time.now()
+        for i in range(n):
+            role = self.roles[i]
+            try:
+                v = float(msg.speeds_mps[i])
+            except Exception:
+                continue
+            self.cache_bev_speed[role] = {"speed": v, "stamp": now}
+
     def _tick(self, _evt) -> None:
         if not self.roles:
             return
@@ -121,6 +144,7 @@ class SimpleUdpAckermannSender:
         now = rospy.Time.now()
         cached = self.cache.get(role) or {}
         cached_override = self.cache_override.get(role) or {}
+        cached_bev = self.cache_bev_speed.get(role) or {}
 
         use_override = False
         if self.e_stop_active:
@@ -139,6 +163,13 @@ class SimpleUdpAckermannSender:
             if (now - stamp).to_sec() > self.drop_stale_sec and self.send_zero_on_missing:
                 steer = 0.0
                 speed = 0.0
+
+        # Observed speed (float) from BEV, if fresh
+        obs_speed = 0.0
+        if self.use_bev_speed:
+            bev_age = (now - cached_bev.get("stamp", rospy.Time(0))).to_sec()
+            if bev_age <= self.bev_speed_timeout:
+                obs_speed = float(cached_bev.get("speed", 0.0))
 
         send_angle = (steer + float(v["angle_center_rad"])) * float(v["angle_scale"])
         if bool(v["angle_invert"]):
@@ -162,13 +193,17 @@ class SimpleUdpAckermannSender:
         if self.log_throttle_sec <= 0.0 or (now - last_log).to_sec() >= self.log_throttle_sec:
             di, dp = v.get("dest", ("", 0))
             rospy.loginfo(
-                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, speed={xy_speed} -> {di}:{dp} "
+                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, cmd_speed={xy_speed} obs_speed={obs_speed:.3f} -> {di}:{dp} "
                 f"(mode={'float' if self.send_speed_as_float else 'int'})"
             )
             v["last_log"] = now
 
-        fmt = FMT_FLOAT_FLOAT if self.send_speed_as_float else FMT_FLOAT_INT
-        pkt = struct.pack(fmt, float(send_angle), xy_speed, int(v["seq"]) & 0xFFFFFFFF)
+        if self.send_speed_as_float:
+            fmt = FMT_FLOAT_FLOAT_FLOAT
+            pkt = struct.pack(fmt, float(send_angle), float(xy_speed), float(obs_speed), int(v["seq"]) & 0xFFFFFFFF)
+        else:
+            fmt = FMT_FLOAT_INT_FLOAT
+            pkt = struct.pack(fmt, float(send_angle), int(xy_speed), float(obs_speed), int(v["seq"]) & 0xFFFFFFFF)
         try:
             v["sock"].sendto(pkt, v["dest"])
             v["seq"] = int(v["seq"]) + 1
@@ -179,7 +214,10 @@ class SimpleUdpAckermannSender:
         for role, v in self.vehicles.items():
             try:
                 for _ in range(3):
-                    pkt = struct.pack(FMT_FLOAT, float(0.0), int(0), int(v["seq"]) & 0xFFFFFFFF)
+                    if self.send_speed_as_float:
+                        pkt = struct.pack(FMT_FLOAT_FLOAT_FLOAT, float(0.0), float(0.0), float(0.0), int(v["seq"]) & 0xFFFFFFFF)
+                    else:
+                        pkt = struct.pack(FMT_FLOAT_INT_FLOAT, float(0.0), int(0), float(0.0), int(v["seq"]) & 0xFFFFFFFF)
                     v["sock"].sendto(pkt, v["dest"])
                     v["seq"] = int(v["seq"]) + 1
             except Exception:
