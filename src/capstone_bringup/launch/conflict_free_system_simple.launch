@@ -14,6 +14,7 @@
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <!-- <param name="spawn_indices" value="0,13" /> -->
     <param name="vehicle_model" value="vehicle.vehicle.jetracer_red" />
     <param name="enable_platoon_spawn" value="$(arg enable_platooning)" />
     <param name="platoon_spawn_gap_m" value="4.0" />
@@ -30,7 +31,7 @@
     <param name="low_voltage_threshold" value="5.0" />
     <param name="low_voltage_dest_x" value="-12.5" />
     <param name="low_voltage_dest_y" value="-16.5" />
-    <param name="parking_dest_x" value="-23.0" />
+    <param name="parking_dest_x" value="-27.0" />
     <param name="parking_dest_y" value="-16.5" />
     <param name="parking_trigger_distance_m" value="3.0" />
     <param name="obstacle_stop_distance" value="3.0"/>
@@ -83,17 +84,17 @@
   <!-- 4) Controller -->
   <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
   
-  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller">
+  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="lookahead_distance" value="8.0" />
-    <param name="target_speed" value="6.0" />
+    <param name="lookahead_distance" value="7.0" />
+    <param name="target_speed" value="5.0" />
     <param name="use_speed_override" value="$(arg enable_platooning)" />
     <param name="speed_override_timeout" value="0.5" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
-    <param name="low_voltage_threshold" value="5.0" />
-    <param name="parking_dest_x" value="-25.0" />
+    <param name="low_voltage_threshold" value="7.2" />
+    <param name="parking_dest_x" value="-27.0" />
     <param name="parking_dest_y" value="-16.5" />
-    <param name="parking_speed" value="3.0" />
+    <param name="parking_speed" value="5.0" />
     <param name="parking_speed_radius" value="8.0" />
     <param name="parking_stop_radius" value="3.0" />
   </node>
@@ -134,42 +135,42 @@
   </node>
 
   <!-- 4.5) BEV speed PID override (per-vehicle PID params) -->
-  <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid" output="screen">
-    <param name="num_vehicles" value="$(arg num_vehicles)" />
+  <!-- <node if="$(arg enable_pid)" pkg="carla_multi_vehicle_control" type="bev_speed_override_pid.py" name="bev_speed_override_pid" output="screen">
+    <param name="num_vehicles" value="$(arg num_vehicles)" /> -->
 
     <!-- BEV input -->
-    <param name="bev_topic" value="$(arg bev_topic_raw)" />
+    <!-- <param name="bev_topic" value="$(arg bev_topic_raw)" />
     <param name="use_detection_index" value="true" />
-    <param name="id_offset" value="0" />
+    <param name="id_offset" value="0" /> -->
     <!-- BEV speeds already look like m/s (2~13), so use scale 1.0 -->
-    <param name="bev_speed_scale" value="1.0" />
+    <!-- <param name="bev_speed_scale" value="1.0" /> -->
     <!-- enable PID logging to confirm measurements are used -->
-    <param name="log_missing_measurement" value="false" />
-    <param name="log_measurement" value="false" />
+    <!-- <param name="log_missing_measurement" value="false" />
+    <param name="log_measurement" value="false" /> -->
 
     <!-- Ackermann raw input from controller & final output to UDP sender -->
-    <param name="cmd_raw_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd_raw" />
-    <param name="cmd_out_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd" />
+    <!-- <param name="cmd_raw_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd_raw" />
+    <param name="cmd_out_template" value="/carla/ego_vehicle_{vid}/vehicle_control_cmd" /> -->
 
     <!-- default PID / limits (fallback when vehicle override not provided) -->
-    <param name="default/kp" value="0.0" />
+    <!-- <param name="default/kp" value="0.0" />
     <param name="default/ki" value="0.0" />
     <param name="default/kd" value="0.0" />
     <param name="default/target_speed_mps" value="0.5" />
     <param name="default/min_speed_cmd" value="0.0" />
-    <param name="default/max_speed_cmd" value="1.0" />
+    <param name="default/max_speed_cmd" value="1.0" /> -->
 
     <!-- teleport/discontinuity safety -->
-    <param name="enable_jump_reset" value="true" />
-    <param name="pos_jump_m" value="1.0" />
+    <!-- <param name="enable_jump_reset" value="true" />
+    <param name="pos_jump_m" value="1.0" /> -->
 
     <!-- per-vehicle overrides (A 방식) -->
-    <rosparam param="vehicles">
+    <!-- <rosparam param="vehicles">
       ego_vehicle_1: {kp: 1.0, ki: 0.0, kd: 0.0, target_speed_mps: 5.0, min_speed_cmd: 0.0, max_speed_cmd: 5.0}
       ego_vehicle_2: {kp: 1.00, ki: 0.20, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
       ego_vehicle_3: {kp: 1.10, ki: 0.22, kd: 0.00, target_speed_mps: 0.5, min_speed_cmd: 0.00, max_speed_cmd: 1.00}
     </rosparam>
-  </node>
+  </node> -->
 
 
   <!-- RViz -->

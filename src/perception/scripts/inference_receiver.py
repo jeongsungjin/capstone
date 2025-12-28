@@ -42,6 +42,10 @@ class InferenceReceiverNode:
                 rospy.logwarn("InferenceReceiver: failed to parse allowed_classes; disabling class filter")
         else:
             self.allowed_classes = None
+        # 파라미터가 비었거나 파싱 실패 시 class 0(차량)만 통과하도록 기본값 설정
+        if self.allowed_classes is None or len(self.allowed_classes) == 0:
+            self.allowed_classes = {0}
+            rospy.loginfo("InferenceReceiver: allowed_classes empty -> default to {0} (vehicles)")
         self.topic = str(rospy.get_param("~topic", "/bev_info_raw"))
         self.frame_id = str(rospy.get_param("~frame_id", "map"))
 
@@ -284,16 +288,30 @@ class InferenceReceiverNode:
                     rospy.logwarn_throttle(2.0, "UDP recv error: %s", exc)
                     continue
 
+                raw_txt = None
                 try:
-                    payload = json.loads(data.decode("utf-8"))
+                    raw_txt = data.decode("utf-8", errors="replace")
+                    payload = json.loads(raw_txt)
                 except Exception:
                     rospy.logwarn_throttle(2.0, "Non-JSON or invalid payload; ignored")
                     continue
 
-                if payload.get("type") != "global_tracks":
-                    continue
+                # if payload.get("type") != "global_tracks":
+                #     # 원본 패킷 그대로 확인
+                #     rospy.loginfo_throttle(
+                #         1.0,
+                #         "[Inference UDP] non-global_tracks payload: %s",
+                #         raw_txt or "<binary>",
+                #     )
+                #     continue
 
                 items = payload.get("items", [])
+                # 디버그: 원본 payload 확인
+                # rospy.loginfo_throttle(
+                #     1.0,
+                #     "[Inference UDP] raw payload: %s",
+                #     raw_txt or "<empty>",
+                # )
                 stamp = self._extract_stamp(payload)
 
                 frame_seq = self.frame_seq

@@ -49,7 +49,7 @@ class UdpStatusBroadcaster:
     def __init__(self) -> None:
         rospy.init_node("udp_status_broadcaster", anonymous=True)
 
-        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.7"))
+        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.31"))
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
@@ -101,7 +101,7 @@ class UdpStatusBroadcaster:
             path_sub = message_filters.Subscriber(path_topic, Path)
             meta_sub = message_filters.Subscriber(path_meta_topic, PathMeta)
             ts = message_filters.TimeSynchronizer([path_sub, meta_sub], 10)
-            ts.registerCallback(self._path_cb, callback_args=vid)
+            ts.registerCallback(lambda path, meta, vid=vid: self._path_cb(path, meta, vid))
 
             rospy.logdebug("Subscribed path topic: %s (car_id=%d)", path_topic, vid)
         
@@ -197,7 +197,7 @@ class UdpStatusBroadcaster:
         s_starts = meta.s_starts.data
         s_ends = meta.s_ends.data
 
-        self._paths[vehicle_id]["path"] = path
+        self._paths[vehicle_id]["path"] = pts
         self._paths[vehicle_id]["category"] = category
         self._paths[vehicle_id]["resolution"] = resolution
         self._paths[vehicle_id]["s_start"] = s_starts if category == "obstacle" else []
@@ -222,8 +222,6 @@ class UdpStatusBroadcaster:
         return cars
 
     def _build_port_b_payload(self):
-        cars_status, planning = [], []
-
         ret = {
             "type": "route",
             "resolution": self.path_resolution,
@@ -239,31 +237,32 @@ class UdpStatusBroadcaster:
             ret["payload"].append({
                 "vid": vid,
                 "category": info["category"],
-                "optional": {
-                    "s_start": info["s_start"],
-                    "s_end": info["s_end"]
-                },
+                "s_start": info["s_start"],
+                "s_end": info["s_end"],
                 "planning": info["path"]
             })
 
         return ret
 
     def _send_payload(self, payload) -> None:
+        return
+
         try:
             data_str = json.dumps(payload, separators=(",", ":"))
             self.sock.sendto(data_str.encode("utf-8"), (self.dest_ip, self.port))
             
             msg_type = payload.get("type", "unknown") if isinstance(payload, dict) else "unknown"
             if msg_type == "carStatus":
-                rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
+                pass
+                # rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
             
             elif msg_type == "route":
                 # route는 길어질 수 있어 타입과 차량 수만 요약
                 try:
                     cars = payload.get("payload")
-                    rospy.loginfo("UDP route -> port=%d cars=%d", self.port, len(cars))
+                    rospy.logfatal(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
                 except Exception:
-                    rospy.loginfo("UDP route -> port=%d", self.port)
+                    rospy.logfatal("UDP route -> port=%d", self.port)
             
             elif msg_type == "end":
                 rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
@@ -374,6 +373,8 @@ class UdpStatusBroadcaster:
                 else:
                     light = "red"
                     left_green = False
+
+                # rospy.logfatal("TrafficLight ID=%d Name=%s Light=%s LeftGreen=%s", tl_id, name, light, left_green)
                 payload = {"type": "trafficLight", "trafficLight_id": tl_id, "light": light}
                 if tl_id in self._tl_fourway_ids:
                     payload["left_green"] = bool(left_green)
@@ -402,4 +403,3 @@ if __name__ == "__main__":
         main()
     except rospy.ROSInterruptException:
         pass
-

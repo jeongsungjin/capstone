@@ -38,6 +38,77 @@ class GlobalPlanner(GlobalRoutePlanner):
         self._blocked_edges: Set[Tuple[int, int]] = set()
         self._obstacle_locations: List[Tuple[float, float, float]] = []
 
+        self.opposite_lane_edge: Dict[Tuple[int, int], Tuple[int, int]] = {
+            (24, 23): (25, 26), (25, 26): (24, 23),
+            (18, 21): (22, 6), (22, 6): (18, 21),
+            (19, 5): (17, 20), (17, 20): (19, 5),
+            (15, 0): (3, 16), (3, 16): (15, 0),
+            (11, 9): (4, 8), (4, 8): (11, 9),
+            (12, 10): (7, 13), (7, 13): (12, 10),
+            (10, 11): (8, 7), (8, 7): (10, 11),
+            (6, 7): (10, 18), (10, 18): (6, 7),
+            (8, 18): (6, 11), (6, 11): (8, 18),
+            (16, 22): (21, 15), (21, 15): (16, 22),
+            (26, 15): (16, 24), (16, 24): (26, 15),
+            (26, 22): (21, 24), (21, 24): (26, 22),
+            (20, 25): (23, 19), (23, 19): (20, 25),
+            (20, 12): (13, 19), (13, 19): (20, 12),
+            (13, 25): (23, 12), (23, 12): (13, 25)
+            
+            # 회전 교차로
+            # (5, 3),  
+            # (0, 1), (1, 14), (14, 2), (2, 17),
+            # (2, 4), (9, 1), 
+            # (5, 1), (2, 3), (2, 1) 
+        }
+
+        self.lane_direction: Dict[Tuple[int, int], float] = {}
+        self._cache_edge_directions()
+
+    def _cache_edge_directions(self) -> None:
+        """모든 엣지의 진행 방향(yaw)을 미리 계산하여 캐싱"""
+        skipped = []
+        for n1, n2, data in self._graph.edges(data=True):
+            entry_wp = data.get('entry_waypoint')
+            exit_wp = data.get('exit_waypoint')
+            if entry_wp and exit_wp:
+                dx = exit_wp.transform.location.x - entry_wp.transform.location.x + 1e-6
+                dy = exit_wp.transform.location.y - entry_wp.transform.location.y + 1e-6
+                yaw = math.atan2(dy, dx)
+                self.lane_direction[(n1, n2)] = yaw
+            else:
+                skipped.append((n1, n2))
+        
+        rospy.loginfo(f'[GlobalPlanner] edges : {self.lane_direction.items()}')
+        rospy.loginfo(f"[GlobalPlanner] Cached {len(self.lane_direction)} edge directions, skipped {len(skipped)}: {skipped}")
+
+    def get_edge_direction(self, edge: Tuple[int, int]) -> Optional[float]:
+        """엣지의 진행 방향(yaw) 반환 (캐시됨)"""
+        return self.lane_direction.get(edge)
+
+    def is_opposite_direction(self, edge_a: Tuple[int, int], edge_b: Tuple[int, int]) -> bool:
+        """
+        두 엣지가 반대 방향인지 확인 (각도 차이 > 90도)
+        
+        Returns:
+            True if angle difference > 90 degrees (opposite direction)
+        """
+        # 특수 케이스: 이 엣지들끼리는 같은 차선으로 간주 (반대 방향 아님 -> 정지)
+        special_edges = [(2, 4), (4, 8), (8, 7)]
+        if edge_a in special_edges and edge_b in special_edges:
+            return False
+
+        dir_a = self.get_edge_direction(edge_a)
+        dir_b = self.get_edge_direction(edge_b)
+        if dir_a is None or dir_b is None:
+            return False
+        
+        diff = abs(dir_a - dir_b)
+        while diff > math.pi:
+            diff = abs(diff - 2 * math.pi)
+        
+        return diff > math.pi / 180 * 85  # 90도 초과면 반대 방향
+
     def add_obstacle(self, location, radius: float = 5.0) -> int:
         """
         장애물 위치 추가 → 근처 노드 차단
@@ -127,6 +198,20 @@ class GlobalPlanner(GlobalRoutePlanner):
 
         return (entry_wp.road_id, entry_wp.lane_id)
 
+    def get_edges_at_location(self, x: float, y: float, radius: float = 1.0) -> List[Tuple[int, int]]:
+        """해당 위치를 지나는 모든 edge 반환"""
+        edges = []
+        loc = carla.Location(x=x, y=y, z=0.0)
+        
+        for n1, n2, data in self._graph.edges(data=True):
+            path = data.get('path', [])
+            for wp in path:
+                if wp.transform.location.distance(loc) < radius:
+                    edges.append((n1, n2))
+                    break  # 이 edge는 찾았으니 다음 edge로
+        
+        return edges
+
     def are_edges_on_opposite_lanes(self, edge_a: Tuple[int, int], edge_b: Tuple[int, int]) -> bool:
         """
         두 엣지가 반대 차선 관계인지 확인
@@ -154,7 +239,6 @@ class GlobalPlanner(GlobalRoutePlanner):
         Returns:
             경로 노드 ID 리스트, 또는 경로 없으면 None
         """
-        rospy.loginfo('악!!!!!!!!!!!!!!!')
 
         start = self._localize(origin)
         end = self._localize(destination)
