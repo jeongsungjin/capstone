@@ -311,6 +311,8 @@ class SimpleMultiAgentPlanner:
             dist_to_path = self._dist_point_to_path(other_path, stop_pos.x, stop_pos.y)
             
             if dist_to_path < 1.5:
+                rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} (d={dist_to_path:.1f}m) active overlap 으악!!!!!!!!!!!!!!!!!!1")
+
                 # 3. 충돌 가능성 있는 차량의 현재 위치 파악
                 other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
                 
