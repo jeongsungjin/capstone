@@ -49,7 +49,7 @@ class UdpStatusBroadcaster:
     def __init__(self) -> None:
         rospy.init_node("udp_status_broadcaster", anonymous=True)
 
-        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.5"))
+        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.31"))
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
@@ -370,6 +370,8 @@ class UdpStatusBroadcaster:
                 else:
                     light = "red"
                     left_green = False
+
+                rospy.logfatal("TrafficLight ID=%d Name=%s Light=%s LeftGreen=%s", tl_id, name, light, left_green)
                 payload = {"type": "trafficLight", "trafficLight_id": tl_id, "light": light}
                 if tl_id in self._tl_fourway_ids:
                     payload["left_green"] = bool(left_green)
