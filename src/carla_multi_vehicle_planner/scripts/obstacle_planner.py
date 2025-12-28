@@ -79,8 +79,6 @@ class ObstaclePlanner:
         
         # Vehicle route edges tracking (role -> [(n1, n2), ...])
         self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
-        # 회피 중인 차량만 등록 (장애물 근처에서 반대 차선 점유 시)
-        self._avoidance_opposite_ids: Dict[Tuple[int, int], Set[str]] = {}
 
     def _obstacle_cb(self, msg: PoseArray) -> None:
         """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
@@ -190,30 +188,6 @@ class ObstaclePlanner:
         self._obstacle_blocked_roles[role].pop(0)
         if not self._obstacle_blocked_roles[role]:
             self._obstacle_blocked_roles.pop(role)
-        # 회피 충돌 등록 해제
-        self.unregister_avoidance_conflict(role)
-
-    def register_avoidance_conflict(self, role: str, stop_pos_x: float, stop_pos_y: float) -> None:
-        """회피 시작 시 반대 차선 충돌 영역 등록"""
-        edges = self.route_planner.get_edges_at_location(stop_pos_x, stop_pos_y)
-        for edge in edges:
-            edge_id = self.route_planner.get_id_for_edge(edge)
-            if edge_id:
-                opposite_id = (edge_id[0], -edge_id[1])
-                if opposite_id not in self._avoidance_opposite_ids:
-                    self._avoidance_opposite_ids[opposite_id] = set()
-                self._avoidance_opposite_ids[opposite_id].add(role)
-
-    def unregister_avoidance_conflict(self, role: str) -> None:
-        """회피 완료 시 등록 해제"""
-        to_remove = []
-        for edge_id, roles in self._avoidance_opposite_ids.items():
-            if role in roles:
-                roles.remove(role)
-                if not roles:
-                    to_remove.append(edge_id)
-        for edge_id in to_remove:
-            self._avoidance_opposite_ids.pop(edge_id)
 
     def apply_avoidance_to_path(
         self, 

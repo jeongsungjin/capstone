@@ -258,94 +258,77 @@ class SimpleMultiAgentPlanner:
 
     def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, avoidance_length: float) -> bool:
         """
-        좌표 기반 반대 차선 충돌 감지 (회피 중인 차량만 검사)
+        좌표 기반 반대 차선 충돌 감지 (Active Path & S-Profile 기반)
         
         Args:
             role: 현재 차량 role
-            stop_pos: 회피 시작 위치 (정지 위치)
-            d_offset: 회피 방향 횡방향 오프셋 (양수: 왼쪽, 음수: 오른쪽)
+            stop_pos: 회피 시작 위치 (정지 위치 - 장애물 근처로 간주)
+            d_offset: 회피 방향 횡방향 오프셋 (단순 참조용, 실제 판단에는 안 씀)
             avoidance_length: 회피 경로 길이
         
         Returns:
             True if should wait, False if can proceed
         """
-        # 조기 반환: 회피 중인 다른 차량이 없으면 충돌 없음
-        if not self._obstacle_planner._avoidance_opposite_ids:
-            return False
+        # 내 경로 정보 가져오기
+        my_path = self._active_paths.get(role)
+        my_s_profile = self._active_path_s.get(role)
+
+        # STOP 상태여서 active path가 없는 경우 백업 경로 사용 (갈 길을 미리 알고 있어야 충돌 계산 가능)
+        if not my_path or len(my_path) < 2:
+            if role in self._backup_blocked_path:
+                my_path = self._backup_blocked_path[role]
+                my_s_profile, _ = self._compute_path_profile(my_path)
+
+            else:
+                return False
         
+        # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
+        s_start = self._project_progress_on_path(my_path, my_s_profile, stop_pos.x, stop_pos.y)
+        if s_start is None:
+            return False
+
+        safe_distance = avoidance_length * 2.0
         my_color = _get_vehicle_color(role)
         
-        # stop_pos 위치의 edge에서 반대 차선 ID 추출
-        edges = self.route_planner.get_edges_at_location(stop_pos.x, stop_pos.y)
-        ids = [self.route_planner.get_id_for_edge(e) for e in edges if e]
-        
-        safe_distance = avoidance_length * 2.5  # 회피 경로 길이의 2.5배
-        
-        for my_id in ids:
-            if my_id is None:
+        vehicles = self._get_ego_vehicles()
+        for vehicle in vehicles:
+            other_role = vehicle.attributes.get("role_name", "")
+            
+            # 자기 자신 제외
+            if other_role == role:
+                continue
+
+            # 장애물 회피해야만 하는 차량 제외 (obstacle_blocked_roles)
+            if self._obstacle_planner and other_role in self._obstacle_planner._obstacle_blocked_roles:
                 continue
             
-            opposite_id = (my_id[0], -my_id[1])
+            # 타 차량의 Active Path 가져오기
+            other_path = self._active_paths.get(other_role)
+            if not other_path or len(other_path) < 2:
+                continue
+                
+            # 1. 장애물(stop_pos)과 타 차량 경로 간의 거리 확인
+            #    거리 > 1.0m 이면 충돌 가능성 있는 차량(반대 차선 등)으로 간주
+            dist_to_path = self._dist_point_to_path(other_path, stop_pos.x, stop_pos.y)
             
-            # 회피 중인 차량만 확인 (변경: _avoidance_opposite_ids 사용)
-            for other_role in self._obstacle_planner._avoidance_opposite_ids.get(opposite_id, []):
-                if role == other_role:
+            if dist_to_path < 1.5:
+                # 3. 충돌 가능성 있는 차량의 현재 위치 파악
+                other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
+                
+                # 내 경로 상에서의 s 위치 투영
+                s_other = self._project_progress_on_path(my_path, my_s_profile, other_loc.x, other_loc.y)
+                
+                # 투영 실패 시 무시
+                if s_other is None:
                     continue
+
+                # 4. 거리 확인: 회피 경로의 2배 이내면 정지
+                dist_diff = abs(s_other - s_start)
                 
-                other_color = _get_vehicle_color(other_role)
-                
-                # 상대 차량 위치 가져오기
-                other_vehicle = self._get_vehicle_by_role(other_role)
-                if other_vehicle is None:
-                    continue
-                
-                other_rear_loc = self._vehicle_rear(other_vehicle)
-                
-                # 상대 차량의 active path 가져오기
-                other_path = self._active_paths.get(other_role)
-                if not other_path or len(other_path) < 10:
-                    # path가 없거나 너무 짧으면 건너뛰기 (보수적 대기 완화)
-                    rospy.loginfo(f"[CONFLICT] {my_color}: {other_color} has short path - skipping")
-                    continue
-                
-                try:
-                    # FrenetPath로 변환하여 s 좌표 기반 거리 계산
-                    from frenet_path import FrenetPath
-                    frenet = FrenetPath(other_path)
-                    
-                    # conflict_point 계산: stop_pos에서 d_offset만큼 횡방향 이동한 위치 (반대 차선 위)
-                    my_path = self._active_paths.get(role)
-                    if my_path and len(my_path) >= 10:
-                        my_frenet = FrenetPath(my_path)
-                        s_stop_on_my_path, _ = my_frenet.cartesian_to_frenet(stop_pos.x, stop_pos.y)
-                        conflict_x, conflict_y = my_frenet.frenet_to_cartesian(s_stop_on_my_path, d_offset)
-                        conflict_point = carla.Location(x=conflict_x, y=conflict_y)
-                    else:
-                        conflict_point = stop_pos
-                    
-                    # conflict_point를 상대 경로에 투영
-                    s_conflict, _ = frenet.cartesian_to_frenet(conflict_point.x, conflict_point.y)
-                    
-                    # 상대 차량 현재 위치의 s 계산 (후륜축 기준)
-                    s_vehicle, _ = frenet.cartesian_to_frenet(other_rear_loc.x, other_rear_loc.y)
-                    
-                    # s_diff: 양수 = 이미 지남, 음수 = 아직 도달 안 함
-                    s_diff = s_vehicle - s_conflict
-                    
-                    if s_diff >= 0:
-                        # 상대가 이미 conflict_point를 지남 → 회피 가능
-                        rospy.loginfo(f"[PASSED] {my_color}: {other_color} passed conflict (s_diff={s_diff:.1f}m)")
-                    elif abs(s_diff) > safe_distance:
-                        # 상대가 아직 멀리 있음 → 회피 가능
-                        rospy.loginfo(f"[FAR] {my_color}: {other_color} is {abs(s_diff):.1f}m away (safe={safe_distance:.1f}m)")
-                    else:
-                        # 상대가 접근 중이고 가까움 → 대기!
-                        rospy.logwarn(f"[CONFLICT] {my_color}: {other_color} approaching (s_diff={s_diff:.1f}m) - waiting")
-                        return True
-                        
-                except Exception as e:
-                    rospy.logwarn(f"[CONFLICT] {my_color}: frenet calculation failed for {other_color}: {e}")
-                    continue
+                if dist_diff <= safe_distance:
+                    other_color = _get_vehicle_color(other_role)
+                    rospy.logwarn_throttle(1.0, f"[CONFLICT] {my_color}: {other_color} (d={dist_to_path:.1f}m) active overlap ({dist_diff:.1f}m <= {safe_distance:.1f}m) - waiting")
+                    return True
         
         return False
 
@@ -361,13 +344,7 @@ class SimpleMultiAgentPlanner:
         vehicles = self._get_ego_vehicles()
         if not vehicles:
             return
-        
-        # DEBUG: _obstacle_blocked_roles 상태 확인
-        if self._obstacle_planner:
-            blocked_roles = list(self._obstacle_planner._obstacle_blocked_roles.keys())
-            if blocked_roles:
-                rospy.logwarn_throttle(3.0, f"[DEBUG] _obstacle_blocked_roles: {blocked_roles}")
-        
+    
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             
@@ -380,10 +357,6 @@ class SimpleMultiAgentPlanner:
                 # 정지 지점과 가까워 진 경우
                 stop_pos, d_offset, avoidance_length = self._obstacle_planner.get_stop_pos(role)
                 if front_loc.distance(stop_pos) <= self.override_clear_radius:
-                    # 회피 충돌 등록 (반대 차선 점유 알림)
-                    self._obstacle_planner.register_avoidance_conflict(role, stop_pos.x, stop_pos.y)
-                    
-                    # 회피 경로가 존재하지 않거나 타 차량이 반대 차선을 점유하고 있는 경우
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
                     if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, avoidance_length):
                         if role not in self._backup_blocked_path:
@@ -394,6 +367,7 @@ class SimpleMultiAgentPlanner:
                         rospy.logfatal(f"[STOP] {color}: 장애물 회피 대기 중 (d_offset={d_offset})")
                         self._publish_path(stop_pts, role, "stop")
                         self._store_active_path(role, stop_pts)
+                        continue
                     
                     # 처음부터 정지하지 않아도 됐거나 정지 상황이 해제됐거나 타 차량이 반대 차선을 점유하지 않는 경우
                     else:
@@ -404,6 +378,8 @@ class SimpleMultiAgentPlanner:
                             self._publish_path(self._backup_blocked_path.get(role), role, "stop")
                             self._store_active_path(role, self._backup_blocked_path.get(role))
                             self._backup_blocked_path.pop(role)
+
+                        continue
 
             # 사용자가 임의 목적지를 설정한 경우
             elif self._override_active.get(role, False):
@@ -443,6 +419,8 @@ class SimpleMultiAgentPlanner:
                     if rospy.Time.now().to_sec() >= self._override_hold_until[role]:
                         self._override_hold_until[role] = 0.0
                         self._override_active[role] = False
+
+                continue
 
             # override가 없을 때만 저전압/일반 로직 수행
             elif self._is_low_voltage(role):
@@ -494,28 +472,29 @@ class SimpleMultiAgentPlanner:
                 # 4) parked: 더 이상 계획 안 함
                 elif stage == "parked":
                     pass
-            
-            else:
-                category = "normal"
-
-                current_path = self._active_paths.get(role)
-                fail_inital_path = not current_path or len(current_path) < 2
-
-                remaining = self._remaining_path_distance(role, front_loc)
-                fail_remaining_none = remaining is None
-
-                # (현재 Path가 없거나 매우 짧음) 이거나 (남은 거리 계산 불가) -> 전체 재계획
-                if fail_inital_path or fail_remaining_none:
-                    if not self._plan_for_role(vehicle, role, front_loc, category):
-                        msg = "failed to plan initial path" if fail_inital_path else "failed to replan after progress loss"
-                        rospy.logwarn_throttle(5.0, f"{role}: {msg}")
                 
-                # 남은 거리가 소프트 임계값 이하 -> 경로 연장 시도
-                elif remaining <= max(0.0, float(self.replan_soft_distance_m)):
-                    rospy.loginfo(f"{role}: remaining {remaining:.1f} m <= soft {self.replan_soft_distance_m:.1f} m -> path extension")
-                    if not self._extend_path(vehicle, role, front_loc, category):
-                        rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
-                        self._plan_for_role(vehicle, role, front_loc, category)
+                continue
+
+            category = "normal"
+
+            current_path = self._active_paths.get(role)
+            fail_inital_path = not current_path or len(current_path) < 2
+
+            remaining = self._remaining_path_distance(role, front_loc)
+            fail_remaining_none = remaining is None
+
+            # (현재 Path가 없거나 매우 짧음) 이거나 (남은 거리 계산 불가) -> 전체 재계획
+            if fail_inital_path or fail_remaining_none:
+                if not self._plan_for_role(vehicle, role, front_loc, category):
+                    msg = "failed to plan initial path" if fail_inital_path else "failed to replan after progress loss"
+                    rospy.logwarn_throttle(5.0, f"{role}: {msg}")
+            
+            # 남은 거리가 소프트 임계값 이하 -> 경로 연장 시도
+            elif remaining <= max(0.0, float(self.replan_soft_distance_m)):
+                rospy.loginfo(f"{role}: remaining {remaining:.1f} m <= soft {self.replan_soft_distance_m:.1f} m -> path extension")
+                if not self._extend_path(vehicle, role, front_loc, category):
+                    rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
+                    self._plan_for_role(vehicle, role, front_loc, category)
 
     def _extend_path(self, vehicle, role: str, front_loc: carla.Location, category: str, dest_override: Optional[carla.Location] = None) -> bool:
         current = self._active_paths.get(role)
@@ -524,10 +503,7 @@ class SimpleMultiAgentPlanner:
             return self._plan_for_role(vehicle, role, front_loc, category, dest_override=dest_override)
         s_profile = self._active_path_s.get(role)
         suffix = current
-        
-        # 머랑 머가 겹치는 지??
         if s_profile and len(s_profile) == len(current):
-            # 현재 위치 기준으로 겹치는 부분 제거?
             progress = self._project_progress_on_path(current, s_profile, front_loc.x, front_loc.y)
             if progress is not None:
                 overlap_target = max(0.0, progress - float(self.path_extension_overlap_m))
@@ -543,17 +519,13 @@ class SimpleMultiAgentPlanner:
             if len(prefix_copy) < 2:
                 rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
                 return self._plan_for_role(vehicle, role, front_loc, category)
-            
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is not None:
                 rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
-            
             if self._plan_for_role(vehicle, role, front_loc, category, prefix_points=prefix_copy):
                 return True
-            
-            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
             attempts += 1
-
+            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
         rospy.logwarn_throttle(5.0, f"{role}: all extension attempts failed; falling back to fresh plan")
         return self._plan_for_role(vehicle, role, front_loc, category)
 
@@ -764,6 +736,34 @@ class SimpleMultiAgentPlanner:
         seg_length = math.hypot(points[best_index + 1][0] - points[best_index][0], points[best_index + 1][1] - points[best_index][1])
         s_now = s_profile[best_index] + best_t * seg_length * int(seg_length >= 1e-6)
         return s_now
+
+    def _dist_point_to_path(self, points: List[Tuple[float, float]], px: float, py: float) -> float:
+        """점과 경로 사이의 최소 거리 반환"""
+        if len(points) < 2:
+            return float('inf')
+            
+        best_dist_sq = float("inf")
+        
+        for idx in range(len(points) - 1):
+            x1, y1 = points[idx]
+            x2, y2 = points[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+        
+            if seg_len_sq < 1e-6:
+                dist_sq = (px - x1) ** 2 + (py - y1) ** 2
+            else:
+                t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+                t = max(0.0, min(1.0, t))
+                proj_x = x1 + dx * t
+                proj_y = y1 + dy * t
+                dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+        
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+        
+        return math.sqrt(best_dist_sq)
 
     def _remaining_path_distance(self, role: str, front_loc: carla.Location):
         points = self._active_paths.get(role)

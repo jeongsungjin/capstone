@@ -84,7 +84,7 @@
   <!-- 4) Controller -->
   <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
   
-  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller">
+  <node pkg="carla_multi_vehicle_control" type="simple_multi_vehicle_controller.py" name="multi_vehicle_controller" output="screen">
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="lookahead_distance" value="7.0" />
     <param name="target_speed" value="5.0" />

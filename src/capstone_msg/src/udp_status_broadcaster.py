@@ -374,7 +374,7 @@ class UdpStatusBroadcaster:
                     light = "red"
                     left_green = False
 
-                rospy.logfatal("TrafficLight ID=%d Name=%s Light=%s LeftGreen=%s", tl_id, name, light, left_green)
+                # rospy.logfatal("TrafficLight ID=%d Name=%s Light=%s LeftGreen=%s", tl_id, name, light, left_green)
                 payload = {"type": "trafficLight", "trafficLight_id": tl_id, "light": light}
                 if tl_id in self._tl_fourway_ids:
                     payload["left_green"] = bool(left_green)
