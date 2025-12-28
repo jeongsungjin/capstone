@@ -197,7 +197,7 @@ class UdpStatusBroadcaster:
         s_starts = meta.s_starts.data
         s_ends = meta.s_ends.data
 
-        self._paths[vehicle_id]["path"] = path
+        self._paths[vehicle_id]["path"] = pts
         self._paths[vehicle_id]["category"] = category
         self._paths[vehicle_id]["resolution"] = resolution
         self._paths[vehicle_id]["s_start"] = s_starts if category == "obstacle" else []
@@ -222,8 +222,6 @@ class UdpStatusBroadcaster:
         return cars
 
     def _build_port_b_payload(self):
-        cars_status, planning = [], []
-
         ret = {
             "type": "route",
             "resolution": self.path_resolution,
@@ -239,10 +237,8 @@ class UdpStatusBroadcaster:
             ret["payload"].append({
                 "vid": vid,
                 "category": info["category"],
-                "optional": {
-                    "s_start": info["s_start"],
-                    "s_end": info["s_end"]
-                },
+                "s_start": info["s_start"],
+                "s_end": info["s_end"],
                 "planning": info["path"]
             })
 
@@ -261,9 +257,9 @@ class UdpStatusBroadcaster:
                 # route는 길어질 수 있어 타입과 차량 수만 요약
                 try:
                     cars = payload.get("payload")
-                    rospy.loginfo("UDP route -> port=%d cars=%d", self.port, len(cars))
+                    rospy.logfatal(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
                 except Exception:
-                    rospy.loginfo("UDP route -> port=%d", self.port)
+                    rospy.logfatal("UDP route -> port=%d", self.port)
             
             elif msg_type == "end":
                 rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
