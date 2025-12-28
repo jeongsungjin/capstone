@@ -44,6 +44,17 @@ try:
 except Exception:
     ObstaclePlanner = None  # type: ignore
 
+# 차량 색상 맵핑 (ego_vehicle_1 ~ ego_vehicle_5)
+VEHICLE_COLORS = ["red", "yellow", "green", "black", "white"]
+
+def _get_vehicle_color(role: str) -> str:
+    """ego_vehicle_N → 색상 이름 변환"""
+    try:
+        idx = int(role[-1]) - 1
+        return VEHICLE_COLORS[idx] if 0 <= idx < len(VEHICLE_COLORS) else role
+    except:
+        return role
+
 
 class SimpleMultiAgentPlanner:
     """
@@ -148,7 +159,7 @@ class SimpleMultiAgentPlanner:
             role = self._role_name(index)
             topic = f"/global_path_{role}"
             self.path_publishers[role] = rospy.Publisher(topic, Path, queue_size=1, latch=True)
-            
+
             meta_topic = f"/global_path_meta_{role}"
             self.path_meta_publishers[role] = rospy.Publisher(meta_topic, PathMeta, queue_size=1, latch=True)
 
@@ -245,40 +256,97 @@ class SimpleMultiAgentPlanner:
                 self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
                 self._store_active_path(role, modified_path)
 
-    def has_conflict_opposite(self, role: str, edges: List[Tuple[int, int]]) -> bool:
-        ids = list(map(self.route_planner.get_id_for_edge, edges))
-
+    def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, avoidance_length: float) -> bool:
+        """
+        좌표 기반 반대 차선 충돌 감지 (회피 중인 차량만 검사)
+        
+        Args:
+            role: 현재 차량 role
+            stop_pos: 회피 시작 위치 (정지 위치)
+            d_offset: 회피 방향 횡방향 오프셋 (양수: 왼쪽, 음수: 오른쪽)
+            avoidance_length: 회피 경로 길이
+        
+        Returns:
+            True if should wait, False if can proceed
+        """
+        # 조기 반환: 회피 중인 다른 차량이 없으면 충돌 없음
+        if not self._obstacle_planner._avoidance_opposite_ids:
+            return False
+        
+        my_color = _get_vehicle_color(role)
+        
+        # stop_pos 위치의 edge에서 반대 차선 ID 추출
+        edges = self.route_planner.get_edges_at_location(stop_pos.x, stop_pos.y)
+        ids = [self.route_planner.get_id_for_edge(e) for e in edges if e]
+        
+        safe_distance = avoidance_length * 2.5  # 회피 경로 길이의 2.5배
+        
         for my_id in ids:
             if my_id is None:
                 continue
             
-            # 내 반대 차선 road_id
             opposite_id = (my_id[0], -my_id[1])
             
-            # 반대 차선을 점유하는 다른 차량들 확인
-            for other_role in self._obstacle_planner._blocked_opposite_ids.get(opposite_id, []):
-                # 내가 반대 차선을 점유하는 케이스는 스킵
+            # 회피 중인 차량만 확인 (변경: _avoidance_opposite_ids 사용)
+            for other_role in self._obstacle_planner._avoidance_opposite_ids.get(opposite_id, []):
                 if role == other_role:
                     continue
-
+                
+                other_color = _get_vehicle_color(other_role)
+                
+                # 상대 차량 위치 가져오기
                 other_vehicle = self._get_vehicle_by_role(other_role)
                 if other_vehicle is None:
                     continue
-
-                # 반대 차선에 경로 계획한 다른 차량의 위치 가져오기
-                other_front_loc = self._vehicle_front(other_vehicle)
                 
-                # 타 차량이 위치한 road_id 추출
-                other_edges = self.route_planner.get_edges_at_location(other_front_loc.x, other_front_loc.y)
-                other_ids = list(map(self.route_planner.get_id_for_edge, other_edges))
-
-                # 상대가 실제로 반대 차선에 있는지 확인
-                if opposite_id in other_ids:
-                    # 교착 상태 감지 로깅
-                    if other_role in self._obstacle_planner._obstacle_blocked_roles:
-                        rospy.logwarn(f"[DEADLOCK] {role} and {other_role} may be in deadlock on road {my_id[0]}")
-                    return True
-
+                other_rear_loc = self._vehicle_rear(other_vehicle)
+                
+                # 상대 차량의 active path 가져오기
+                other_path = self._active_paths.get(other_role)
+                if not other_path or len(other_path) < 10:
+                    # path가 없거나 너무 짧으면 건너뛰기 (보수적 대기 완화)
+                    rospy.loginfo(f"[CONFLICT] {my_color}: {other_color} has short path - skipping")
+                    continue
+                
+                try:
+                    # FrenetPath로 변환하여 s 좌표 기반 거리 계산
+                    from frenet_path import FrenetPath
+                    frenet = FrenetPath(other_path)
+                    
+                    # conflict_point 계산: stop_pos에서 d_offset만큼 횡방향 이동한 위치 (반대 차선 위)
+                    my_path = self._active_paths.get(role)
+                    if my_path and len(my_path) >= 10:
+                        my_frenet = FrenetPath(my_path)
+                        s_stop_on_my_path, _ = my_frenet.cartesian_to_frenet(stop_pos.x, stop_pos.y)
+                        conflict_x, conflict_y = my_frenet.frenet_to_cartesian(s_stop_on_my_path, d_offset)
+                        conflict_point = carla.Location(x=conflict_x, y=conflict_y)
+                    else:
+                        conflict_point = stop_pos
+                    
+                    # conflict_point를 상대 경로에 투영
+                    s_conflict, _ = frenet.cartesian_to_frenet(conflict_point.x, conflict_point.y)
+                    
+                    # 상대 차량 현재 위치의 s 계산 (후륜축 기준)
+                    s_vehicle, _ = frenet.cartesian_to_frenet(other_rear_loc.x, other_rear_loc.y)
+                    
+                    # s_diff: 양수 = 이미 지남, 음수 = 아직 도달 안 함
+                    s_diff = s_vehicle - s_conflict
+                    
+                    if s_diff >= 0:
+                        # 상대가 이미 conflict_point를 지남 → 회피 가능
+                        rospy.loginfo(f"[PASSED] {my_color}: {other_color} passed conflict (s_diff={s_diff:.1f}m)")
+                    elif abs(s_diff) > safe_distance:
+                        # 상대가 아직 멀리 있음 → 회피 가능
+                        rospy.loginfo(f"[FAR] {my_color}: {other_color} is {abs(s_diff):.1f}m away (safe={safe_distance:.1f}m)")
+                    else:
+                        # 상대가 접근 중이고 가까움 → 대기!
+                        rospy.logwarn(f"[CONFLICT] {my_color}: {other_color} approaching (s_diff={s_diff:.1f}m) - waiting")
+                        return True
+                        
+                except Exception as e:
+                    rospy.logwarn(f"[CONFLICT] {my_color}: frenet calculation failed for {other_color}: {e}")
+                    continue
+        
         return False
 
     def _get_vehicle_by_role(self, role: str):
@@ -294,6 +362,12 @@ class SimpleMultiAgentPlanner:
         if not vehicles:
             return
         
+        # DEBUG: _obstacle_blocked_roles 상태 확인
+        if self._obstacle_planner:
+            blocked_roles = list(self._obstacle_planner._obstacle_blocked_roles.keys())
+            if blocked_roles:
+                rospy.logwarn_throttle(3.0, f"[DEBUG] _obstacle_blocked_roles: {blocked_roles}")
+        
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             
@@ -304,14 +378,20 @@ class SimpleMultiAgentPlanner:
             # 우회 불가하지만, 정지해야 하는 녀석
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
-                stop_pos, d_offset = self._obstacle_planner.get_stop_pos(role)
+                stop_pos, d_offset, avoidance_length = self._obstacle_planner.get_stop_pos(role)
                 if front_loc.distance(stop_pos) <= self.override_clear_radius:
+                    # 회피 충돌 등록 (반대 차선 점유 알림)
+                    self._obstacle_planner.register_avoidance_conflict(role, stop_pos.x, stop_pos.y)
+                    
                     # 회피 경로가 존재하지 않거나 타 차량이 반대 차선을 점유하고 있는 경우
-                    if d_offset is None or self.has_conflict_opposite(role, self.route_planner.get_edges_at_location(front_loc.x, front_loc.y)):
+                    # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
+                    if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, avoidance_length):
                         if role not in self._backup_blocked_path:
                             self._backup_blocked_path[role] = self._active_paths.get(role)
 
                         stop_pts = [(front_loc.x, front_loc.y)]
+                        color = _get_vehicle_color(role)
+                        rospy.logfatal(f"[STOP] {color}: 장애물 회피 대기 중 (d_offset={d_offset})")
                         self._publish_path(stop_pts, role, "stop")
                         self._store_active_path(role, stop_pts)
                     
@@ -336,8 +416,8 @@ class SimpleMultiAgentPlanner:
                         hold_t = rospy.Time.now().to_sec() + max(0.0, float(self.override_hold_sec))
                         self._override_hold_until[role] = hold_t
                         
-                        # 정지용 path 퍼블리시 (1 포인트만 넣어 컨트롤러 속도 0 유도)
                         stop_pts = [(front_loc.x, front_loc.y)]
+                        rospy.logfatal(f"[STOP] {role}: 임의 목적지 도착 대기 중")
                         self._publish_path(stop_pts, role, "stop")
                         self._store_active_path(role, stop_pts)
                         rospy.loginfo(f"{role}: override goal reached -> hold for {self.override_hold_sec:.1f}s")
@@ -513,6 +593,23 @@ class SimpleMultiAgentPlanner:
         return carla.Location(
             x=tf.location.x + forward_x * offset,
             y=tf.location.y + forward_y * offset,
+            z=tf.location.z
+        )
+
+    def _vehicle_rear(self, vehicle: carla.Actor) -> carla.Location:
+        """차량 후륜축 위치 반환"""
+        tf = vehicle.get_transform()
+        yaw_rad = math.radians(tf.rotation.yaw)
+        forward_x = math.cos(yaw_rad)
+        forward_y = math.sin(yaw_rad)
+        # 후륜축은 차량 중심에서 뒤로 (bounding box 절반 - 약간)
+        offset = 1.0  # 기본값
+        bb = getattr(vehicle, "bounding_box", None)
+        if bb is not None and getattr(bb, "extent", None) is not None:
+            offset = bb.extent.x * 0.5  # 차량 길이의 1/4 정도 뒤
+        return carla.Location(
+            x=tf.location.x - forward_x * offset,
+            y=tf.location.y - forward_y * offset,
             z=tf.location.z
         )
 

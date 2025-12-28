@@ -116,16 +116,13 @@ class SimpleMultiVehicleController:
                 "s_profile": [],
                 "progress_s": 0.0,
                 "path_length": 0.0,
-                "obstacle_stop_s": -1.0,  # 장애물 정지 arc-length (-1.0 = 정지 없음)
             }
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
             cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
             pose_topic = f"/{role}/pose"
-            stop_topic = f"/obstacle_stop_{role}"
             rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
-            rospy.Subscriber(stop_topic, Float32, self._obstacle_stop_cb, callback_args=role, queue_size=1)
             if self.use_speed_override:
                 override_topic = f"/carla/{role}/vehicle_control_cmd_override"
                 rospy.Subscriber(
@@ -180,7 +177,9 @@ class SimpleMultiVehicleController:
         st["path_length"] = total_len
         st["progress_s"] = 0.0
         st["progress_fail_count"] = 0
-        # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
+        # 경로 수신 디버그 로그
+        if len(points) <= 5 or total_len <= 3.0:
+            rospy.logwarn(f"[PATH RECV] {role}: SHORT path received! pts={len(points)}, len={total_len:.1f}m")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
         if rear is not None:
@@ -217,16 +216,6 @@ class SimpleMultiVehicleController:
         pose_msg.header = msg.header
         pose_msg.pose = msg.pose.pose
         self.pose_publishers[role].publish(pose_msg)
-
-    def _obstacle_stop_cb(self, msg: Float32, role: str) -> None:
-        """장애물 정지 arc-length 콜백"""
-        st = self.states[role]
-        stop_s = float(msg.data)
-        st["obstacle_stop_s"] = stop_s
-        if stop_s >= 0:
-            rospy.loginfo_throttle(2.0, f"{role}: obstacle stop_s = {stop_s:.1f}m")
-        else:
-            rospy.loginfo_throttle(2.0, f"{role}: obstacle stop cleared")
 
     def _speed_override_cb(self, msg: AckermannDrive, role: str) -> None:
         """
@@ -590,16 +579,11 @@ class SimpleMultiVehicleController:
         #     alpha,
         # )
         
-        # 장애물 정지 arc-length 체크
-        obstacle_stop_s = float(st.get("obstacle_stop_s", -1.0))
-        current_progress = float(st.get("progress_s", 0.0))
-        if obstacle_stop_s >= 0 and current_progress >= obstacle_stop_s - 1.0:  # 1m 마진
-            rospy.logwarn_throttle(2.0, f"{role}: stopping at obstacle (progress={current_progress:.1f}m >= stop_s={obstacle_stop_s:.1f}m)")
-            speed = 0.0
-        
         # 경로 끝 도달 시 정지
         dist_to_end = self._distance_to_path_end(st)
+        path_len = len(st.get("path", []))
         if dist_to_end is not None and dist_to_end <= 2.0:
+            rospy.logwarn_throttle(1.0, f"[PATH END] {role}: dist_to_end={dist_to_end:.1f}m, path_len={path_len} → 정지")
             speed = 0.0
         
         rospy.loginfo_throttle(
@@ -741,9 +725,10 @@ class SimpleMultiVehicleController:
                         color_name = "red" if color == 0 else ("yellow" if color == 1 else "green")
                         # Region-based hard stop
                         if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
-                            rospy.loginfo_throttle(
+                            vehicle_color = ["red", "yellow", "green", "black", "white"]
+                            rospy.logwarn_throttle(
                                 0.5,
-                                f"{role}: TL HIT ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) speed_in={speed_cmd:.2f} -> 0",
+                                f"[TRAFFIC LIGHT] {vehicle_color[int(role[-1]) - 1]} 정지: 신호등 '{ap.get('name', 'unknown')}' ({color_name})",
                             )
                             hit = True
                             return 0.0

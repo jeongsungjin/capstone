@@ -39,8 +39,8 @@ class ObstaclePlanner:
         self.route_planner = global_planner
         self._on_obstacle_change_callback = on_obstacle_change_callback
 
-        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 1.25))  # 경로 차단용 반경
-        self.obstacle_collision_radius = float(rospy.get_param("~obstacle_collision_radius", 1.25))  # 회피 경로 충돌 검사용 반경
+        self.obstacle_radius = float(rospy.get_param("~obstacle_radius", 0.8))  # 경로 차단용 반경
+        self.obstacle_collision_radius = float(rospy.get_param("~obstacle_collision_radius", 0.8))  # 회피 경로 충돌 검사용 반경
         self.obstacle_stop_distance = float(rospy.get_param("~obstacle_stop_distance", 1.0))  # 장애물 앞 정지 거리
         self.avoidance_margin_after = float(rospy.get_param("~avoidance_margin_after", 1.0))  # 장애물 뒤 복귀 마진
 
@@ -79,7 +79,8 @@ class ObstaclePlanner:
         
         # Vehicle route edges tracking (role -> [(n1, n2), ...])
         self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
-        self._blocked_opposite_ids: Dict[Tuple[int, int], Set[str]] = {}
+        # 회피 중인 차량만 등록 (장애물 근처에서 반대 차선 점유 시)
+        self._avoidance_opposite_ids: Dict[Tuple[int, int], Set[str]] = {}
 
     def _obstacle_cb(self, msg: PoseArray) -> None:
         """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
@@ -168,32 +169,19 @@ class ObstaclePlanner:
         return False
 
     def update_vehicle_edges_from_nodes(self, role: str, node_list) -> None:
-        """A* 노드 리스트에서 직접 엣지 추출하여 저장"""
+        """A* 노드 리스트에서 직접 엣지 추출하여 저장 (conflict 등록은 하지 않음)"""
         if not node_list:
             return
         
         # GlobalPlanner의 nodes_to_edges 사용
         if hasattr(self.route_planner, 'nodes_to_edges'):
             edges = self.route_planner.nodes_to_edges(node_list)
-        
         else:
             # fallback: 직접 변환
             edges = [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]
             
         if edges:
-            if role in self._vehicle_route_edges and len(self._vehicle_route_edges[role]) > 0:
-                for edge in self._vehicle_route_edges[role]:
-                    if self.route_planner.get_id_for_edge(edge) in self._blocked_opposite_ids:
-                        self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)].remove(role)
-
             self._vehicle_route_edges[role] = edges
-            rospy.logwarn(f"{role}: updated {len(edges)} edges from node_list")
-
-            for edge in edges:
-                if self.route_planner.get_id_for_edge(edge) not in self._blocked_opposite_ids:
-                    self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)] = set()
-                
-                self._blocked_opposite_ids[self.route_planner.get_id_for_edge(edge)].add(role)
 
     def get_stop_pos(self, role: str) -> carla.Location:
         return self._obstacle_blocked_roles[role][0]
@@ -202,6 +190,30 @@ class ObstaclePlanner:
         self._obstacle_blocked_roles[role].pop(0)
         if not self._obstacle_blocked_roles[role]:
             self._obstacle_blocked_roles.pop(role)
+        # 회피 충돌 등록 해제
+        self.unregister_avoidance_conflict(role)
+
+    def register_avoidance_conflict(self, role: str, stop_pos_x: float, stop_pos_y: float) -> None:
+        """회피 시작 시 반대 차선 충돌 영역 등록"""
+        edges = self.route_planner.get_edges_at_location(stop_pos_x, stop_pos_y)
+        for edge in edges:
+            edge_id = self.route_planner.get_id_for_edge(edge)
+            if edge_id:
+                opposite_id = (edge_id[0], -edge_id[1])
+                if opposite_id not in self._avoidance_opposite_ids:
+                    self._avoidance_opposite_ids[opposite_id] = set()
+                self._avoidance_opposite_ids[opposite_id].add(role)
+
+    def unregister_avoidance_conflict(self, role: str) -> None:
+        """회피 완료 시 등록 해제"""
+        to_remove = []
+        for edge_id, roles in self._avoidance_opposite_ids.items():
+            if role in roles:
+                roles.remove(role)
+                if not roles:
+                    to_remove.append(edge_id)
+        for edge_id in to_remove:
+            self._avoidance_opposite_ids.pop(edge_id)
 
     def apply_avoidance_to_path(
         self, 
@@ -289,16 +301,21 @@ class ObstaclePlanner:
                 s_starts.append(s_start)
                 stop_pos = frenet_path.frenet_to_cartesian(s_start, 0)
 
+                # 회피 경로 길이 계산 (s_end - s_start)
+                s_end = min(frenet_path._s_profile[-1] - 0.5, s_obs + (self.obstacle_radius + look_behind))
+                avoidance_length = s_end - s_start
+                rospy.logfatal(f'[AVOIDACNE] avoidance_length: {avoidance_length:.1f} {look_ahead:.1f} {look_behind:.1f}')
+                
                 # 연속 장애물 구간 처리를 어떻게 해야할까?
                 stop_poses.append((
                     carla.Location(
                         x=stop_pos[0],
                         y=stop_pos[1]
                     ),
-                    best_d_offset
+                    best_d_offset,
+                    avoidance_length  # 회피 경로 길이 추가
                 ))
             
-                s_end = min(frenet_path._s_profile[-1] - 0.5, s_obs + (self.obstacle_radius + look_behind))
                 s_ends.append(s_end)
 
                 if best_d_offset:
