@@ -91,7 +91,7 @@
     <param name="use_speed_override" value="$(arg enable_platooning)" />
     <param name="speed_override_timeout" value="0.5" />
     <!-- Low-voltage / parking speed clamp (must match planner destinations) -->
-    <param name="low_voltage_threshold" value="5.0" />
+    <param name="low_voltage_threshold" value="7.2" />
     <param name="parking_dest_x" value="-27.0" />
     <param name="parking_dest_y" value="-16.5" />
     <param name="parking_speed" value="5.0" />

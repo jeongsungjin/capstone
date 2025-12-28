@@ -95,8 +95,8 @@ class SimpleMultiVehicleController:
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
-        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
-        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 7.0))
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 25.0))  # +/-deg ahead
+        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 10.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")

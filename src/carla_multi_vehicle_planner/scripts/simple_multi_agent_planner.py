@@ -74,9 +74,8 @@ class SimpleMultiAgentPlanner:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
-        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 40.0))
+        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
-        
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
         

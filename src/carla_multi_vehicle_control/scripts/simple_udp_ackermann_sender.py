@@ -123,15 +123,34 @@ class SimpleUdpAckermannSender:
             self.e_stop_active = False
 
     def _cb_bev_speed(self, msg: BEVInfo) -> None:
-        n = min(len(self.roles), len(msg.speeds_mps))
+        n = len(msg.speeds_mps)
         now = rospy.Time.now()
-        for i in range(n):
-            role = self.roles[i]
-            try:
-                v = float(msg.speeds_mps[i])
-            except Exception:
-                continue
-            self.cache_bev_speed[role] = {"speed": v, "stamp": now}
+        # 우선 ids 매핑 시도 (id=vehicle_number → ego_vehicle_{id})
+        has_ids = len(msg.ids) == n and n > 0
+        if has_ids:
+            for i in range(n):
+                try:
+                    vid = int(msg.ids[i])
+                except Exception:
+                    continue
+                role = f"ego_vehicle_{vid}"
+                if role not in self.cache_bev_speed:
+                    continue
+                try:
+                    v = float(msg.speeds_mps[i])
+                except Exception:
+                    continue
+                self.cache_bev_speed[role] = {"speed": v, "stamp": now}
+        else:
+            # fallback: 인덱스 기반 매핑
+            m = min(len(self.roles), n)
+            for i in range(m):
+                role = self.roles[i]
+                try:
+                    v = float(msg.speeds_mps[i])
+                except Exception:
+                    continue
+                self.cache_bev_speed[role] = {"speed": v, "stamp": now}
 
     def _tick(self, _evt) -> None:
         if not self.roles:
