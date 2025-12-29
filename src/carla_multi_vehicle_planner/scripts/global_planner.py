@@ -39,6 +39,22 @@ class GlobalPlanner(GlobalRoutePlanner):
         self._blocked_edges: Set[Tuple[int, int]] = set()
         self._obstacle_locations: List[Tuple[float, float, float]] = []
 
+        self._custom_blocked_edge: Tuple[Tuple[int, int]] = (
+            (26, 15),
+            (16, 22),
+            (13, 19),
+            (20, 25)
+        )
+
+        for u, v in self._custom_blocked_edge:
+            self._graph.remove_edge(u, v)
+
+        ### 커스텀 Path 반영하기 ###
+        # 예시 10 -> 26 가는 Path 수정하기
+        # path = self._graph[10][26]['path']
+        # self._graph[10][26]['path'] = [entry_wp] + 내맘대로 + [exit_wp]
+        ########################
+
         self.opposite_lane_edge: Dict[Tuple[int, int], Tuple[int, int]] = {
             (24, 23): (25, 26), (25, 26): (24, 23),
             (18, 21): (22, 6), (22, 6): (18, 21),
@@ -62,16 +78,6 @@ class GlobalPlanner(GlobalRoutePlanner):
             # (2, 4), (9, 1), 
             # (5, 1), (2, 3), (2, 1) 
         }
-
-        self._custom_blocked_edge: Tuple[Tuple[int, int]] = (
-            (26, 15),
-            (16, 22),
-            (13, 19),
-            (20, 25)
-        )
-
-        for u, v in self._custom_blocked_edge:
-            self._graph.remove_edge(u, v)
 
         self.lane_direction: Dict[Tuple[int, int], float] = {}
         self._cache_edge_directions()
