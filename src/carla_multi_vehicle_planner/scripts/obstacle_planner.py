@@ -46,7 +46,7 @@ class ObstaclePlanner:
 
         # 회피 d_offset 범위 (0.5 간격으로 탐색)
         self.d_offset_scale = 10
-        self.min_d_offset = int(self.d_offset_scale * float(rospy.get_param("~min_d_offset", -1.5)))   # 왼쪽 최대
+        self.min_d_offset = int(self.d_offset_scale * float(rospy.get_param("~min_d_offset", 0.0)))   # 왼쪽 최대
         self.max_d_offset = int(self.d_offset_scale * float(rospy.get_param("~max_d_offset", 4.0)))    # 오른쪽 최대
         self.d_offset_step = int(self.d_offset_scale * float(rospy.get_param("~d_offset_step", 0.5)))  # 탐색 간격
         self.lane_width = float(rospy.get_param("~lane_width", 4.0))                              # 차선 폭
@@ -306,7 +306,7 @@ class ObstaclePlanner:
                         y=stop_pos[1]
                     ),
                     best_d_offset,
-                    avoidance_length  # 회피 경로 길이 추가
+                    s_start, s_end                   
                 ))
             
                 s_ends.append(s_end)

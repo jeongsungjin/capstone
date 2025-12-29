@@ -6,7 +6,7 @@ GlobalPlanner: CARLA GlobalRoutePlanner 상속 클래스
 """
 
 import math
-from typing import Set, List, Tuple, Optional
+from typing import Set, List, Dict, Tuple, Optional
 
 import networkx as nx
 import setup_carla_path  # noqa: F401
@@ -61,6 +61,13 @@ class GlobalPlanner(GlobalRoutePlanner):
             # (2, 4), (9, 1), 
             # (5, 1), (2, 3), (2, 1) 
         }
+
+        self._custom_blocked_edge: Tuple[Tuple[int, int]] = (
+            (26, 25),
+            (16, 22),
+            (13, 19),
+            (20, 25)
+        )
 
         self.lane_direction: Dict[Tuple[int, int], float] = {}
         self._cache_edge_directions()
@@ -186,6 +193,9 @@ class GlobalPlanner(GlobalRoutePlanner):
         if (u, v) in self._blocked_edges:
             return 10000
         
+        if (u, v) in self._custom_blocked_edge:
+            return float('inf')
+
         return edge_data.get('length', 1)
 
     def get_id_for_edge(self, edge: Tuple[int, int]) -> Optional[Tuple[int, int]]:

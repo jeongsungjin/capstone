@@ -12,6 +12,8 @@ from nav_msgs.msg import Path
 from capstone_msgs.msg import PathMeta
 from std_msgs.msg import Header, Float32, String
 
+from frenet_path import FrenetPath
+
 try:
     from capstone_msgs.msg import Uplink  # type: ignore
 except Exception:
@@ -319,7 +321,7 @@ class SimpleMultiAgentPlanner:
         
         return best_idx
 
-    def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, avoidance_length: float) -> bool:
+    def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, s_start: float, s_end: float) -> bool:
         """
         좌표 기반 반대 차선 충돌 감지 (Active Path & S-Profile 기반)
         
@@ -334,23 +336,17 @@ class SimpleMultiAgentPlanner:
         """
         # 내 경로 정보 가져오기
         my_path = self._active_paths.get(role)
-        my_s_profile = self._active_path_s.get(role)
-
-        # STOP 상태여서 active path가 없는 경우 백업 경로 사용 (갈 길을 미리 알고 있어야 충돌 계산 가능)
         if not my_path or len(my_path) < 2:
             if role in self._backup_blocked_path:
                 my_path = self._backup_blocked_path[role]
-                my_s_profile, _ = self._compute_path_profile(my_path)
 
             else:
                 return False
-        
-        # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
-        s_start = self._project_progress_on_path(my_path, my_s_profile, stop_pos.x, stop_pos.y)
-        if s_start is None:
-            return False
 
-        safe_distance = avoidance_length * 2.0
+        frenet_path = FrenetPath(my_path)
+
+        # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
+        safe_distance = (s_end - s_start) * 2.0
         my_color = _get_vehicle_color(role)
         
         vehicles = self._get_ego_vehicles()
@@ -361,40 +357,28 @@ class SimpleMultiAgentPlanner:
             if other_role == role:
                 continue
 
-            # 장애물 회피해야만 하는 차량 제외 (obstacle_blocked_roles)
-            # if self._obstacle_planner and other_role in self._obstacle_planner._obstacle_blocked_roles:
-            #     continue
-            # -> 같은 장애물을 피해야 하면으로 바꿔야 할 듯?
-            # 근데 같은 장애물이더라도 멀리 떨어져 있으면 움직이는 게 맞음.
-            # 그리고 가까울 때도 주의해야 하는데 반대편 차선이어야 함............. 씨@빨
-            # 근데 이 반대편 차선을 어떻게 판정해야 할까 너무 어렵다
+            rospy.logwarn(f"[STOP CHECK] avoidance: {_get_vehicle_color(role)} vs preempt: {_get_vehicle_color(other_role)}")
 
             # 타 차량의 Active Path 가져오기
             other_path = self._active_paths.get(other_role)
             if not other_path or len(other_path) < 2:
                 continue
-                
+
             # 1. 장애물(stop_pos)과 타 차량 경로 간의 거리 확인
             #    거리 > 1.0m 이면 충돌 가능성 있는 차량(반대 차선 등)으로 간주
-            dist_to_path = self._dist_point_to_path(other_path, stop_pos.x, stop_pos.y)
+            other_frenet_path = FrenetPath(other_path)
+            other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
+            s_obs_on_other, d_obs_on_other = other_frenet_path.cartesian_to_frenet(stop_pos.x, stop_pos.y)
+            s_other_vehicle_on_other, _ = other_frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
+            _, d_other_vehicle_on_mine = frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
             
-            if dist_to_path < 1.5:
-                # 3. 충돌 가능성 있는 차량의 현재 위치 파악
-                other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
-                
-                # 내 경로 상에서의 s 위치 투영
-                s_other = self._project_progress_on_path(my_path, my_s_profile, other_loc.x, other_loc.y)
-                
-                # 투영 실패 시 무시
-                if s_other is None:
-                    continue
-
-                # 4. 거리 확인: 회피 경로의 2배 이내면 정지
-                dist_diff = abs(s_other - s_start)
-                
-                if dist_diff <= safe_distance:
+            # 타 차량 경로 기준 장애물이 2m 떨어져 있고, 내 차량 경로 기준 타 차량이 2m 이상 떨어져 있다 == 반대 차선에서 오는 괘씸한 녀석이다.
+            if abs(d_obs_on_other) > 2.0 and abs(d_other_vehicle_on_mine) > 2.0:                
+                # 회피 경로의 2배 이상 거리가 나지 않으면 정지
+                dist_diff = s_obs_on_other - s_other_vehicle_on_other 
+                if 0 < dist_diff <= safe_distance:
                     other_color = _get_vehicle_color(other_role)
-                    rospy.logwarn_throttle(1.0, f"[CONFLICT] {my_color}: {other_color} (d={dist_to_path:.1f}m) active overlap ({dist_diff:.1f}m <= {safe_distance:.1f}m) - waiting")
+                    rospy.logwarn_throttle(1.0, f"[CONFLICT] {my_color}: {other_color} (d={d_obs_on_other:.1f}m) active overlap ({dist_diff:.1f}m <= {safe_distance:.1f}m) - waiting")
                     return True
         
         return False
@@ -422,10 +406,12 @@ class SimpleMultiAgentPlanner:
             # 우회 불가하지만, 정지해야 하는 녀석
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
-                stop_pos, d_offset, avoidance_length = self._obstacle_planner.get_stop_pos(role)
+                stop_pos, d_offset, s_start, s_end = self._obstacle_planner.get_stop_pos(role)
                 if front_loc.distance(stop_pos) <= self.override_clear_radius:
+                    rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
+
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
-                    if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, avoidance_length):
+                    if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, s_start, s_end):
                         if role not in self._backup_blocked_path:
                             self._backup_blocked_path[role] = self._active_paths.get(role)
 
@@ -880,8 +866,8 @@ class SimpleMultiAgentPlanner:
             meta.header = msg.header
             meta.resolution.data = 0.1
             meta.category.data = category
-            meta.s_starts.data = []
-            meta.s_ends.data = []
+            meta.s_starts.data = s_starts
+            meta.s_ends.data = s_ends
 
             self.path_meta_publishers[role].publish(meta)
 
