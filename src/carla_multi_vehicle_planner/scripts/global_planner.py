@@ -8,6 +8,7 @@ GlobalPlanner: CARLA GlobalRoutePlanner 상속 클래스
 import math
 from typing import Set, List, Dict, Tuple, Optional
 
+import numpy as np
 import networkx as nx
 import setup_carla_path  # noqa: F401
 import carla
@@ -63,11 +64,14 @@ class GlobalPlanner(GlobalRoutePlanner):
         }
 
         self._custom_blocked_edge: Tuple[Tuple[int, int]] = (
-            (26, 25),
+            (26, 15),
             (16, 22),
             (13, 19),
             (20, 25)
         )
+
+        for u, v in self._custom_blocked_edge:
+            self._graph.remove_edge(u, v)
 
         self.lane_direction: Dict[Tuple[int, int], float] = {}
         self._cache_edge_directions()
@@ -160,6 +164,10 @@ class GlobalPlanner(GlobalRoutePlanner):
         # 해당 위치의 도로 엣지도 차단
         edge = self._localize(location)
         if edge is not None:
+            if edge not in self._blocked_edges:
+                u, v = edge
+                self._graph[u][v]['length'] ^= (2 << 8)
+            
             self._blocked_edges.add(edge)
         
         return blocked
@@ -167,36 +175,29 @@ class GlobalPlanner(GlobalRoutePlanner):
     def clear_obstacles(self) -> None:
         """모든 장애물 및 차단 노드 제거"""
         self._blocked_nodes.clear()
+        for u, v in self._blocked_edges:
+            self._graph[u][v]['length'] ^= (2 << 8)
+        
         self._blocked_edges.clear()
         self._obstacle_locations.clear()
 
     def mark_edge_blocked(self, edge: Tuple[int, int]) -> None:
-        """엣지를 차단 상태로 마킹"""
-        self._blocked_edges.add(edge)
+        """엣지를 차단 상태로 마킹"""    
+        if edge not in self._blocked_edges:
+            u, v = edge
+            self._graph[u][v]['length'] ^= (2 << 8)
 
+        self._blocked_edges.add(edge)
+    
     def is_edge_blocked(self, node1: int, node2: int) -> bool:
         """특정 엣지가 장애물로 차단되었는지 확인"""
         if (node1, node2) in self._blocked_edges:
             return True
+
         if node1 in self._blocked_nodes or node2 in self._blocked_nodes:
             return True
+        
         return False
-
-    def _blocked_weight(self, u: int, v: int, edge_data: dict) -> float:
-        """
-        차단 노드 포함 엣지는 무한대 가중치 반환
-        A* weight 함수로 사용
-        """
-        if u in self._blocked_nodes or v in self._blocked_nodes:
-            return 10000
-        
-        if (u, v) in self._blocked_edges:
-            return 10000
-        
-        if (u, v) in self._custom_blocked_edge:
-            return float('inf')
-
-        return edge_data.get('length', 1)
 
     def get_id_for_edge(self, edge: Tuple[int, int]) -> Optional[Tuple[int, int]]:
         if not self._graph.has_edge(edge[0], edge[1]):
@@ -262,14 +263,13 @@ class GlobalPlanner(GlobalRoutePlanner):
         
         try:
             # Custom weight function으로 차단 노드 우회
+            start, end = self._localize(origin), self._localize(destination)
+
             route = nx.astar_path(
-                self._graph,
-                source=start[0],
-                target=end[0],
-                heuristic=self._distance_heuristic,
-                weight=self._blocked_weight  # 함수 전달!
-            )
+                self._graph, source=start[0], target=end[0],
+                heuristic=self._distance_heuristic, weight='length')
             route.append(end[1])
+
             return route
 
         except nx.NetworkXNoPath:
@@ -292,7 +292,7 @@ class GlobalPlanner(GlobalRoutePlanner):
             if node_list is None:
                 return None, None
             route = self.trace_route(origin, destination)
-            return route, node_list
+            return route, None
             
         except Exception:
             return None, None
