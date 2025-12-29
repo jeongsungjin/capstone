@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
 import math
-import sys
-import os
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
-from std_msgs.msg import Header, Float32, Bool
+from std_msgs.msg import Header
+from std_msgs.msg import Bool
 from capstone_msgs.msg import Uplink  # type: ignore
 
 try:
@@ -23,14 +22,6 @@ try:
 except Exception as exc:
     carla = None
     rospy.logfatal(f"Failed to import CARLA: {exc}")
-
-# GlobalPlanner 임포트 (is_opposite_direction 사용)
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../carla_multi_vehicle_planner/scripts'))
-try:
-    from global_planner import GlobalPlanner
-except ImportError as e:
-    GlobalPlanner = None
-    rospy.logwarn(f"GlobalPlanner import failed: {e}")
 
 
 def quaternion_to_yaw(q) -> float:
@@ -95,7 +86,7 @@ class SimpleMultiVehicleController:
         self.tl_yellow_policy = str(rospy.get_param("~tl_yellow_policy", "cautious")).strip()  # cautious|permissive
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
-        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 30.0))  # +/-deg ahead
+        self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
         self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 7.0))
 
         # CARLA world
@@ -105,15 +96,6 @@ class SimpleMultiVehicleController:
         self.client = carla.Client(host, port)
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
-        
-        # GlobalPlanner 초기화 (is_opposite_direction 사용)
-        self.route_planner = None
-        if GlobalPlanner is not None:
-            try:
-                self.route_planner = GlobalPlanner(self.world.get_map(), sampling_resolution=1.0)
-                rospy.loginfo(f"GlobalPlanner initialized with {len(self.route_planner.lane_direction)} edge directions cached")
-            except Exception as e:
-                rospy.logwarn(f"GlobalPlanner init failed: {e}")
 
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
@@ -178,7 +160,7 @@ class SimpleMultiVehicleController:
             odom_topic = f"/carla/{role}/odometry"
             cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
             pose_topic = f"/{role}/pose"
-            rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=10)
+            rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
             if self.use_speed_override:
                 override_topic = f"/carla/{role}/vehicle_control_cmd_override"
@@ -225,7 +207,6 @@ class SimpleMultiVehicleController:
                 self.vehicles[role] = actor
 
     def _path_cb(self, msg: Path, role: str) -> None:
-        rospy.loginfo_throttle(1.0, f"[PATH RECV] {role}: received {len(msg.poses)} points")
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
         s_profile, total_len = self._compute_path_profile(points)
         st = self.states[role]
@@ -235,9 +216,7 @@ class SimpleMultiVehicleController:
         st["path_length"] = total_len
         st["progress_s"] = 0.0
         st["progress_fail_count"] = 0
-        # 경로 수신 디버그 로그
-        if len(points) <= 5 or total_len <= 3.0:
-            rospy.logwarn(f"[PATH RECV] {role}: SHORT path received! pts={len(points)}, len={total_len:.1f}m")
+        # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
         if rear is not None:
@@ -312,25 +291,24 @@ class SimpleMultiVehicleController:
         if pos is None or ori is None:
             return None
         yaw = quaternion_to_yaw(ori)
-        
         # rear axle 위치: 차량 전체 길이의 7/8 지점(= center에서 뒤로 0.75 * length/2 = 0.75*extent.x)
         back_offset = max(0.0, self.wheelbase * 0.5)
-        
         if vehicle is not None:
             bb = getattr(vehicle, "bounding_box", None)
             if bb is not None and getattr(bb, "extent", None) is not None:
                 length_half = float(bb.extent.x)
                 back_offset = max(back_offset, 0.75 * length_half)
-        
         rx = pos.x - math.cos(yaw) * back_offset
         ry = pos.y - math.sin(yaw) * back_offset
-        
         return rx, ry, yaw
 
     def _project_progress(
         self,
-        path, s_profile,
-        px, py, prev_s: float,
+        path,
+        s_profile,
+        px,
+        py,
+        prev_s: float,
         backtrack_window: float,
         heading: float = None,
     ):
@@ -544,7 +522,6 @@ class SimpleMultiVehicleController:
         ori = st.get("orientation")
         if not path or len(path) < 2 or pos is None or ori is None or vehicle is None:
             return 0.0, 0.0
-        
         ref = self._rear_point(st, vehicle)
         if ref is None:
             return None, None
@@ -589,10 +566,10 @@ class SimpleMultiVehicleController:
         else:
             count = st.setdefault("progress_fail_count", 0) + 1
             st["progress_fail_count"] = count
-            rospy.logwarn_throttle(
-                2.0,
-                f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
-            )
+            # rospy.logwarn_throttle(
+            #     2.0,
+            #     f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
+            # )
             # 즉시 경로로 스냅하여 조향이 바로 경로를 향하도록
             reset = self._force_snap_progress(st, fx, fy)
             if reset is not None:
@@ -623,152 +600,60 @@ class SimpleMultiVehicleController:
         # 명령 상한으로 클램프 (라디안)
         steer = max(-self.cmd_max_steer, min(self.cmd_max_steer, steer))
         speed = self.target_speed
-        
         # Apply traffic light gating
         speed = self._apply_tl_gating(role, vehicle, st, fx, fy, speed)
-        
         # Apply forward collision gating (vehicles in front cone within distance)
         speed = self._apply_collision_gating(role, fx, fy, yaw, speed)
-        
         # Apply parking slowdown when low-voltage path ends at parking dest
         speed = self._apply_parking_speed_limit(role, st, speed)
-        
-        # rospy.loginfo_throttle(0.5, "%s steer=%.3f Ld=%.2f alpha=%.3f", role, steer, Ld, alpha)
-        
-        # 경로 끝 도달 시 정지
-        dist_to_end = self._distance_to_path_end(st)
-        path_len = len(st.get("path", []))
-        if dist_to_end is not None and dist_to_end <= 2.0:
-            speed = 0.0
-            rospy.logwarn_throttle(2.0, f"[PATH END] {role}: dist_to_end={dist_to_end:.1f}m, path_len={path_len} → Stopping")
-            # rospy.signal_shutdown(f"Debugging: {role} reached PATH END")
-        
-        # rospy.loginfo_throttle(0.5, "%s steer=%.3f Ld=%.2f alpha=%.3f", role, steer, Ld, alpha)
+        # rospy.loginfo_throttle(
+        #     0.5,
+        #     "%s steer=%.3f Ld=%.2f alpha=%.3f",
+        #     role,
+        #     steer,
+        #     Ld,
+        #     alpha,
+        # )
         return steer, speed
+
 
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
         # Deadlock token으로 충돌 정지 해제 요청 시 그대로 통과
         if self._collision_override.get(role, False):
             return speed_cmd
-        
         # 플래툰/외부 속도오버라이드 사용 시 충돌 정지 비활성화 (간섭 방지)
         if self.use_speed_override:
             return speed_cmd
-        
         if not self.collision_stop_enable:
             return speed_cmd
-        
         angle_th = abs(float(self.collision_stop_angle_deg)) * math.pi / 180.0
         dist_th = max(0.0, float(self.collision_stop_distance_m))
-        
         # Iterate over other controlled vehicles (based on odom states)
         for other_role, ost in self.states.items():
             if other_role == role:
                 continue
-        
             op = ost.get("position")
             if op is None:
                 continue
-        
             dx = float(op.x) - fx
             dy = float(op.y) - fy
             dist = math.hypot(dx, dy)
             if dist <= 1e-3:
                 return 0.0
-        
             # Bearing difference to heading
             ang = math.atan2(dy, dx)
             rel = ang - yaw
             while rel > math.pi:
                 rel -= 2.0 * math.pi
-        
             while rel < -math.pi:
                 rel += 2.0 * math.pi
-        
             if abs(rel) <= angle_th and dist <= dist_th:
-                # 반대 방향 엣지에서 적색 대기 중인 차량은 무시
-                # if self._is_on_opposite_edge_at_red(fx, fy, op.x, op.y):
-                #     rospy.loginfo_throttle(1.0, f"[IGNORE] {role}: {other_role} at red on opposite direction edge")
-                #     continue
-
-                # 정지 시 엣지 방향 정보 출력
-                my_edge = self._get_edge_at_pos(fx, fy)
-                other_edge = self._get_edge_at_pos(op.x, op.y)
-                my_yaw = self.route_planner.get_edge_direction(my_edge) if my_edge else None
-                other_yaw = self.route_planner.get_edge_direction(other_edge) if other_edge else None
-                rospy.logwarn_throttle(
-                    1.0,
-                    f"{role}: stopping for {other_role} (dist={dist:.2f}m) my_edge={my_edge} yaw={math.degrees(my_yaw) if my_yaw else 'None':.2f}° | other_edge={other_edge} yaw={math.degrees(other_yaw) if other_yaw else 'None':.2f}°",
-                )
+                # rospy.logwarn_throttle(
+                #     1.0,
+                #     f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",
+                # )
                 return 0.0
-        
         return speed_cmd
-
-    def _get_edge_at_pos(self, x: float, y: float) -> Optional[Tuple[int, int]]:
-        """위치에서 edge 조회"""
-        if self.route_planner is None:
-            return None
-        
-        try:
-            edges = self.route_planner.get_edges_at_location(x, y, radius=3.0)
-            return edges[0] if edges else None
-        
-        except Exception:
-            return None
-
-    def _is_on_opposite_edge_at_red(self, my_x: float, my_y: float, other_x: float, other_y: float) -> bool:
-        """
-        상대 차량이 반대 방향 엣지에서 적색 대기 중인지 확인
-        """
-        if self.route_planner is None:
-            return False
-        
-        my_edge = self._get_edge_at_pos(my_x, my_y)
-        other_edge = self._get_edge_at_pos(other_x, other_y)
-        
-        if my_edge is None or other_edge is None:
-            rospy.logfatal_throttle(
-                1.0,
-                f"[EDGE] get_edge_at_pos returned None: my_pos=({my_x:.1f}, {my_y:.1f}) my_edge={my_edge} | other_pos=({other_x:.1f}, {other_y:.1f}) other_edge={other_edge}",
-            )
-            return False
-        
-        # 엣지 방향 비교 (각도 차이 > 90도면 반대 방향)
-        my_yaw = self.route_planner.get_edge_direction(my_edge)
-        other_yaw = self.route_planner.get_edge_direction(other_edge)
-        
-        if my_yaw is None or other_yaw is None:
-            rospy.logfatal_throttle(
-                1.0,
-                f"[EDGE] get_edge_direction returned None: my_edge={my_edge} my_yaw={my_yaw} | other_edge={other_edge} other_yaw={other_yaw}",
-            )
-            return False
-        
-        is_opposite = self.route_planner.is_opposite_direction(my_edge, other_edge)
-        
-        rospy.loginfo_throttle(
-            0.5,
-            f"[EDGE] my={my_edge} yaw={math.degrees(my_yaw):.1f}° | other={other_edge} yaw={math.degrees(other_yaw):.1f}° | opposite={is_opposite}",
-        )
-        
-        if not is_opposite:
-            return False
-        
-        # 상대가 적색 리전에 있는지 확인
-        return self._is_at_red_light(other_x, other_y)
-
-    def _is_at_red_light(self, x: float, y: float) -> bool:
-        """해당 위치가 적색 신호 리전 내에 있는지 확인"""
-        for iid, data in self._tl_phase.items():
-            for ap in data.get("approaches", []):
-                xmin, xmax = ap.get("xmin", -1e9), ap.get("xmax", 1e9)
-                ymin, ymax = ap.get("ymin", -1e9), ap.get("ymax", 1e9)
-                color = int(ap.get("color", 0))
-                if x >= xmin and x <= xmax and y >= ymin and y <= ymax:
-                    if color == 0:  # 적색
-                        return True
-        
-        return False
 
     def _get_vehicle_max_steer(self, vehicle) -> float:
         # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
@@ -779,35 +664,27 @@ class SimpleMultiVehicleController:
                 deg = max([float(getattr(w, "max_steer_angle", 0.0)) for w in wheels])
                 if deg > 0.0:
                     return deg * math.pi / 180.0
-        
         except Exception:
             pass
-        
         return max(1e-3, float(self.max_steer))
 
     def _apply_carla_control(self, vehicle, steer, speed):
         if self.emergency_stop_active:
             steer = 0.0
             speed = 0.0
-        
         control = carla.VehicleControl()
-        
         # 차량 물리 최대각으로 정규화하여 CARLA [-1,1]에 매핑
         veh_max = self._get_vehicle_max_steer(vehicle)
         control.steer = max(-1.0, min(1.0, float(steer) / max(1e-3, veh_max)))
-        
         v = vehicle.get_velocity()
         current_speed = math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z)
         speed_error = speed - current_speed
-
         if speed_error > 0:
             control.throttle = max(0.2, min(1.0, speed_error / max(1.0, speed)))
             control.brake = 0.0
-        
         else:
             control.throttle = 0.0
             control.brake = min(1.0, -speed_error / max(1.0, self.target_speed))
-        
         vehicle.apply_control(control)
 
     def _tl_cb(self, msg: "TrafficLightPhase") -> None:
@@ -824,21 +701,18 @@ class SimpleMultiVehicleController:
                     "sx": float(ap.stopline_x), "sy": float(ap.stopline_y),
                 })
             self._tl_phase[iid] = {"stamp": msg.header.stamp, "approaches": approaches}
-
         except Exception:
             self._tl_phase[iid] = {"stamp": rospy.Time.now(), "approaches": []}
 
     def _uplink_cb(self, msg: "Uplink") -> None:
         try:
             self._voltage[int(msg.vehicle_id)] = float(msg.voltage)
-        
         except Exception:
             pass
 
     def _e_stop_cb(self, msg: Bool) -> None:
         try:
             self.emergency_stop_active = bool(msg.data)
-        
         except Exception:
             self.emergency_stop_active = False
 
@@ -848,25 +722,20 @@ class SimpleMultiVehicleController:
             v = self._voltage.get(vid, float("inf"))
             # print(f"Voltage: {v}")
             return v <= float(self.low_voltage_threshold)
-        
         except Exception:
             return False
 
     def _apply_tl_gating(self, role: str, vehicle, st, fx: float, fy: float, speed_cmd: float) -> float:
         if not self._tl_phase:
             return speed_cmd
-        
         pos = st.get("position")
-        
         # rear 기준뿐 아니라 차량 중심 좌표도 함께 검사해 영역 누락 방지
         check_points = [("rear", fx, fy)]
         if pos is not None:
             check_points.append(("center", float(pos.x), float(pos.y)))
-        
         hit = False
         min_gap = float("inf")
         min_info = None
-        
         for data in self._tl_phase.values():
             approaches = data.get("approaches", [])
             for ap in approaches:
@@ -876,48 +745,39 @@ class SimpleMultiVehicleController:
                         color_name = "red" if color == 0 else ("yellow" if color == 1 else "green")
                         # Region-based hard stop
                         if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
-                            vehicle_color = ["red", "yellow", "green", "black", "white"]
-                            # rospy.logwarn_throttle(
+                            # rospy.loginfo_throttle(
                             #     0.5,
-                            #     f"[TRAFFIC LIGHT] {vehicle_color[int(role[-1]) - 1]} 정지: 신호등 '{ap.get('name', 'unknown')}' ({color_name})",
+                            #     f"{role}: TL HIT ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) speed_in={speed_cmd:.2f} -> 0",
                             # )
                             hit = True
                             return 0.0
-        
                         # In region but not stopping (green or permissive yellow)
                         # rospy.loginfo_throttle(
                         #     0.5,
                         #     f"{role}: TL IN ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) keep speed={speed_cmd:.2f}",
                         # )
                         hit = True
-        
                     # gap to bbox (0 if inside); use L2 of outside deltas
                     dx = 0.0
                     if px < ap["xmin"]:
                         dx = ap["xmin"] - px
-        
                     elif px > ap["xmax"]:
                         dx = px - ap["xmax"]
-        
                     dy = 0.0
                     if py < ap["ymin"]:
                         dy = ap["ymin"] - py
-        
                     elif py > ap["ymax"]:
                         dy = py - ap["ymax"]
-        
                     gap = math.hypot(dx, dy)
                     if gap < min_gap:
                         min_gap = gap
                         min_info = (label, px, py, ap, ap.get("color", 0))
-        
         if not hit and min_info is not None:
             label, px, py, ap, color = min_info
             # rospy.logdebug_throttle(
             #     1.0,
             #     f"{role}: TL no-hit ({label}) pos=({px:.2f},{py:.2f}) closest region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) gap={min_gap:.2f} color={int(color)} phase_cache={len(self._tl_phase)}",
             # )
-
         return speed_cmd
 
     def _apply_parking_speed_limit(self, role: str, st, speed_cmd: float) -> float:
@@ -954,7 +814,6 @@ class SimpleMultiVehicleController:
         if rem < 0.0:
             rem = 0.0
         return rem
-    
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
         msg.steering_angle = float(0.0 if self.emergency_stop_active else steer)
@@ -988,10 +847,12 @@ class SimpleMultiVehicleController:
                 speed = override_speed
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
-            # rospy.loginfo_throttle(
-            #     0.5,
-            #     f"{role}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
-            # )
+
+            colors = ["red", "yellow", "green", "black", "white"]
+            rospy.loginfo_throttle(
+                0.5,
+                f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
+            )
 
 
 if __name__ == "__main__":
