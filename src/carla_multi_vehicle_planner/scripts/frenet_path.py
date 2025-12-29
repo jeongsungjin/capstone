@@ -196,9 +196,33 @@ class FrenetPath:
         
         return x, y
 
-    def update_d_offset(self, s_start_idx: float, s_end_idx: float, d_offset: float):
-        self.frenet_path[s_start_idx:s_end_idx, 1] = d_offset        
+    def update_d_offset(self, s_start_idx: float, s_end_idx: float, d_offset: float, smooth_ratio: float= 0.1):
+        self.frenet_path[s_start_idx:s_end_idx, 1] = d_offset
+        num_points = s_end_idx - s_start_idx + 1
+
+        for i in range(num_points):
+            t = i / (num_points - 1) if num_points > 1 else 0
+            
+            # 진입 구간 (처음 smooth_ratio): d=0 → d_offset
+            if t < smooth_ratio:
+                d_ratio = t / smooth_ratio  # 0 → 1
+                d = d_offset * self._smooth_step(d_ratio)
+            
+            # 복귀 구간 (마지막 smooth_ratio): d_offset → 0
+            elif t > (1.0 - smooth_ratio):
+                d_ratio = (t - (1.0 - smooth_ratio)) / smooth_ratio  # 0 → 1
+                d = d_offset * (1.0 - self._smooth_step(d_ratio))
+            
+            # 유지 구간 (중간): d=d_offset
+            else:
+                d = d_offset
+
+            self.frenet_path[s_start_idx + i, 1] = d
+
+    def _smooth_step(self, t: float) -> float:
+        """Smoothstep 함수 (부드러운 0→1 전환)"""
+        t = max(0.0, min(1.0, t))
+        return t * t * (3 - 2 * t)
 
     def generate_avoidance_path(self):
-
         return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), self.frenet_path))

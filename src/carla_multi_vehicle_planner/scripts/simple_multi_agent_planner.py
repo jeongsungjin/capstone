@@ -207,53 +207,117 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._active_paths.get(role)
+            original_path = self._original_paths.get(role)
             if not original_path or len(original_path) < 2:
-                original_path = self._backup_blocked_path.get(role)
+                original_path = self._active_paths.get(role)
 
             if not original_path or len(original_path) < 2:
                 continue
 
             # 원본 경로를 현재 위치부터 트리밍 (지나간 부분 제거)
             vx, vy = front_loc.x, front_loc.y
-            min_dist = float('inf')
-            closest_idx = 0
-            for i, (px, py) in enumerate(original_path):
-                dist = math.hypot(px - vx, py - vy)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_idx = i
+            
+            # 현재 위치에 가장 가까운 인덱스 찾기
+            # 단순히 거리가 작은 것만 찾지 말고, 경로를 따라가는 순서를 고려해야 함
+            closest_idx = self._find_closest_path_index(original_path, vx, vy)
             
             # 현재 위치부터의 경로만 사용
             trimmed_original = original_path[closest_idx:]
             if len(trimmed_original) < 2:
-                trimmed_original = original_path  # fallback
+                # fallback: 경로 전체 사용
+                trimmed_original = original_path
+                rospy.logwarn_throttle(2.0, f"{role}: trimmed path too short, using original")
             
-            points = self._unique_points(trimmed_original)
-            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
+            # 경로에 중복 제거 (원본 경로 구조 유지)
+            trimmed_original = self._unique_points(trimmed_original)
+            
+            # 장애물 탐지
+            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(trimmed_original, is_frenet=False)
             
             if not obstacles_on_path:
+                # 장애물 없음 -> 원본 경로로 복구
                 if role in self._obstacle_planner._obstacle_blocked_roles:
                     self._obstacle_planner._obstacle_blocked_roles.pop(role)
 
-                    self._publish_path(trimmed_original, role, "obstacle", [], [])
-                    self._store_active_path(role, trimmed_original)
-
+                rospy.loginfo(f"[RECOVERY] {role}: recovered to original path (no obstacles)")
+                self._publish_path(trimmed_original, role, "normal", [], [])
+                self._store_active_path(role, trimmed_original)
+                self._original_paths[role] = list(trimmed_original)  # 원본 경로 갱신
+                
+                if role in self._backup_blocked_path:
                     self._backup_blocked_path.pop(role)
 
             else:
-                # 트리밍된 원본 경로 기반으로 회피 적용
-                modified_path, stop_poses, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                # 장애물 있음 -> 회피 경로 생성
+                rospy.loginfo(f"[RECOVERY] {role}: {len(obstacles_on_path)} obstacle(s) detected, generating avoidance")
+                modified_path, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(
+                    role, trimmed_original, obstacles_on_path
+                )
                 
-                if modified_path != trimmed_original:
-                    rospy.loginfo(f"[OBSTACLE] {role}: avoidance path applied")
-            
+                if modified_path is not None and len(modified_path) >= 2:
+                    self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
+                    self._store_active_path(role, modified_path)
+                    # 원본은 유지 (다음 복구 시 사용)
                 else:
-                    rospy.loginfo(f"[OBSTACLE] {role}: path restored to original (no obstacles)")
+                    rospy.logwarn(f"[RECOVERY] {role}: avoidance path generation failed, keeping original")
+                    self._publish_path(trimmed_original, role, "normal", [], [])
+                    self._store_active_path(role, trimmed_original)
+
+    def _find_closest_path_index(self, path: List[Tuple[float, float]], vx: float, vy: float) -> int:
+        """
+        경로에서 현재 위치에 가장 가까운 인덱스 찾기
+        
+        주의: 단순 거리가 아니라 경로의 진행 방향을 고려
+        - 차량이 경로를 따라 이동 중이므로, 차량 앞의 점들을 우선시
+        - 거리 + 방향 점수를 종합적으로 평가
+        
+        Args:
+            path: 경로 점 리스트
+            vx, vy: 차량의 현재 위치
+        
+        Returns:
+            가장 적절한 인덱스 (0 ~ len(path)-1)
+        """
+        if not path or len(path) < 1:
+            return 0
+        
+        best_idx = 0
+        best_score = float('inf')
+        
+        for i in range(len(path)):
+            px, py = path[i]
+            dist = math.hypot(px - vx, py - vy)
+            
+            # 점수 = 거리 + 역방향 페널티
+            # 차량이 이미 지난 점일수록 높은 점수(더 나쁨)
+            score = dist
+            
+            # 차량보다 뒤에 있는 점에 페널티 추가
+            if i < len(path) - 1:
+                next_x, next_y = path[i + 1]
+                # 현재 점과 다음 점 사이의 벡터
+                path_dx = next_x - px
+                path_dy = next_y - py
+                # 차량과 현재 점 사이의 벡터
+                to_vehicle_dx = vx - px
+                to_vehicle_dy = vy - py
                 
-                # 경로 발행 (원본 또는 회피 경로)
-                self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
-                self._store_active_path(role, modified_path)
+                # 내적: 경로 진행 방향과 반대면 음수
+                dot = path_dx * to_vehicle_dx + path_dy * to_vehicle_dy
+                path_len_sq = path_dx * path_dx + path_dy * path_dy
+                
+                if path_len_sq > 1e-6:
+                    # 정규화된 projection (0~1)
+                    projection = dot / path_len_sq
+                    # projection < 0이면 경로 시작 방향, > 1이면 경로 끝 방향
+                    if projection < 0:
+                        score += 50.0 * (-projection)  # 뒤쪽 점 페널티
+            
+            if score < best_score:
+                best_score = score
+                best_idx = i
+        
+        return best_idx
 
     def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, avoidance_length: float) -> bool:
         """
@@ -298,9 +362,13 @@ class SimpleMultiAgentPlanner:
                 continue
 
             # 장애물 회피해야만 하는 차량 제외 (obstacle_blocked_roles)
-            if self._obstacle_planner and other_role in self._obstacle_planner._obstacle_blocked_roles:
-                continue
-            
+            # if self._obstacle_planner and other_role in self._obstacle_planner._obstacle_blocked_roles:
+            #     continue
+            # -> 같은 장애물을 피해야 하면으로 바꿔야 할 듯?
+            # 근데 같은 장애물이더라도 멀리 떨어져 있으면 움직이는 게 맞음.
+            # 그리고 가까울 때도 주의해야 하는데 반대편 차선이어야 함............. 씨@빨
+            # 근데 이 반대편 차선을 어떻게 판정해야 할까 너무 어렵다
+
             # 타 차량의 Active Path 가져오기
             other_path = self._active_paths.get(other_role)
             if not other_path or len(other_path) < 2:
@@ -790,7 +858,7 @@ class SimpleMultiAgentPlanner:
         self._active_paths[role] = points
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
-
+        
     def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str, s_starts: List[float] = [], s_ends: List[float] = []) -> None:
         if role not in self.path_publishers:
             return
@@ -918,13 +986,16 @@ class SimpleMultiAgentPlanner:
         if self._obstacle_planner is not None and not offroad_override and not force_direct:
             rospy.logwarn(f"{role}: obstacles on path: {obstacles_on_path}")
             if len(obstacles_on_path) > 0:
-                points, stop_poses, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
         
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 
         self._publish_path(points, role, category, s_starts, s_ends)
         self._store_active_path(role, points)
+        
+        self._original_paths[role] = list(points)
+        
         self._current_dest[role] = dest_loc
         return True
 
