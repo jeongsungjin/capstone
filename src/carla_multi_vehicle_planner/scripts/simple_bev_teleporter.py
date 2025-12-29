@@ -45,6 +45,8 @@ class SimpleBevTeleporter:
 		# ID 매핑: 입력 id를 ego_vehicle_{id}로 매핑 (offset 가능)
 		self.use_ids = bool(rospy.get_param("~use_ids", True))
 		self.id_offset = int(rospy.get_param("~id_offset", 0))
+		# 투영 이탈 시 원본 좌표/자세로 스냅하는 임계 거리
+		self.projection_dist_threshold = float(rospy.get_param("~projection_dist_threshold", 5.0))
 		# ENU(CCW) → CARLA(CW) 변환이 필요하면 True로 설정
 		self._last_stamp = None
 		self._last_seq = None
@@ -247,28 +249,32 @@ class SimpleBevTeleporter:
 				tx, ty, yaw_for_pose = x, y, yaw_rad
 				if projected is not None:
 					s_now, s_profile, pts, px, py, heading_proj = projected
-					# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
-					dx_off = x - px
-					dy_off = y - py
-					nx = -math.sin(heading_proj)
-					ny = math.cos(heading_proj)
-					lat_off_raw = dx_off * nx + dy_off * ny
-					# 소프트 데드존 + 램프: 작은 오차는 무시, 커질수록 가중 반영
-					sign = 1.0 if lat_off_raw >= 0.0 else -1.0
-					abs_off = abs(lat_off_raw)
-					active = max(0.0, abs_off - self.lat_offset_deadzone)
-					norm = min(1.0, active / max(1e-3, self.lat_offset_ramp))
-					weight = norm ** max(1.0, self.lat_offset_power)
-					target_off = sign * min(self.lat_offset_max, weight * abs_off)
-					# LPF 제거: 바로 램프+클램프 값 사용
-					lat_off = max(-self.lat_offset_max, min(self.lat_offset_max, target_off))
-					s_target = s_now + max(0.0, self.lookahead_m)
-					sample = self._sample_at_s(pts, s_profile, s_target)
-					if sample is not None:
-						bx, by, seg_idx = sample
-						# 목표 지점에서 동일한 lateral offset 적용
-						tx = bx + nx * lat_off
-						ty = by + ny * lat_off
+					# 투영점과 입력 좌표 거리로 이탈 여부 판단
+					dist_proj = math.hypot(px - x, py - y)
+					if dist_proj <= self.projection_dist_threshold:
+						# BEV -> path 위치 편차(횡방향)를 유지하기 위해 lateral 오프셋 계산
+						dx_off = x - px
+						dy_off = y - py
+						nx = -math.sin(heading_proj)
+						ny = math.cos(heading_proj)
+						lat_off_raw = dx_off * nx + dy_off * ny
+						# 소프트 데드존 + 램프: 작은 오차는 무시, 커질수록 가중 반영
+						sign = 1.0 if lat_off_raw >= 0.0 else -1.0
+						abs_off = abs(lat_off_raw)
+						active = max(0.0, abs_off - self.lat_offset_deadzone)
+						norm = min(1.0, active / max(1e-3, self.lat_offset_ramp))
+						weight = norm ** max(1.0, self.lat_offset_power)
+						target_off = sign * min(self.lat_offset_max, weight * abs_off)
+						# LPF 제거: 바로 램프+클램프 값 사용
+						lat_off = max(-self.lat_offset_max, min(self.lat_offset_max, target_off))
+						s_target = s_now + max(0.0, self.lookahead_m)
+						sample = self._sample_at_s(pts, s_profile, s_target)
+						if sample is not None:
+							bx, by, seg_idx = sample
+							# 목표 지점에서 동일한 lateral offset 적용
+							tx = bx + nx * lat_off
+							ty = by + ny * lat_off
+					# dist_proj가 threshold를 넘으면 path 보정 없이 원본 좌표/자세로 스냅 (tx,ty,yaw_for_pose 유지)
 
 				yaw_deg = math.degrees(yaw_for_pose)
 				location = carla.Location(x=tx, y=ty, z=self.default_z)
