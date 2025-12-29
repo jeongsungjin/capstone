@@ -197,7 +197,6 @@ class FrenetPath:
         return x, y
 
     def update_d_offset(self, s_start_idx: float, s_end_idx: float, d_offset: float, smooth_ratio: float=0.3):
-        self.frenet_path[s_start_idx:s_end_idx, 1] = d_offset
         num_points = s_end_idx - s_start_idx + 1
 
         for i in range(num_points):
@@ -218,6 +217,7 @@ class FrenetPath:
                 d = d_offset
 
             # 만약에 왼쪽으로도 회피할 거면 abs 씌워야 함?
+            # 이슈가 있다면 max를 해제하고 d를 바로 할당할 것
             self.frenet_path[s_start_idx + i, 1] = max(self.frenet_path[s_start_idx + i, 1], d)
 
     def _smooth_step(self, t: float) -> float:
