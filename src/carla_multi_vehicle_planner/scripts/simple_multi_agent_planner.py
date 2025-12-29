@@ -115,26 +115,7 @@ class SimpleMultiAgentPlanner:
         self.carla_map = self.world.get_map()
 
         # Route planner (GlobalPlanner 우선, 없으면 CARLA GlobalRoutePlanner)
-        self.route_planner = None
-        
-        if GlobalPlanner is not None:
-            try:
-                self.route_planner = GlobalPlanner(self.carla_map, self.global_route_resolution)
-                rospy.loginfo("SimpleMultiAgentPlanner: using GlobalPlanner")
-
-            except Exception as exc:
-                rospy.logwarn(f"Failed to init GlobalPlanner: {exc}, falling back to CARLAGlobalRoutePlanner")
-        
-        if self.route_planner is None:
-            if CARLAGlobalRoutePlanner is None:
-                raise RuntimeError("CARLA GlobalRoutePlanner module unavailable")
-            try:
-                self.route_planner = CARLAGlobalRoutePlanner(self.carla_map, self.global_route_resolution)
-                if hasattr(self.route_planner, "setup"):
-                    self.route_planner.setup()
-                rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
-            except Exception as exc:
-                raise RuntimeError(f"Failed to initialize GlobalRoutePlanner: {exc}")
+        self.route_planner = GlobalPlanner(self.carla_map, self.global_route_resolution)
         
         # ObstaclePlanner 초기화 (route_planner 설정 후)
         self._obstacle_planner = None
@@ -343,8 +324,6 @@ class SimpleMultiAgentPlanner:
             else:
                 return False
 
-        frenet_path = FrenetPath(my_path)
-
         # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
         safe_distance = (s_end - s_start) * 2.0
         my_color = _get_vehicle_color(role)
@@ -357,8 +336,6 @@ class SimpleMultiAgentPlanner:
             if other_role == role:
                 continue
 
-            rospy.logwarn(f"[STOP CHECK] avoidance: {_get_vehicle_color(role)} vs preempt: {_get_vehicle_color(other_role)}")
-
             # 타 차량의 Active Path 가져오기
             other_path = self._active_paths.get(other_role)
             if not other_path or len(other_path) < 2:
@@ -367,18 +344,23 @@ class SimpleMultiAgentPlanner:
             # 1. 장애물(stop_pos)과 타 차량 경로 간의 거리 확인
             #    거리 > 1.0m 이면 충돌 가능성 있는 차량(반대 차선 등)으로 간주
             other_frenet_path = FrenetPath(other_path)
-            other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
+            other_loc = self._vehicle_rear(vehicle) # 전방 위치 기준
+
+            # 회피 시작 지점의 s 및 d 좌표 계산 (타 차량 경로 기준)
             s_obs_on_other, d_obs_on_other = other_frenet_path.cartesian_to_frenet(stop_pos.x, stop_pos.y)
-            s_other_vehicle_on_other, _ = other_frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
-            _, d_other_vehicle_on_mine = frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
             
-            # 타 차량 경로 기준 장애물이 2m 떨어져 있고, 내 차량 경로 기준 타 차량이 2m 이상 떨어져 있다 == 반대 차선에서 오는 괘씸한 녀석이다.
-            if abs(d_obs_on_other) > 2.0 and abs(d_other_vehicle_on_mine) > 2.0:                
+            # 타 차량 위치의 s 및 d 좌표 계산 (타 차량 경로 기준)
+            s_other_vehicle_on_other, _ = other_frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
+
+            # 타 차량 경로 기준 장애물이 3 ~ 6m 수직 거리로 떨어져 있으면 == 반대 차선에서 오는 괘씸한 녀석이다.
+            if 3 < abs(d_obs_on_other) < 6:
                 # 회피 경로의 2배 이상 거리가 나지 않으면 정지
-                dist_diff = s_obs_on_other - s_other_vehicle_on_other 
-                if 0 < dist_diff <= safe_distance:
+                remain_s_on_other = s_obs_on_other - s_other_vehicle_on_other
+                rospy.logwarn(f"[STOP CHECK] {my_color} vs {_get_vehicle_color(other_role)}: d_obs_on_other={d_obs_on_other:.1f}m, d_other_vehicle_on_mine={remain_s_on_other:.1f}m")
+                
+                if -1 < remain_s_on_other <= safe_distance:
                     other_color = _get_vehicle_color(other_role)
-                    rospy.logwarn_throttle(1.0, f"[CONFLICT] {my_color}: {other_color} (d={d_obs_on_other:.1f}m) active overlap ({dist_diff:.1f}m <= {safe_distance:.1f}m) - waiting")
+                    rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} active overlap ({remain_s_on_other:.1f}m <= {safe_distance:.1f}m) - waiting")
                     return True
         
         return False
@@ -722,7 +704,9 @@ class SimpleMultiAgentPlanner:
                 return [front_xy, mid] + path_points
         return [front_xy] + path_points
 
-    def _snap_points_to_lane(self, points: List[Tuple[float, float]]):
+    def _snap_points_to_lane(self, role: str, points: List[Tuple[float, float]]):
+        rospy.logfatal(f"{_get_vehicle_color(role)}: 크아아악!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        
         snapped: List[Tuple[float, float]] = []
         for x, y in points:
             loc = carla.Location(x=x, y=y, z=0.0)
@@ -939,7 +923,7 @@ class SimpleMultiAgentPlanner:
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
             # prefix 경로에 대해서도 node_list를 만들어야 함!!
-            self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
+            # self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
 
         else:
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
@@ -954,12 +938,7 @@ class SimpleMultiAgentPlanner:
 
         # 3. waypoint 에 fit하게 snap
         obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
-        dont_snap = offroad_override or force_direct or len(obstacles_on_path) > 0 
-        if dont_snap:
-            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
-
-        else:
-            points = self._snap_points_to_lane(points)
+        rospy.logfatal(f"{_get_vehicle_color(role)}: obstacles_on_path={obstacles_on_path}")
 
         if len(points) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
@@ -975,13 +954,17 @@ class SimpleMultiAgentPlanner:
                 points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
         
+        dont_snap = offroad_override or force_direct or len(self._obstacle_planner._obstacle_blocked_roles.get(role, [])) > 0
+        if dont_snap:
+            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
+
+        else:
+            points = self._snap_points_to_lane(role, points)
+
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 
         self._publish_path(points, role, category, s_starts, s_ends)
-        self._store_active_path(role, points)
-        
-        self._original_paths[role] = list(points)
-        
+        self._store_active_path(role, points)        
         self._current_dest[role] = dest_loc
         return True
 
