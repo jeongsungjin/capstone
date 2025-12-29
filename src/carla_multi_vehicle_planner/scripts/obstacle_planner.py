@@ -56,15 +56,6 @@ class ObstaclePlanner:
         self.num_vehicles = num_vehicles
         self._role_name = lambda index: f"ego_vehicle_{index + 1}"
 
-        self._avoidance_path_pubs: Dict[str, Dict[float, rospy.Publisher]] = {}  # role -> {d: Publisher}
-        for index in range(self.num_vehicles):
-            role = self._role_name(index)
-            self._avoidance_path_pubs[role] = {}
-            for d in range(-20, 40, 5):
-                d /= 10
-                avoidance_topic = f"/avoidance_path_{role}_d{d:.1f}".replace("-", "n").replace(".", "_")
-                self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
-
         # 장애물로 인해 정지 중인 차량 추적 (role -> obstacle_pos)
         self._obstacle_blocked_roles: Dict[str, List[Tuple[carla.Location, float]]] = {}
         
