@@ -839,7 +839,7 @@ class SimpleMultiAgentPlanner:
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
 
-    def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str) -> None:
+    def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str, s_starts: List[float]=[], s_ends: List[float]=[]) -> None:
         # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
         if self.platoon_enable and role != self.leader_role:
             return
