@@ -25,7 +25,7 @@
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
     <param name="min_destination_distance" value="15.0" />
-    <param name="max_destination_distance" value="200.0" />
+    <param name="max_destination_distance" value="100.0" />
     <!-- Low-voltage direct parking parameters -->
     <param name="low_voltage_threshold" value="5.0" />
     <param name="low_voltage_dest_x" value="-12.5" />

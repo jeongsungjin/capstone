@@ -49,6 +49,8 @@ class SimpleMultiAgentPlanner:
             raise RuntimeError("CARLA Python API unavailable")
 
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
+        self.platoon_enable = bool(rospy.get_param("~platoon_enable", False))
+        self.leader_role = str(rospy.get_param("~leader_role", "ego_vehicle_1"))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
         self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
@@ -120,6 +122,10 @@ class SimpleMultiAgentPlanner:
         self.override_clear_radius = float(rospy.get_param("~override_clear_radius", 3.0))
         self.override_hold_sec = float(rospy.get_param("~override_hold_sec", 5.0))
         self._override_hold_until: Dict[str, float] = {self._role_name(i): 0.0 for i in range(self.num_vehicles)}
+        # seq 에 epoch을 더해 경로 재퍼블리시 시 절대 증가하도록 유지
+        self._seq_epoch: Dict[str, int] = {self._role_name(i): 0 for i in range(self.num_vehicles)}
+        # 너무 큰 점프를 피하기 위해 기본 50만큼만 여유를 둔다 (경로 길이 + stride)
+        self.seq_epoch_stride = int(rospy.get_param("~seq_epoch_stride", 50))
 
         # Uplink subscriber (voltage)
         self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink"))
@@ -489,17 +495,24 @@ class SimpleMultiAgentPlanner:
         self._active_path_len[role] = total_len
 
     def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str) -> None:
+        # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
+        if self.platoon_enable and role != self.leader_role:
+            return
         if role not in self.path_publishers:
             return
         msg = Path()
         msg.header = Header(frame_id="map", stamp=rospy.Time.now())
-        for x, y in points:
+        epoch = self._seq_epoch.get(role, 0)
+        for i, (x, y) in enumerate(points):
             p = PoseStamped()
             p.header = msg.header
+            p.header.seq = epoch + i  # 웨이포인트 인덱스를 seq에 기록해 추종 시 사용 (절대 증가)
             p.pose.position.x = x
             p.pose.position.y = y
             p.pose.position.z = 0.0
             msg.poses.append(p)
+        # 다음 퍼블리시를 위해 epoch 증가 (경로 길이 + stride)
+        self._seq_epoch[role] = epoch + max(len(points), 1) + self.seq_epoch_stride
 
         self.path_publishers[role].publish(msg)
 

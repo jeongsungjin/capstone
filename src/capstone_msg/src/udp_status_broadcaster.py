@@ -62,7 +62,7 @@ class UdpStatusBroadcaster:
         self.vehicle_ids = tuple(sorted(set(vehicle_ids)))
 
         # 토픽 이름 구성
-        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/imu_uplink"))
+        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink"))
         self.path_topic_prefix = str(rospy.get_param("~path_topic_prefix", "/global_path_"))
         self.path_meta_topic_prefix = str(rospy.get_param("~path_meta_topic_prefix", "/global_path_meta_"))
         
