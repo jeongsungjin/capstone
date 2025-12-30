@@ -325,7 +325,7 @@ class SimpleMultiAgentPlanner:
                 return False
 
         # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
-        safe_distance = (s_end - s_start) * 2.0
+        safe_distance = (s_end - s_start) * 2.5
         my_color = _get_vehicle_color(role)
         
         vehicles = self._get_ego_vehicles()
@@ -389,7 +389,11 @@ class SimpleMultiAgentPlanner:
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
                 stop_pos, d_offset, s_start, s_end = self._obstacle_planner.get_stop_pos(role)
-                if front_loc.distance(stop_pos) <= self.override_clear_radius:
+                
+                chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
+                s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
+
+                if 0 < s_start - s_on_mine <= self.override_clear_radius:
                     rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
 
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
