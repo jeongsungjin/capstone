@@ -399,7 +399,7 @@ class SimpleMultiAgentPlanner:
                 chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
                 s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
 
-                if 0 < s_start - s_on_mine <= self.override_clear_radius:
+                if 0 < (s_start - s_on_mine) <= 1.0:
                     rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
 
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
