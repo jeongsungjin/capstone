@@ -12,7 +12,7 @@
   <arg name="tm_publish_hz" default="10.0" />
   <arg name="enable_status_udp" default="true" />
   <arg name="status_udp_port" default="60070" />
-  <arg name="status_udp_dest_ip" default="192.168.0.31" />
+  <arg name="status_udp_dest_ip" default="192.168.0.200" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">
