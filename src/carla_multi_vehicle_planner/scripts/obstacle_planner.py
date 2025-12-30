@@ -46,24 +46,15 @@ class ObstaclePlanner:
 
         # 회피 d_offset 범위 (0.5 간격으로 탐색)
         self.d_offset_scale = 10
-        self.min_d_offset = int(self.d_offset_scale * float(rospy.get_param("~min_d_offset", -1.5)))   # 왼쪽 최대
-        self.max_d_offset = int(self.d_offset_scale * float(rospy.get_param("~max_d_offset", 4)))    # 오른쪽 최대
-        self.d_offset_step = int(self.d_offset_scale * float(rospy.get_param("~d_offset_step", 0.5)))  # 탐색 간격
+        self.min_d_offset = int(self.d_offset_scale * float(rospy.get_param("~min_d_offset", 0.0)))   # 왼쪽 최대
+        self.max_d_offset = int(self.d_offset_scale * float(rospy.get_param("~max_d_offset", 4.0)))    # 오른쪽 최대
+        self.d_offset_step = int(self.d_offset_scale * float(rospy.get_param("~d_offset_step", 0.1)))  # 탐색 간격
         self.lane_width = float(rospy.get_param("~lane_width", 4.0))                              # 차선 폭
         self.obstacle_padding = 0 * float(rospy.get_param("~obstacle_padding", 0.25))                 # 장애물 여유 간격
         self.vehicle_padding  = 0 * float(rospy.get_param("~vehicle_padding", 0.25))                   # 차량 여유 간격
 
         self.num_vehicles = num_vehicles
         self._role_name = lambda index: f"ego_vehicle_{index + 1}"
-
-        self._avoidance_path_pubs: Dict[str, Dict[float, rospy.Publisher]] = {}  # role -> {d: Publisher}
-        for index in range(self.num_vehicles):
-            role = self._role_name(index)
-            self._avoidance_path_pubs[role] = {}
-            for d in range(-20, 40, 5):
-                d /= 10
-                avoidance_topic = f"/avoidance_path_{role}_d{d:.1f}".replace("-", "n").replace(".", "_")
-                self._avoidance_path_pubs[role][d] = rospy.Publisher(avoidance_topic, Path, queue_size=1, latch=True)
 
         # 장애물로 인해 정지 중인 차량 추적 (role -> obstacle_pos)
         self._obstacle_blocked_roles: Dict[str, List[Tuple[carla.Location, float]]] = {}
@@ -194,27 +185,46 @@ class ObstaclePlanner:
         role: str, 
         path: List[Tuple[float, float]],
         obstacles_on_path: List[Tuple[Tuple[float, float], int]],
-    ) -> List[Tuple[float, float]]:
+    ) -> Tuple[Optional[List[Tuple[float, float]]], List[float], List[float]]:
+        """
+        경로에 장애물 회피를 적용
+        
+        Returns:
+            (avoidance_path, s_starts, s_ends) 또는 (None, [], []) 실패 시
+        """
         if not path or len(path) < 10:
-            return path, [(0, 0)]
+            return path, [], []
         
-        frenet_path = FrenetPath(path)
+        try:
+            frenet_path = FrenetPath(path)
 
-        # 1. 경로에서 장애물 찾기
-        if not obstacles_on_path:
-            if role in self._obstacle_blocked_roles:
-                self._obstacle_blocked_roles.pop(role)
+            # 1. 경로에서 장애물 찾기
+            if not obstacles_on_path:
+                if role in self._obstacle_blocked_roles:
+                    self._obstacle_blocked_roles.pop(role)
 
-            return path, [(0, 0)]
+                return path, [], []
+            
+            rospy.loginfo(f"[AVOIDANCE] {role}: obstacle detected {len(obstacles_on_path)} on path")
+            
+            # 2. 회피 경로 생성 시도
+            combined_path, best_d_offsets, stop_poses, s_starts, s_ends = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
+            
+            # 생성 실패 시 원본 경로 반환
+            if combined_path is None:
+                rospy.logwarn(f"[AVOIDANCE] {role}: avoidance generation failed, returning original path")
+                return path, [], []
+            
+            self._obstacle_blocked_roles[role] = stop_poses
+            rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d_offsets}")
+            
+            return combined_path, s_starts, s_ends
         
-        rospy.loginfo(f"[AVOIDANCE] {role}: obstacle detected {len(obstacles_on_path)} on path")
-        
-        # 2. 회피 경로 생성 시도
-        combined_path, best_d_offsets, stop_poses, s_starts, s_ends = self._generate_avoidance_segment(frenet_path, obstacles_on_path)
-        self._obstacle_blocked_roles[role] = stop_poses
-        rospy.loginfo(f"[AVOIDANCE] {role}: avoidance applied with d={best_d_offsets}")
-        
-        return combined_path, stop_poses, s_starts, s_ends
+        except Exception as e:
+            rospy.logwarn(f"[AVOIDANCE] {role}: exception in apply_avoidance_to_path: {e}")
+            import traceback
+            traceback.print_exc()
+            return None, [], []
     
     def _find_obstacle_on_path(self, frenet_path, is_frenet=True) -> List[Tuple[Tuple[float, float], int]]:
         """
@@ -244,7 +254,7 @@ class ObstaclePlanner:
         try:
             best_d_offsets, stop_poses = [], []
             s_starts, s_ends = [], []
-            for idx, (path_idx, (s_obs, d_obs), (ox, oy)) in enumerate(obstacles):
+            for (path_idx, (s_obs, d_obs), (ox, oy)) in obstacles:
                 # 횡방향 경로 계획
                 safe_d_offsets = []
                 for d_offset in range(self.min_d_offset, self.max_d_offset, self.d_offset_step):
@@ -269,7 +279,7 @@ class ObstaclePlanner:
                 r_min = wheelbase / math.tan(delta_max_rad)
     
                 look_ahead = math.sqrt(2 * r_min * abs(best_d_offset if best_d_offset else (self.max_d_offset / self.d_offset_scale)))
-                look_behind = wheelbase * 3
+                look_behind = wheelbase * 9
 
                 s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
                 s_starts.append(s_start)
@@ -287,26 +297,27 @@ class ObstaclePlanner:
                         y=stop_pos[1]
                     ),
                     best_d_offset,
-                    avoidance_length  # 회피 경로 길이 추가
+                    s_start, s_end                   
                 ))
             
                 s_ends.append(s_end)
 
                 if best_d_offset:
                     s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
+                    s_apex_idx = np.searchsorted(frenet_path._s_profile, s_obs)
                     s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
                     rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d_offset:.1f} total_length: {frenet_path.total_length:.1f}')
-                    frenet_path.update_d_offset(s_start_idx, s_end_idx, best_d_offset)
+                    frenet_path.update_d_offset_two_stage_quintic(s_start_idx, s_apex_idx, s_end_idx, best_d_offset)
 
             avoidance_path = frenet_path.generate_avoidance_path()
             return avoidance_path, best_d_offsets, stop_poses, s_starts, s_ends
 
-        # TODO: 여기서 None 이 반환되는 건에 대해 이후 로직에 대한 처리하 한 곳도 되어 있지 않음!!
+        # 예외 발생 시 None, 빈 리스트 반환
         except Exception as e:
             rospy.logwarn(f"[AVOIDANCE] failed to generate avoidance: {e}")
             import traceback
             traceback.print_exc()
-            return None, [], [], -1
+            return None, [], [], [], []  # 5개의 반환값 맞춤
 
     def _compute_arc_length(self, path: List[Tuple[float, float]]) -> float:
         """경로의 총 arc-length 계산"""

@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 
 import math
-import sys
-import os
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import rospy
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
-from std_msgs.msg import Header, Float32, Bool
+from std_msgs.msg import Header
+from std_msgs.msg import Bool
 from capstone_msgs.msg import Uplink  # type: ignore
 
 try:
@@ -23,14 +22,6 @@ try:
 except Exception as exc:
     carla = None
     rospy.logfatal(f"Failed to import CARLA: {exc}")
-
-# GlobalPlanner 임포트 (is_opposite_direction 사용)
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../carla_multi_vehicle_planner/scripts'))
-try:
-    from global_planner import GlobalPlanner
-except ImportError as e:
-    GlobalPlanner = None
-    rospy.logwarn(f"GlobalPlanner import failed: {e}")
 
 
 def quaternion_to_yaw(q) -> float:
@@ -97,7 +88,7 @@ class SimpleMultiVehicleController:
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
         self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
-        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 10.0))
+        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 7.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")
@@ -106,15 +97,6 @@ class SimpleMultiVehicleController:
         self.client = carla.Client(host, port)
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
-        
-        # GlobalPlanner 초기화 (is_opposite_direction 사용)
-        self.route_planner = None
-        if GlobalPlanner is not None:
-            try:
-                self.route_planner = GlobalPlanner(self.world.get_map(), sampling_resolution=1.0)
-                rospy.loginfo(f"GlobalPlanner initialized with {len(self.route_planner.lane_direction)} edge directions cached")
-            except Exception as e:
-                rospy.logwarn(f"GlobalPlanner init failed: {e}")
 
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
@@ -124,6 +106,7 @@ class SimpleMultiVehicleController:
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
         self._speed_override: Dict[str, Dict[str, float]] = {}
+        
         self.idx_backtrack_allow = int(rospy.get_param("~idx_backtrack_allow", 0))
         self.seq_min_jump = int(rospy.get_param("~seq_min_jump", 10))
         self.platoon_mode = bool(rospy.get_param("~platoon_mode", False))
@@ -134,6 +117,44 @@ class SimpleMultiVehicleController:
         self.progress_log_period = 0.0
         self.path_log_enable = True
         self.path_log_period = 0.0
+
+        self.traffic_interference = {
+            # 하단 진출
+            ((10, 11), (6, 11), (6, 7), (11, 9), (9, 3), (9, 1)):
+                ((2, 4), (4, 8), (8, 7), (8, 18)),
+
+            # 좌단 진출
+            ((26, 15), (21, 15), (26, 22)):
+                ((9, 3), (3, 16), (16, 22), (16, 24), (5, 3)),
+
+            # 우단 진출
+            ((13, 25), (13, 19), (23, 19), (19, 5)):
+                ((2, 17), (17, 20), (20, 25), (20, 12)),
+
+            # 좌상단 진출
+            ((16, 24), (24, 23), (21, 24)):
+                ((25, 26), (26, 15), (26, 22)),
+
+            # 우상단 진출
+            ((20, 25), (13, 25), (25, 26)):
+                ((23, 12), (23, 19), (24, 23)),
+
+            # 좌하단 진출
+            ((26, 22), (22, 6), (16, 22)):
+                ((18, 21), (21, 24), (21, 15)),
+            
+            # 우하단 진출
+            ((23, 12), (20, 12), (12, 10)):
+                ((7, 13), (13, 19), (13, 25)),
+
+            # 좌중단 진출
+            ((10, 11), (10, 18), (18, 21), (8, 18)):
+                ((22, 6), (6, 11), (6, 7)),
+
+            # 우중단 진출
+            ((6, 7), (7, 13), (8, 18), (8, 7)):
+                ((12, 10), (10, 11), (10, 18))
+        }
 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
@@ -156,7 +177,7 @@ class SimpleMultiVehicleController:
             odom_topic = f"/carla/{role}/odometry"
             cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
             pose_topic = f"/{role}/pose"
-            rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=10)
+            rospy.Subscriber(path_topic, Path, self._path_cb, callback_args=role, queue_size=1)
             rospy.Subscriber(odom_topic, Odometry, self._odom_cb, callback_args=role, queue_size=10)
             if self.use_speed_override:
                 override_topic = f"/carla/{role}/vehicle_control_cmd_override"
@@ -203,7 +224,6 @@ class SimpleMultiVehicleController:
                 self.vehicles[role] = actor
 
     def _path_cb(self, msg: Path, role: str) -> None:
-        rospy.loginfo_throttle(1.0, f"[PATH RECV] {role}: received {len(msg.poses)} points")
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
         # 항상 0..N-1로 정규화된 인덱스 사용 (플래툰 안정성 우선)
         idx_profile = list(range(len(points)))
@@ -578,7 +598,6 @@ class SimpleMultiVehicleController:
         ori = st.get("orientation")
         if not path or len(path) < 2 or pos is None or ori is None or vehicle is None:
             return 0.0, 0.0
-        
         ref = self._rear_point(st, vehicle)
         if ref is None:
             return None, None
@@ -640,10 +659,10 @@ class SimpleMultiVehicleController:
         else:
             count = st.setdefault("progress_fail_count", 0) + 1
             st["progress_fail_count"] = count
-            rospy.logwarn_throttle(
-                2.0,
-                f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}) prev_s={prev_s:.1f} idx_range=[{st.get('idx_min',0)},{st.get('idx_max',0)}] curr_seq={st.get('current_seq')} path_len={len(path)}",
-            )
+            # rospy.logwarn_throttle(
+            #     2.0,
+            #     f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
+            # )
             # 즉시 경로로 스냅하여 조향이 바로 경로를 향하도록
             if count >= 2:
                 reset = self._force_snap_progress(st, fx, fy)
@@ -693,23 +712,6 @@ class SimpleMultiVehicleController:
         #     Ld,
         #     alpha,
         # )
-        
-        # 경로 끝 도달 시 정지
-        dist_to_end = self._distance_to_path_end(st)
-        path_len = len(st.get("path", []))
-        if dist_to_end is not None and dist_to_end <= 2.0:
-            rospy.logwarn_throttle(2.0, f"[PATH END] {role}: dist_to_end={dist_to_end:.1f}m, path_len={path_len} → Stopping")
-            speed = 0.0
-            # rospy.signal_shutdown(f"Debugging: {role} reached PATH END")
-        
-        # rospy.loginfo_throttle(
-        #     0.5,
-        #     "%s steer=%.3f Ld=%.2f alpha=%.3f",
-        #     role,
-        #     steer,
-        #     Ld,
-        #     alpha,
-        # )
         return steer, speed
 
 
@@ -744,87 +746,12 @@ class SimpleMultiVehicleController:
             while rel < -math.pi:
                 rel += 2.0 * math.pi
             if abs(rel) <= angle_th and dist <= dist_th:
-                # 반대 방향 엣지에서 적색 대기 중인 차량은 무시
-                # if self._is_on_opposite_edge_at_red(fx, fy, op.x, op.y):
-                #     rospy.loginfo_throttle(
-                #         1.0,
-                #         f"[IGNORE] {role}: {other_role} at red on opposite direction edge",
-                #     )
-                #     continue
-                # 정지 시 엣지 방향 정보 출력
-                my_edge = self._get_edge_at_pos(fx, fy)
-                other_edge = self._get_edge_at_pos(op.x, op.y)
-                my_yaw = self.route_planner.get_edge_direction(my_edge) if my_edge else None
-                other_yaw = self.route_planner.get_edge_direction(other_edge) if other_edge else None
-                rospy.logwarn_throttle(
-                    1.0,
-                    f"{role}: stopping for {other_role} (dist={dist:.1f}m) my_edge={my_edge} yaw={math.degrees(my_yaw) if my_yaw else 'None'}° | other_edge={other_edge} yaw={math.degrees(other_yaw) if other_yaw else 'None'}°",
-                )
+                # rospy.logwarn_throttle(
+                #     1.0,
+                #     f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",
+                # )
                 return 0.0
         return speed_cmd
-
-    def _get_edge_at_pos(self, x: float, y: float) -> Optional[Tuple[int, int]]:
-        """위치에서 edge 조회"""
-        if self.route_planner is None:
-            return None
-        try:
-            edges = self.route_planner.get_edges_at_location(x, y, radius=3.0)
-            return edges[0] if edges else None
-        except Exception:
-            return None
-
-    def _is_on_opposite_edge_at_red(self, my_x: float, my_y: float, other_x: float, other_y: float) -> bool:
-        """
-        상대 차량이 반대 방향 엣지에서 적색 대기 중인지 확인
-        """
-        if self.route_planner is None:
-            return False
-        
-        my_edge = self._get_edge_at_pos(my_x, my_y)
-        other_edge = self._get_edge_at_pos(other_x, other_y)
-        
-        if my_edge is None or other_edge is None:
-            rospy.logfatal_throttle(
-                1.0,
-                f"[EDGE] get_edge_at_pos returned None: my_pos=({my_x:.1f}, {my_y:.1f}) my_edge={my_edge} | other_pos=({other_x:.1f}, {other_y:.1f}) other_edge={other_edge}",
-            )
-            return False
-        
-        # 엣지 방향 비교 (각도 차이 > 90도면 반대 방향)
-        my_yaw = self.route_planner.get_edge_direction(my_edge)
-        other_yaw = self.route_planner.get_edge_direction(other_edge)
-        
-        if my_yaw is None or other_yaw is None:
-            rospy.logfatal_throttle(
-                1.0,
-                f"[EDGE] get_edge_direction returned None: my_edge={my_edge} my_yaw={my_yaw} | other_edge={other_edge} other_yaw={other_yaw}",
-            )
-            return False
-        
-        is_opposite = self.route_planner.is_opposite_direction(my_edge, other_edge)
-        
-        rospy.loginfo_throttle(
-            0.5,
-            f"[EDGE] my={my_edge} yaw={math.degrees(my_yaw):.1f}° | other={other_edge} yaw={math.degrees(other_yaw):.1f}° | opposite={is_opposite}",
-        )
-        
-        if not is_opposite:
-            return False
-        
-        # 상대가 적색 리전에 있는지 확인
-        return self._is_at_red_light(other_x, other_y)
-
-    def _is_at_red_light(self, x: float, y: float) -> bool:
-        """해당 위치가 적색 신호 리전 내에 있는지 확인"""
-        for iid, data in self._tl_phase.items():
-            for ap in data.get("approaches", []):
-                xmin, xmax = ap.get("xmin", -1e9), ap.get("xmax", 1e9)
-                ymin, ymax = ap.get("ymin", -1e9), ap.get("ymax", 1e9)
-                color = int(ap.get("color", 0))
-                if x >= xmin and x <= xmax and y >= ymin and y <= ymax:
-                    if color == 0:  # 적색
-                        return True
-        return False
 
     def _get_vehicle_max_steer(self, vehicle) -> float:
         # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
@@ -916,10 +843,9 @@ class SimpleMultiVehicleController:
                         color_name = "red" if color == 0 else ("yellow" if color == 1 else "green")
                         # Region-based hard stop
                         if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
-                            vehicle_color = ["red", "yellow", "green", "black", "white"]
-                            # rospy.logwarn_throttle(
+                            # rospy.loginfo_throttle(
                             #     0.5,
-                            #     f"[TRAFFIC LIGHT] {vehicle_color[int(role[-1]) - 1]} 정지: 신호등 '{ap.get('name', 'unknown')}' ({color_name})",
+                            #     f"{role}: TL HIT ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) speed_in={speed_cmd:.2f} -> 0",
                             # )
                             hit = True
                             return 0.0
@@ -1019,13 +945,12 @@ class SimpleMultiVehicleController:
                 speed = override_speed
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
-            if self.progress_log_enable:
-                ratio = float(st.get("progress_idx_ratio", 0.0))
-                rospy.loginfo(f"{role}: progress idx={ratio:.3f} s={st.get('progress_s', 0.0):.1f}")
-            rospy.loginfo_throttle(
-                0.5,
-                f"{role}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
-            )
+
+            # colors = ["red", "yellow", "green", "black", "white"]
+            # rospy.loginfo_throttle(
+            #     0.5,
+            #     f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
+            # )
 
 
 if __name__ == "__main__":

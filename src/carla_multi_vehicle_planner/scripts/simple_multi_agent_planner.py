@@ -12,6 +12,8 @@ from nav_msgs.msg import Path
 from capstone_msgs.msg import PathMeta
 from std_msgs.msg import Header, Float32, String
 
+from frenet_path import FrenetPath
+
 try:
     from capstone_msgs.msg import Uplink  # type: ignore
 except Exception:
@@ -115,26 +117,7 @@ class SimpleMultiAgentPlanner:
         self.carla_map = self.world.get_map()
 
         # Route planner (GlobalPlanner 우선, 없으면 CARLA GlobalRoutePlanner)
-        self.route_planner = None
-        
-        if GlobalPlanner is not None:
-            try:
-                self.route_planner = GlobalPlanner(self.carla_map, self.global_route_resolution)
-                rospy.loginfo("SimpleMultiAgentPlanner: using GlobalPlanner")
-
-            except Exception as exc:
-                rospy.logwarn(f"Failed to init GlobalPlanner: {exc}, falling back to CARLAGlobalRoutePlanner")
-        
-        if self.route_planner is None:
-            if CARLAGlobalRoutePlanner is None:
-                raise RuntimeError("CARLA GlobalRoutePlanner module unavailable")
-            try:
-                self.route_planner = CARLAGlobalRoutePlanner(self.carla_map, self.global_route_resolution)
-                if hasattr(self.route_planner, "setup"):
-                    self.route_planner.setup()
-                rospy.loginfo("SimpleMultiAgentPlanner: using CARLA GlobalRoutePlanner")
-            except Exception as exc:
-                raise RuntimeError(f"Failed to initialize GlobalRoutePlanner: {exc}")
+        self.route_planner = GlobalPlanner(self.carla_map, self.global_route_resolution)
         
         # ObstaclePlanner 초기화 (route_planner 설정 후)
         self._obstacle_planner = None
@@ -213,55 +196,119 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._active_paths.get(role)
+            original_path = self._original_paths.get(role)
             if not original_path or len(original_path) < 2:
-                original_path = self._backup_blocked_path.get(role)
+                original_path = self._active_paths.get(role)
 
             if not original_path or len(original_path) < 2:
                 continue
 
             # 원본 경로를 현재 위치부터 트리밍 (지나간 부분 제거)
             vx, vy = front_loc.x, front_loc.y
-            min_dist = float('inf')
-            closest_idx = 0
-            for i, (px, py) in enumerate(original_path):
-                dist = math.hypot(px - vx, py - vy)
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_idx = i
+            
+            # 현재 위치에 가장 가까운 인덱스 찾기
+            # 단순히 거리가 작은 것만 찾지 말고, 경로를 따라가는 순서를 고려해야 함
+            closest_idx = self._find_closest_path_index(original_path, vx, vy)
             
             # 현재 위치부터의 경로만 사용
             trimmed_original = original_path[closest_idx:]
             if len(trimmed_original) < 2:
-                trimmed_original = original_path  # fallback
+                # fallback: 경로 전체 사용
+                trimmed_original = original_path
+                rospy.logwarn_throttle(2.0, f"{role}: trimmed path too short, using original")
             
-            points = self._unique_points(trimmed_original)
-            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
+            # 경로에 중복 제거 (원본 경로 구조 유지)
+            trimmed_original = self._unique_points(trimmed_original)
+            
+            # 장애물 탐지
+            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(trimmed_original, is_frenet=False)
             
             if not obstacles_on_path:
+                # 장애물 없음 -> 원본 경로로 복구
                 if role in self._obstacle_planner._obstacle_blocked_roles:
                     self._obstacle_planner._obstacle_blocked_roles.pop(role)
 
-                    self._publish_path(trimmed_original, role, "obstacle", [], [])
-                    self._store_active_path(role, trimmed_original)
-
+                rospy.loginfo(f"[RECOVERY] {role}: recovered to original path (no obstacles)")
+                self._publish_path(trimmed_original, role, "normal", [], [])
+                self._store_active_path(role, trimmed_original)
+                self._original_paths[role] = list(trimmed_original)  # 원본 경로 갱신
+                
+                if role in self._backup_blocked_path:
                     self._backup_blocked_path.pop(role)
 
             else:
-                # 트리밍된 원본 경로 기반으로 회피 적용
-                modified_path, stop_poses, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                # 장애물 있음 -> 회피 경로 생성
+                rospy.loginfo(f"[RECOVERY] {role}: {len(obstacles_on_path)} obstacle(s) detected, generating avoidance")
+                modified_path, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(
+                    role, trimmed_original, obstacles_on_path
+                )
                 
-                if modified_path != trimmed_original:
-                    rospy.loginfo(f"[OBSTACLE] {role}: avoidance path applied")
-            
+                if modified_path is not None and len(modified_path) >= 2:
+                    self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
+                    self._store_active_path(role, modified_path)
+                    # 원본은 유지 (다음 복구 시 사용)
                 else:
-                    rospy.loginfo(f"[OBSTACLE] {role}: path restored to original (no obstacles)")
-                
-                # 경로 발행 (원본 또는 회피 경로)
-                self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
-                self._store_active_path(role, modified_path)
+                    rospy.logwarn(f"[RECOVERY] {role}: avoidance path generation failed, keeping original")
+                    self._publish_path(trimmed_original, role, "normal", [], [])
+                    self._store_active_path(role, trimmed_original)
 
-    def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, avoidance_length: float) -> bool:
+    def _find_closest_path_index(self, path: List[Tuple[float, float]], vx: float, vy: float) -> int:
+        """
+        경로에서 현재 위치에 가장 가까운 인덱스 찾기
+        
+        주의: 단순 거리가 아니라 경로의 진행 방향을 고려
+        - 차량이 경로를 따라 이동 중이므로, 차량 앞의 점들을 우선시
+        - 거리 + 방향 점수를 종합적으로 평가
+        
+        Args:
+            path: 경로 점 리스트
+            vx, vy: 차량의 현재 위치
+        
+        Returns:
+            가장 적절한 인덱스 (0 ~ len(path)-1)
+        """
+        if not path or len(path) < 1:
+            return 0
+        
+        best_idx = 0
+        best_score = float('inf')
+        
+        for i in range(len(path)):
+            px, py = path[i]
+            dist = math.hypot(px - vx, py - vy)
+            
+            # 점수 = 거리 + 역방향 페널티
+            # 차량이 이미 지난 점일수록 높은 점수(더 나쁨)
+            score = dist
+            
+            # 차량보다 뒤에 있는 점에 페널티 추가
+            if i < len(path) - 1:
+                next_x, next_y = path[i + 1]
+                # 현재 점과 다음 점 사이의 벡터
+                path_dx = next_x - px
+                path_dy = next_y - py
+                # 차량과 현재 점 사이의 벡터
+                to_vehicle_dx = vx - px
+                to_vehicle_dy = vy - py
+                
+                # 내적: 경로 진행 방향과 반대면 음수
+                dot = path_dx * to_vehicle_dx + path_dy * to_vehicle_dy
+                path_len_sq = path_dx * path_dx + path_dy * path_dy
+                
+                if path_len_sq > 1e-6:
+                    # 정규화된 projection (0~1)
+                    projection = dot / path_len_sq
+                    # projection < 0이면 경로 시작 방향, > 1이면 경로 끝 방향
+                    if projection < 0:
+                        score += 50.0 * (-projection)  # 뒤쪽 점 페널티
+            
+            if score < best_score:
+                best_score = score
+                best_idx = i
+        
+        return best_idx
+
+    def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, s_start: float, s_end: float) -> bool:
         """
         좌표 기반 반대 차선 충돌 감지 (Active Path & S-Profile 기반)
         
@@ -276,23 +323,15 @@ class SimpleMultiAgentPlanner:
         """
         # 내 경로 정보 가져오기
         my_path = self._active_paths.get(role)
-        my_s_profile = self._active_path_s.get(role)
-
-        # STOP 상태여서 active path가 없는 경우 백업 경로 사용 (갈 길을 미리 알고 있어야 충돌 계산 가능)
         if not my_path or len(my_path) < 2:
             if role in self._backup_blocked_path:
                 my_path = self._backup_blocked_path[role]
-                my_s_profile, _ = self._compute_path_profile(my_path)
 
             else:
                 return False
-        
-        # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
-        s_start = self._project_progress_on_path(my_path, my_s_profile, stop_pos.x, stop_pos.y)
-        if s_start is None:
-            return False
 
-        safe_distance = avoidance_length * 2.0
+        # 2. 회피 시작 지점(stop_pos)의 s 좌표 계산
+        safe_distance = (s_end - s_start) * 2.5
         my_color = _get_vehicle_color(role)
         
         vehicles = self._get_ego_vehicles()
@@ -303,38 +342,31 @@ class SimpleMultiAgentPlanner:
             if other_role == role:
                 continue
 
-            # 장애물 회피해야만 하는 차량 제외 (obstacle_blocked_roles)
-            if self._obstacle_planner and other_role in self._obstacle_planner._obstacle_blocked_roles:
-                continue
-            
             # 타 차량의 Active Path 가져오기
             other_path = self._active_paths.get(other_role)
             if not other_path or len(other_path) < 2:
                 continue
-                
+
             # 1. 장애물(stop_pos)과 타 차량 경로 간의 거리 확인
             #    거리 > 1.0m 이면 충돌 가능성 있는 차량(반대 차선 등)으로 간주
-            dist_to_path = self._dist_point_to_path(other_path, stop_pos.x, stop_pos.y)
+            other_frenet_path = FrenetPath(other_path)
+            other_loc = self._vehicle_rear(vehicle) # 전방 위치 기준
+
+            # 회피 시작 지점의 s 및 d 좌표 계산 (타 차량 경로 기준)
+            s_obs_on_other, d_obs_on_other = other_frenet_path.cartesian_to_frenet(stop_pos.x, stop_pos.y)
             
-            if dist_to_path < 1.5:
-                rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} (d={dist_to_path:.1f}m) active overlap 으악!!!!!!!!!!!!!!!!!!1")
+            # 타 차량 위치의 s 및 d 좌표 계산 (타 차량 경로 기준)
+            s_other_vehicle_on_other, _ = other_frenet_path.cartesian_to_frenet(other_loc.x, other_loc.y)
 
-                # 3. 충돌 가능성 있는 차량의 현재 위치 파악
-                other_loc = self._vehicle_front(vehicle) # 전방 위치 기준
+            # 타 차량 경로 기준 장애물이 3 ~ 6m 수직 거리로 떨어져 있으면 == 반대 차선에서 오는 괘씸한 녀석이다.
+            if 3 < abs(d_obs_on_other) < 6:
+                # 회피 경로의 2배 이상 거리가 나지 않으면 정지
+                remain_s_on_other = s_obs_on_other - s_other_vehicle_on_other
+                rospy.logwarn(f"[STOP CHECK] {my_color} vs {_get_vehicle_color(other_role)}: d_obs_on_other={d_obs_on_other:.1f}m, d_other_vehicle_on_mine={remain_s_on_other:.1f}m")
                 
-                # 내 경로 상에서의 s 위치 투영
-                s_other = self._project_progress_on_path(my_path, my_s_profile, other_loc.x, other_loc.y)
-                
-                # 투영 실패 시 무시
-                if s_other is None:
-                    continue
-
-                # 4. 거리 확인: 회피 경로의 2배 이내면 정지
-                dist_diff = abs(s_other - s_start)
-                
-                if dist_diff <= safe_distance:
+                if -1 < remain_s_on_other <= safe_distance:
                     other_color = _get_vehicle_color(other_role)
-                    rospy.logwarn_throttle(1.0, f"[CONFLICT] {my_color}: {other_color} (d={dist_to_path:.1f}m) active overlap ({dist_diff:.1f}m <= {safe_distance:.1f}m) - waiting")
+                    rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} active overlap ({remain_s_on_other:.1f}m <= {safe_distance:.1f}m) - waiting")
                     return True
         
         return False
@@ -362,10 +394,16 @@ class SimpleMultiAgentPlanner:
             # 우회 불가하지만, 정지해야 하는 녀석
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
-                stop_pos, d_offset, avoidance_length = self._obstacle_planner.get_stop_pos(role)
-                if front_loc.distance(stop_pos) <= self.override_clear_radius:
+                stop_pos, d_offset, s_start, s_end = self._obstacle_planner.get_stop_pos(role)
+                
+                chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
+                s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
+
+                if 0 < s_start - s_on_mine <= self.override_clear_radius:
+                    rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
+
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
-                    if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, avoidance_length):
+                    if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, s_start, s_end):
                         if role not in self._backup_blocked_path:
                             self._backup_blocked_path[role] = self._active_paths.get(role)
 
@@ -676,7 +714,9 @@ class SimpleMultiAgentPlanner:
                 return [front_xy, mid] + path_points
         return [front_xy] + path_points
 
-    def _snap_points_to_lane(self, points: List[Tuple[float, float]]):
+    def _snap_points_to_lane(self, role: str, points: List[Tuple[float, float]]):
+        rospy.logfatal(f"{_get_vehicle_color(role)}: 크아아악!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+        
         snapped: List[Tuple[float, float]] = []
         for x, y in points:
             loc = carla.Location(x=x, y=y, z=0.0)
@@ -803,6 +843,7 @@ class SimpleMultiAgentPlanner:
         # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
         if self.platoon_enable and role != self.leader_role:
             return
+        
         if role not in self.path_publishers:
             return
 
@@ -827,8 +868,8 @@ class SimpleMultiAgentPlanner:
             meta.header = msg.header
             meta.resolution.data = 0.1
             meta.category.data = category
-            meta.s_starts.data = []
-            meta.s_ends.data = []
+            meta.s_starts.data = s_starts
+            meta.s_ends.data = s_ends
 
             self.path_meta_publishers[role].publish(meta)
 
@@ -900,7 +941,7 @@ class SimpleMultiAgentPlanner:
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
             # prefix 경로에 대해서도 node_list를 만들어야 함!!
-            self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
+            # self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
 
         else:
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
@@ -915,12 +956,7 @@ class SimpleMultiAgentPlanner:
 
         # 3. waypoint 에 fit하게 snap
         obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
-        dont_snap = offroad_override or force_direct or len(obstacles_on_path) > 0 
-        if dont_snap:
-            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
-
-        else:
-            points = self._snap_points_to_lane(points)
+        rospy.logfatal(f"{_get_vehicle_color(role)}: obstacles_on_path={obstacles_on_path}")
 
         if len(points) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
@@ -933,13 +969,20 @@ class SimpleMultiAgentPlanner:
         if self._obstacle_planner is not None and not offroad_override and not force_direct:
             rospy.logwarn(f"{role}: obstacles on path: {obstacles_on_path}")
             if len(obstacles_on_path) > 0:
-                points, stop_poses, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
+                points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
         
+        dont_snap = offroad_override or force_direct or len(self._obstacle_planner._obstacle_blocked_roles.get(role, [])) > 0
+        if dont_snap:
+            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
+
+        else:
+            points = self._snap_points_to_lane(role, points)
+
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 
         self._publish_path(points, role, category, s_starts, s_ends)
-        self._store_active_path(role, points)
+        self._store_active_path(role, points)        
         self._current_dest[role] = dest_loc
         return True
 
