@@ -48,7 +48,7 @@ class ObstaclePlanner:
         self.d_offset_scale = 10
         self.min_d_offset = int(self.d_offset_scale * float(rospy.get_param("~min_d_offset", 0.0)))   # 왼쪽 최대
         self.max_d_offset = int(self.d_offset_scale * float(rospy.get_param("~max_d_offset", 4.0)))    # 오른쪽 최대
-        self.d_offset_step = int(self.d_offset_scale * float(rospy.get_param("~d_offset_step", 0.5)))  # 탐색 간격
+        self.d_offset_step = int(self.d_offset_scale * float(rospy.get_param("~d_offset_step", 0.1)))  # 탐색 간격
         self.lane_width = float(rospy.get_param("~lane_width", 4.0))                              # 차선 폭
         self.obstacle_padding = 0 * float(rospy.get_param("~obstacle_padding", 0.25))                 # 장애물 여유 간격
         self.vehicle_padding  = 0 * float(rospy.get_param("~vehicle_padding", 0.25))                   # 차량 여유 간격
@@ -279,7 +279,7 @@ class ObstaclePlanner:
                 r_min = wheelbase / math.tan(delta_max_rad)
     
                 look_ahead = math.sqrt(2 * r_min * abs(best_d_offset if best_d_offset else (self.max_d_offset / self.d_offset_scale)))
-                look_behind = wheelbase * 3
+                look_behind = wheelbase * 9
 
                 s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
                 s_starts.append(s_start)
@@ -304,9 +304,10 @@ class ObstaclePlanner:
 
                 if best_d_offset:
                     s_start_idx = np.searchsorted(frenet_path._s_profile, s_start)
+                    s_apex_idx = np.searchsorted(frenet_path._s_profile, s_obs)
                     s_end_idx = np.searchsorted(frenet_path._s_profile, s_end)
                     rospy.loginfo(f'[AVOIDANCE] s_start: {s_start:.1f}, s_end: {s_end:.1f}, d_offset: {best_d_offset:.1f} total_length: {frenet_path.total_length:.1f}')
-                    frenet_path.update_d_offset(s_start_idx, s_end_idx, best_d_offset)
+                    frenet_path.update_d_offset_two_stage_quintic(s_start_idx, s_apex_idx, s_end_idx, best_d_offset)
 
             avoidance_path = frenet_path.generate_avoidance_path()
             return avoidance_path, best_d_offsets, stop_poses, s_starts, s_ends

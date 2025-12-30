@@ -14,6 +14,39 @@ from scipy.interpolate import CubicSpline
 from scipy.spatial import cKDTree
 from scipy.signal import find_peaks
 
+# frenet_path.py
+
+class QuinticPolynomial:
+    def __init__(self, d0, v0, a0, d1, v1, a1, S):
+        """
+        s 기반 5차 다항식 계산기
+        d0, v0, a0: 시작점의 위치, 속도, 가속도 (s에 대한 미분값)
+        d1, v1, a1: 끝점의 위치, 속도, 가속도
+        S: 시작점에서 끝점까지의 주행 거리
+        """
+        self.a0 = d0
+        self.a1 = v0
+        self.a2 = a0 / 2.0
+
+        # 행렬 연산을 통한 a3, a4, a5 계산 (S-domain)
+        A = np.array([[S**3, S**4, S**5],
+                      [3*S**2, 4*S**3, 5*S**4],
+                      [6*S, 12*S**2, 20*S**3]])
+        b = np.array([d1 - self.a0 - self.a1*S - self.a2*S**2,
+                      v1 - self.a1 - 2*self.a2*S,
+                      a1 - 2*self.a2])
+        
+        # 계수 산출 (a3, a4, a5)
+        x = np.linalg.solve(A, b)
+        self.a3 = x[0]
+        self.a4 = x[1]
+        self.a5 = x[2]
+
+    def calc_point(self, s):
+        """s 위치에서의 d 값 계산"""
+        return self.a0 + self.a1*s + self.a2*s**2 + \
+               self.a3*s**3 + self.a4*s**4 + self.a5*s**5
+
 class FrenetPath:
     """
     Reference Path 기반 Frenet Frame 경로
@@ -196,20 +229,57 @@ class FrenetPath:
         
         return x, y
 
+    # FrenetPath 클래스 내부에 추가할 메서드
+    def update_d_offset_two_stage_quintic(self, s_start_idx: int, s_apex_idx: int, s_end_idx: int, d_target: float):
+        """
+        진입과 복귀를 분리하여 비대칭적인 5차 다항식 경로를 생성합니다.
+        s_start_idx: 회피 시작 시점
+        s_apex_idx: 장애물 옆 (최대 오프셋 지점)
+        s_end_idx: 복귀 완료 시점
+        """
+        if not (s_start_idx < s_apex_idx < s_end_idx):
+            return
+
+        # 1. 진입 구간 (Start -> Apex)
+        s1_start = self._s_profile[s_start_idx]
+        s1_end = self._s_profile[s_apex_idx]
+        S1 = s1_end - s1_start
+        
+        # 시작: 현재 d, v=0, a=0 / 끝: 목표 d, v=0, a=0
+        poly1 = QuinticPolynomial(self.frenet_path[s_start_idx, 1], 0.0, 0.0, d_target, 0.0, 0.0, S1)
+        
+        for i in range(s_start_idx, s_apex_idx + 1):
+            s_rel = self._s_profile[i] - s1_start
+            self.frenet_path[i, 1] = poly1.calc_point(s_rel)
+
+        # 2. 복귀 구간 (Apex -> End)
+        s2_start = self._s_profile[s_apex_idx]
+        s2_end = self._s_profile[s_end_idx]
+        S2 = s2_end - s2_start
+        
+        # 시작: 목표 d, v=0, a=0 / 끝: d=0, v=0, a=0
+        poly2 = QuinticPolynomial(d_target, 0.0, 0.0, 0.0, 0.0, 0.0, S2)
+        
+        for i in range(s_apex_idx + 1, s_end_idx + 1):
+            s_rel = self._s_profile[i] - s2_start
+            self.frenet_path[i, 1] = poly2.calc_point(s_rel)
+            
     def update_d_offset(self, s_start_idx: float, s_end_idx: float, d_offset: float, smooth_ratio: float=0.3):
         num_points = s_end_idx - s_start_idx + 1
 
         for i in range(num_points):
             t = i / (num_points - 1) if num_points > 1 else 0
             
+
+            entry_ratio, exit_ratio = 0.2, 0.5
             # 진입 구간 (처음 smooth_ratio): d=0 → d_offset
-            if t < smooth_ratio:
-                d_ratio = t / smooth_ratio  # 0 → 1
+            if t < entry_ratio:
+                d_ratio = t / entry_ratio  # 0 → 1
                 d = d_offset * self._smooth_step(d_ratio)
             
             # 복귀 구간 (마지막 smooth_ratio): d_offset → 0
-            elif t > (1.0 - smooth_ratio):
-                d_ratio = (t - (1.0 - smooth_ratio)) / smooth_ratio  # 0 → 1
+            elif t > (1.0 - exit_ratio):
+                d_ratio = (t - (1.0 - exit_ratio)) / exit_ratio  # 0 → 1
                 d = d_offset * (1.0 - self._smooth_step(d_ratio))
             
             # 유지 구간 (중간): d=d_offset
@@ -223,7 +293,7 @@ class FrenetPath:
     def _smooth_step(self, t: float) -> float:
         """Smoothstep 함수 (부드러운 0→1 전환)"""
         t = max(0.0, min(1.0, t))
-        return t * t * (3 - 2 * t)
+        return 10 * (t**3) - 15 * (t**4) + 6 * (t**5)
 
     def generate_avoidance_path(self):
         return list(map(lambda x: self.frenet_to_cartesian(x[0], x[1]), self.frenet_path))
