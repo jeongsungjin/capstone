@@ -49,7 +49,7 @@ class UdpStatusBroadcaster:
     def __init__(self) -> None:
         rospy.init_node("udp_status_broadcaster", anonymous=True)
 
-        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.31"))
+        self.dest_ip = str(rospy.get_param("~dest_ip", "192.168.0.200"))
         self.port = int(rospy.get_param("~port", 60070))
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
@@ -62,7 +62,7 @@ class UdpStatusBroadcaster:
         self.vehicle_ids = tuple(sorted(set(vehicle_ids)))
 
         # 토픽 이름 구성
-        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/imu_uplink"))
+        self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink"))
         self.path_topic_prefix = str(rospy.get_param("~path_topic_prefix", "/global_path_"))
         self.path_meta_topic_prefix = str(rospy.get_param("~path_meta_topic_prefix", "/global_path_meta_"))
         
