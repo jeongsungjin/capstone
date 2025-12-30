@@ -35,6 +35,7 @@ class GlobalPlanner(GlobalRoutePlanner):
             sampling_resolution: 경로 샘플링 해상도 (미터)
         """
         super().__init__(wmap, sampling_resolution)
+        
         self._blocked_nodes: Set[int] = set()
         self._blocked_edges: Set[Tuple[int, int]] = set()
         self._obstacle_locations: List[Tuple[float, float, float]] = []
@@ -48,12 +49,6 @@ class GlobalPlanner(GlobalRoutePlanner):
 
         for u, v in self._custom_blocked_edge:
             self._graph.remove_edge(u, v)
-
-        ### 커스텀 Path 반영하기 ###
-        # 예시 10 -> 26 가는 Path 수정하기
-        # path = self._graph[10][26]['path']
-        # self._graph[10][26]['path'] = [entry_wp] + 내맘대로 + [exit_wp]
-        ########################
 
         self.opposite_lane_edge: Dict[Tuple[int, int], Tuple[int, int]] = {
             (24, 23): (25, 26), (25, 26): (24, 23),
@@ -283,37 +278,3 @@ class GlobalPlanner(GlobalRoutePlanner):
 
         except nx.NodeNotFound:
             return None
-
-    def trace_route_with_nodes(self, origin, destination):
-        """
-        경로 탐색 + A* 노드 리스트 반환
-        
-        Returns:
-            (route, node_list) 또는 (None, None)
-            - route: [(waypoint, RoadOption), ...]
-            - node_list: [node_id, ...] A* 경로의 노드 순서
-        """
-        try:
-            node_list = self._path_search(origin, destination)
-            if node_list is None:
-                return None, None
-            route = self.trace_route(origin, destination)
-            return route, None
-            
-        except Exception:
-            return None, None
-
-    def nodes_to_edges(self, node_list: List[int]) -> List[Tuple[int, int]]:
-        """
-        노드 리스트를 엣지 리스트로 변환
-        
-        Args:
-            node_list: [n0, n1, n2, ...] A* 경로 노드 순서
-            
-        Returns:
-            [(n0, n1), (n1, n2), ...] 엣지 리스트
-        """
-        if not node_list or len(node_list) < 2:
-            return []
-        
-        return [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]
