@@ -64,13 +64,6 @@ class ObstaclePlanner:
         self._obstacles: List[Tuple[float, float, float]] = []
         rospy.Subscriber("/obstacles", PoseArray, self._obstacle_cb, queue_size=1)
 
-        # Overlap detection logging timer (for debugging)
-        self._overlap_log_interval = float(rospy.get_param("~overlap_log_interval", 5.0))
-        rospy.Timer(rospy.Duration(self._overlap_log_interval), self._log_overlap_detection_cb)
-        
-        # Vehicle route edges tracking (role -> [(n1, n2), ...])
-        self._vehicle_route_edges: Dict[str, List[Tuple[int, int]]] = {}
-
     def _obstacle_cb(self, msg: PoseArray) -> None:
         """장애물 토픽 콜백 - 장애물 변화 시 노드 차단 업데이트"""
         new_obstacles = []
@@ -103,7 +96,7 @@ class ObstaclePlanner:
         return False
 
     def _update_blocked_nodes(self) -> None:
-        """장애물 위치로 차단 노드/엣지 업데이트 (node_list 기반)"""
+        """장애물 위치로 차단 노드/엣지 업데이트"""
         if self.route_planner is None:
             return
         if not hasattr(self.route_planner, 'clear_obstacles'):
@@ -112,26 +105,11 @@ class ObstaclePlanner:
         
         self.route_planner.clear_obstacles()
         
-        # 모든 차량의 경로 엣지와 장애물 비교
         for ox, oy, oz in self._obstacles:
             obstacle_loc = carla.Location(x=ox, y=oy, z=oz)
-            blocked_count = 0
-            
-            # 각 차량의 route edges에서 장애물과 가까운 엣지 찾기
-            for role, edges in self._vehicle_route_edges.items():
-                for edge in edges:
-                    # 엣지의 waypoints와 장애물 거리 확인
-                    if self._is_edge_blocked_by_obstacle(edge, obstacle_loc):
-                        self.route_planner.mark_edge_blocked(edge)
-                        blocked_count += 1
-            
-            # fallback: edge 기반으로 못 찾으면 기존 방식 사용
-            if blocked_count == 0:
-                blocked = self.route_planner.add_obstacle_on_road(obstacle_loc, self.obstacle_radius)
-                edge = self.route_planner._localize(obstacle_loc)
-                rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked} nodes (fallback), edge={edge}")
-            else:
-                rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked_count} edges (node_list based)")
+            blocked = self.route_planner.add_obstacle_on_road(obstacle_loc, self.obstacle_radius)
+            edge = self.route_planner._localize(obstacle_loc)
+            rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked} nodes, edge={edge}")
 
     def _is_edge_blocked_by_obstacle(self, edge: Tuple[int, int], obstacle_loc) -> bool:
         """엣지가 장애물에 의해 막혔는지 확인"""
@@ -156,21 +134,6 @@ class ObstaclePlanner:
                 return True
         
         return False
-
-    def update_vehicle_edges_from_nodes(self, role: str, node_list) -> None:
-        """A* 노드 리스트에서 직접 엣지 추출하여 저장 (conflict 등록은 하지 않음)"""
-        if not node_list:
-            return
-        
-        # GlobalPlanner의 nodes_to_edges 사용
-        if hasattr(self.route_planner, 'nodes_to_edges'):
-            edges = self.route_planner.nodes_to_edges(node_list)
-        else:
-            # fallback: 직접 변환
-            edges = [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]
-            
-        if edges:
-            self._vehicle_route_edges[role] = edges
 
     def get_stop_pos(self, role: str) -> carla.Location:
         return self._obstacle_blocked_roles[role][0]
@@ -330,8 +293,3 @@ class ObstaclePlanner:
             dy = path[i+1][1] - path[i][1]
             total += math.hypot(dx, dy)
         return total
-
-    def _log_overlap_detection_cb(self, _evt) -> None:
-        """주기적으로 반대 차선 중복 상태 로깅 (현재 비활성화)"""
-        pass
-
