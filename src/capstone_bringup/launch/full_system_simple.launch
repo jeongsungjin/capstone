@@ -7,12 +7,11 @@
   <arg name="bev_topic_raw" default="/bev_info_raw" />
   <arg name="bev_topic_teleport" default="/bev_info_raw" />
   <arg name="udp_port" default="60050" />
-  <arg name="enable_traffic_manager" default="true" />
   <arg name="tm_signals_yaml" default="$(find traffic_manager)/config/traffic_signals.yaml" />
   <arg name="tm_publish_hz" default="10.0" />
   <arg name="enable_status_udp" default="true" />
   <arg name="status_udp_port" default="60070" />
-  <arg name="status_udp_dest_ip" default="192.168.0.200" />
+  <arg name="status_udp_dest_ip" default="192.168.0.5" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">
@@ -43,11 +42,11 @@
     <param name="topic" value="$(arg bev_topic_raw)" />
   </node>
   <!-- Traffic manager (signals publisher + UI) -->
-  <include file="$(find traffic_manager)/launch/traffic_manager.launch">
+  <!-- <include file="$(find traffic_manager)/launch/traffic_manager.launch">
     <arg name="signals_yaml" value="$(arg tm_signals_yaml)" />
     <arg name="publish_hz" value="$(arg tm_publish_hz)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-  </include>
+  </include> -->
   <!-- Status UDP broadcaster -->
   <node if="$(arg enable_status_udp)"
         pkg="capstone_msgs"

@@ -63,7 +63,8 @@ class SimpleMultiVehicleController:
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
         # cmd_max_steer: 명령으로 허용할 최대 조향(rad) – Ackermann/제어 내부 클램프
         self.cmd_max_steer = float(rospy.get_param("~cmd_max_steer", 0.5))
-        self.target_speed = float(rospy.get_param("~target_speed", 6.0))
+        # 기본 주행 속도: 모든 차량 동일 속도 사용 (플래툰 속도 제어 없음)
+        self.target_speed = float(rospy.get_param("~target_speed", 5.0))
         self.control_frequency = float(rospy.get_param("~control_frequency", 30.0))
         # Low-voltage speed gating + parking slowdown
         self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
@@ -105,6 +106,17 @@ class SimpleMultiVehicleController:
         self._tl_phase: Dict[str, Dict] = {}
         self._voltage: Dict[int, float] = {}
         self._speed_override: Dict[str, Dict[str, float]] = {}
+        
+        self.idx_backtrack_allow = int(rospy.get_param("~idx_backtrack_allow", 0))
+        self.seq_min_jump = int(rospy.get_param("~seq_min_jump", 10))
+        self.platoon_mode = bool(rospy.get_param("~platoon_mode", False))
+        # idx 윈도우 제한을 기본 비활성화(0 or 음수면 제한 없음)
+        self.platoon_idx_window = int(rospy.get_param("~platoon_idx_window", 0))
+        # 로깅: 모두 INFO로 출력 (주기 제한 없음)
+        self.progress_log_enable = True
+        self.progress_log_period = 0.0
+        self.path_log_enable = True
+        self.path_log_period = 0.0
 
         self.traffic_interference = {
             # 하단 진출
@@ -148,12 +160,17 @@ class SimpleMultiVehicleController:
             role = self._role_name(index)
             self.states[role] = {
                 "path": [],  # List[(x, y)]
+                "path_idx": [],
                 "position": None,
                 "orientation": None,
                 "twist": None,
                 "current_index": 0,
+                "current_seq": None,
                 "s_profile": [],
                 "progress_s": 0.0,
+                "progress_idx_ratio": 0.0,
+                "idx_min": 0,
+                "idx_max": 0,
                 "path_length": 0.0,
             }
             path_topic = f"/planned_path_{role}"
@@ -208,14 +225,25 @@ class SimpleMultiVehicleController:
 
     def _path_cb(self, msg: Path, role: str) -> None:
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
+        # 항상 0..N-1로 정규화된 인덱스 사용 (플래툰 안정성 우선)
+        idx_profile = list(range(len(points)))
         s_profile, total_len = self._compute_path_profile(points)
         st = self.states[role]
         st["path"] = points
+        st["path_idx"] = idx_profile
         st["current_index"] = 0
+        st["current_seq"] = idx_profile[0] if idx_profile else None
         st["s_profile"] = s_profile
         st["path_length"] = total_len
+        st["idx_min"] = idx_profile[0] if idx_profile else 0
+        st["idx_max"] = idx_profile[-1] if idx_profile else 0
         st["progress_s"] = 0.0
+        st["progress_idx_ratio"] = 0.0
         st["progress_fail_count"] = 0
+        if self.path_log_enable:
+            rospy.loginfo(
+                f"{role}: path recv len={len(points)} idx_range=[{st['idx_min']},{st['idx_max']}] stamp={msg.header.stamp.to_sec():.3f}",
+            )
         # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(st, vehicle)
@@ -224,15 +252,18 @@ class SimpleMultiVehicleController:
             proj = self._project_progress(
                 points,
                 s_profile,
+                idx_profile,
                 rx,
                 ry,
                 0.0,
                 self.progress_backtrack_window_m,
+                prev_idx=None,
             )
             if proj is not None:
-                s_now, idx = proj
+                s_now, idx, seq_val = proj
                 st["progress_s"] = s_now
                 st["current_index"] = idx
+                st["current_seq"] = seq_val
             else:
                 # 초기에 경로 투영 실패 시 바로 근처 점으로 스냅
                 snap = self._force_snap_progress(st, rx, ry)
@@ -306,11 +337,15 @@ class SimpleMultiVehicleController:
         self,
         path,
         s_profile,
+        idx_profile,
         px,
         py,
         prev_s: float,
         backtrack_window: float,
         heading: float = None,
+        prev_idx=None,
+        prev_index=None,
+        idx_window=None,
     ):
         attempts = []
         seq_window = max(0.0, getattr(self, "progress_sequential_window_m", 0.0))
@@ -321,12 +356,16 @@ class SimpleMultiVehicleController:
             result = self._project_progress_limited(
                 path,
                 s_profile,
+                idx_profile,
                 px,
                 py,
                 prev_s,
                 backtrack_window,
                 forward_window=forward_window,
                 heading=heading,
+                prev_idx=prev_idx,
+                prev_index=prev_index,
+                idx_window=idx_window,
             )
             if result is not None:
                 return result
@@ -336,12 +375,16 @@ class SimpleMultiVehicleController:
         self,
         path,
         s_profile,
+        idx_profile,
         px,
         py,
         prev_s: float,
         backtrack_window: float,
         forward_window: float = None,
         heading: float = None,
+        prev_idx=None,
+        prev_index=None,
+        idx_window=None,
     ):
         # 방어: s_profile이 비었거나 길이가 path와 다르면 즉시 재계산
         if len(path) < 2:
@@ -358,6 +401,7 @@ class SimpleMultiVehicleController:
         best_index = None
         best_t = 0.0
         best_s = None
+        best_seq = None
         for idx in range(len(path) - 1):
             x1, y1 = path[idx]
             x2, y2 = path[idx + 1]
@@ -366,6 +410,13 @@ class SimpleMultiVehicleController:
             seg_len_sq = dx * dx + dy * dy
             if seg_len_sq < 1e-6:
                 continue
+            if self.platoon_mode and prev_index is not None and idx_window is not None and idx_window > 0:
+                if idx < prev_index - idx_window or idx > prev_index + idx_window:
+                    continue
+            if idx_profile and len(idx_profile) > idx and prev_idx is not None:
+                seg_seq = idx_profile[idx]
+                if seg_seq < prev_idx - self.idx_backtrack_allow:
+                    continue
             t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
             t = max(0.0, min(1.0, t))
             proj_x = x1 + dx * t
@@ -387,12 +438,13 @@ class SimpleMultiVehicleController:
                 best_index = idx
                 best_t = t
                 best_s = cand_s
+                best_seq = idx_profile[idx] if idx_profile and len(idx_profile) > idx else None
         if best_index is None:
             return None
         # 추가 방어: 인덱스 경계 확인
         if best_index < 0 or best_index >= len(path) - 1 or best_index >= len(s_profile):
             return None
-        return float(best_s), best_index
+        return float(best_s), best_index, best_seq
 
     def _project_point_on_path(self, path, px: float, py: float):
         if len(path) < 2:
@@ -464,6 +516,30 @@ class SimpleMultiVehicleController:
             s_now = s_profile[idx] + t * seg_len
         return s_now, idx
 
+    def _update_idx_progress(self, st) -> float:
+        """웨이포인트 seq 기반 진행 비율(0~1)을 계산한다."""
+        idx_min = int(st.get("idx_min", 0))
+        idx_max = int(st.get("idx_max", 0))
+        seq = st.get("current_seq", None)
+        if seq is None:
+            pi = st.get("path_idx") or []
+            ci = int(st.get("current_index", 0))
+            if 0 <= ci < len(pi):
+                seq = pi[ci]
+        denom = max(1, idx_max - idx_min)
+        ratio = 0.0
+        if seq is not None and idx_max > idx_min:
+            ratio = float(seq - idx_min) / float(denom)
+        else:
+            # seq 정보가 없거나 범위가 0이면 arc-length 기반 fallback
+            path_len = float(st.get("path_length", 0.0))
+            prog_s = float(st.get("progress_s", 0.0))
+            if path_len > 1e-3:
+                ratio = prog_s / path_len
+        ratio = max(0.0, min(1.0, ratio))
+        st["progress_idx_ratio"] = ratio
+        return ratio
+
     def _sample_path_at_s(self, path, s_profile, s_target: float):
         """Arc-length 보간으로 정확한 목표점을 얻는다."""
         if len(path) < 2 or not s_profile or len(s_profile) != len(path):
@@ -530,16 +606,33 @@ class SimpleMultiVehicleController:
         proj = self._project_progress(
             path,
             st.get("s_profile") or [],
+            st.get("path_idx") or [],
             fx,
             fy,
             prev_s,
             self.progress_backtrack_window_m,
             heading=yaw,
+            prev_idx=st.get("current_seq"),
+            prev_index=st.get("current_index"),
+            idx_window=(self.platoon_idx_window if self.platoon_mode else None),
         )
         if proj is not None:
-            s_now, idx = proj
+            s_now, idx, seq_val = proj
             st["progress_s"] = s_now
             st["current_index"] = idx
+            st["current_seq"] = seq_val
+            # seq가 이전보다 크게 후퇴하면 강제 스냅
+            prev_seq = st.get("last_seq")
+            if prev_seq is not None and seq_val is not None and seq_val < prev_seq - self.idx_backtrack_allow:
+                reset = self._force_snap_progress(st, fx, fy)
+                if reset is not None:
+                    s_now, idx = reset
+                    st["progress_s"] = s_now
+                    st["current_index"] = idx
+                    seq_val = st["path_idx"][idx] if st.get("path_idx") and idx < len(st["path_idx"]) else seq_val
+                    st["current_seq"] = seq_val
+            st["last_seq"] = seq_val
+            self._update_idx_progress(st)
             # 현재 진행 세그먼트 헤딩으로 헤딩 오차 추정
             path_idx = max(0, min(len(path) - 2, idx))
             seg_dx = path[path_idx + 1][0] - path[path_idx][0]
@@ -571,13 +664,18 @@ class SimpleMultiVehicleController:
             #     f"{role}: progress projection failed #{count} (fx={fx:.1f}, fy={fy:.1f}); keeping previous s={prev_s:.1f}",
             # )
             # 즉시 경로로 스냅하여 조향이 바로 경로를 향하도록
-            reset = self._force_snap_progress(st, fx, fy)
-            if reset is not None:
-                s_now, idx = reset
-                st["progress_s"] = s_now
-                st["current_index"] = idx
-                st["progress_fail_count"] = 0
-                # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
+            if count >= 2:
+                reset = self._force_snap_progress(st, fx, fy)
+                if reset is not None:
+                    s_now, idx = reset
+                    st["progress_s"] = s_now
+                    st["current_index"] = idx
+                    st["progress_fail_count"] = 0
+                    seq_val = st["path_idx"][idx] if st.get("path_idx") and idx < len(st["path_idx"]) else None
+                    st["current_seq"] = seq_val
+                    st["last_seq"] = seq_val
+                    self._update_idx_progress(st)
+                    # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} after projection failure")
         if proj is not None:
             st["progress_fail_count"] = 0
         else:
@@ -848,11 +946,11 @@ class SimpleMultiVehicleController:
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 
-            colors = ["red", "yellow", "green", "black", "white"]
-            rospy.loginfo_throttle(
-                0.5,
-                f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
-            )
+            # colors = ["red", "yellow", "green", "black", "white"]
+            # rospy.loginfo_throttle(
+            #     0.5,
+            #     f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
+            # )
 
 
 if __name__ == "__main__":
