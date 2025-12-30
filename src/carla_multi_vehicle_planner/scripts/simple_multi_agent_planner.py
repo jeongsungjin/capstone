@@ -82,6 +82,8 @@ class SimpleMultiAgentPlanner:
         self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
+        # 커스텀 경로를 원본 그대로 사용하고 싶을 때 lane snap 비활성화
+        self.snap_to_lane_enable = bool(rospy.get_param("~snap_to_lane_enable", False))
         
         # Start waypoint/path stitch parameters
         self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 12.0))
@@ -839,7 +841,14 @@ class SimpleMultiAgentPlanner:
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
 
-    def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str) -> None:
+    def _publish_path(
+        self,
+        points: List[Tuple[float, float]],
+        role: str,
+        category: str,
+        s_starts: Optional[List[float]] = None,
+        s_ends: Optional[List[float]] = None,
+    ) -> None:
         # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
         if self.platoon_enable and role != self.leader_role:
             return
@@ -868,8 +877,10 @@ class SimpleMultiAgentPlanner:
             meta.header = msg.header
             meta.resolution.data = 0.1
             meta.category.data = category
-            meta.s_starts.data = s_starts
-            meta.s_ends.data = s_ends
+            if s_starts is not None:
+                meta.s_starts.data = list(s_starts)
+            if s_ends is not None:
+                meta.s_ends.data = list(s_ends)
 
             self.path_meta_publishers[role].publish(meta)
 
@@ -973,11 +984,13 @@ class SimpleMultiAgentPlanner:
                 self._original_paths[role] = original_points
         
         dont_snap = offroad_override or force_direct or len(self._obstacle_planner._obstacle_blocked_roles.get(role, [])) > 0
-        if dont_snap:
-            rospy.logwarn_throttle(2.0, f"{role}: off-road/direct destination; path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}))")
-
-        else:
-            points = self._snap_points_to_lane(role, points)
+        if dont_snap or not self.snap_to_lane_enable:
+            rospy.logwarn_throttle(
+                2.0,
+                f"{role}: path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}), snap_to_lane={self.snap_to_lane_enable})",
+            )
+        # else:
+        #     points = self._snap_points_to_lane(role, points)
 
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 

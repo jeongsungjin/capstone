@@ -93,7 +93,7 @@ for (u, v), path_list in edges.items():
 # -----------------------------
 # 4. 대표 경로 JSON으로 저장
 # -----------------------------
-out_dir = os.path.join(pkg_path, 'custom_paths')
+out_dir = os.path.join(pkg_path, '/home/jamie/capstone/src/perception/scripts')
 os.makedirs(out_dir, exist_ok=True)
 
 for (u, v), mean_path in representative_paths.items():
