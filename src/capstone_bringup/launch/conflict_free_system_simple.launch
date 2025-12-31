@@ -25,7 +25,7 @@
   <node pkg="carla_multi_vehicle_planner" type="simple_multi_agent_planner.py" name="conflict_free_planner" output="screen">
     <env name="PYTHONPATH" value="$(find carla_multi_vehicle_planner)/scripts:$(optenv PYTHONPATH)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="min_destination_distance" value="15.0" />
+    <param name="min_destination_distance" value="30.0" />
     <param name="max_destination_distance" value="100.0" />
     <!-- Low-voltage direct parking parameters -->
     <param name="low_voltage_threshold" value="5.0" />

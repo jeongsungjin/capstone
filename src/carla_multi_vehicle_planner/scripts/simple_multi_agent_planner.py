@@ -78,8 +78,8 @@ class SimpleMultiAgentPlanner:
         self.leader_role = str(rospy.get_param("~leader_role", "ego_vehicle_1"))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
-        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 60.0))
-        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
+        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 20.0))
+        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.2))
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
         # 커스텀 경로를 원본 그대로 사용하고 싶을 때 lane snap 비활성화
