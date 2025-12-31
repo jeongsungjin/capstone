@@ -87,7 +87,7 @@ class SimpleMultiAgentPlanner:
         # Start waypoint/path stitch parameters
         self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 12.0))
         self.start_offset_m = float(rospy.get_param("~start_offset_m", 3.0))
-        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 30.0))
+        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 10.0))
         self.max_extend_attempts = int(rospy.get_param("~max_extend_attempts", 3))
         self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 70.0))
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 100.0))
@@ -219,7 +219,10 @@ class SimpleMultiAgentPlanner:
             front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._original_paths.get(role)
+            original_path = self._backup_blocked_path.get(role)
+            if not original_path or len(original_path) < 2:
+                original_path = self._original_paths.get(role)
+            
             if not original_path or len(original_path) < 2:
                 original_path = self._active_paths.get(role)
 
@@ -385,11 +388,8 @@ class SimpleMultiAgentPlanner:
             if 3 < abs(d_obs_on_other) < 6:
                 # 회피 경로의 2배 이상 거리가 나지 않으면 정지
                 remain_s_on_other = s_obs_on_other - s_other_vehicle_on_other
-                rospy.logwarn(f"[STOP CHECK] {my_color} vs {_get_vehicle_color(other_role)}: d_obs_on_other={d_obs_on_other:.1f}m, d_other_vehicle_on_mine={remain_s_on_other:.1f}m")
-                
                 if -1 < remain_s_on_other <= safe_distance:
                     other_color = _get_vehicle_color(other_role)
-                    rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} active overlap ({remain_s_on_other:.1f}m <= {safe_distance:.1f}m) - waiting")
                     return True
         
         return False
@@ -410,29 +410,26 @@ class SimpleMultiAgentPlanner:
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             
-            front_loc = self._vehicle_front(vehicle)
             dest_override = None
+            front_loc = self._vehicle_front(vehicle)
             active_path = self._active_paths.get(role)
             
             # 우회 불가하지만, 정지해야 하는 녀석
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
+                color = _get_vehicle_color(role)
                 stop_pos, d_offset, s_start, s_end = self._obstacle_planner.get_stop_pos(role)
                 
                 chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
                 s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
 
-                if 0 < (s_start - s_on_mine) <= 1.0:
-                    rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
-
+                if -1.0 <= (s_start - s_on_mine) <= 1.0:
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
                     if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, s_start, s_end):
                         if role not in self._backup_blocked_path:
                             self._backup_blocked_path[role] = self._active_paths.get(role)
 
                         stop_pts = [(front_loc.x, front_loc.y)]
-                        color = _get_vehicle_color(role)
-                        rospy.logfatal(f"[STOP] {color}: 장애물 회피 대기 중 (d_offset={d_offset})")
                         self._publish_path(stop_pts, role, "stop")
                         self._store_active_path(role, stop_pts)
                         continue
@@ -659,7 +656,7 @@ class SimpleMultiAgentPlanner:
             z=tf.location.z
         )
 
-    def _choose_destination(self, start: carla.Location, max_trials: int = 80) -> Optional[carla.Location]:
+    def _choose_destination(self, start: carla.Location, max_trials: int=200) -> Optional[carla.Location]:
         for _ in range(max_trials):
             cand = random.choice(self.spawn_points).location
             dist = math.hypot(cand.x - start.x, cand.y - start.y)
@@ -839,9 +836,9 @@ class SimpleMultiAgentPlanner:
             p.pose.position.y = y
             p.pose.position.z = 0.0
             msg.poses.append(p)
+
         # 다음 퍼블리시를 위해 epoch 증가 (경로 길이 + stride)
         self._seq_epoch[role] = epoch + max(len(points), 1) + self.seq_epoch_stride
-
         self.path_publishers[role].publish(msg)
         
         if category != "stop":
