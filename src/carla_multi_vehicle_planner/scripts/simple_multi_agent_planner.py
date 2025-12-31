@@ -79,11 +79,9 @@ class SimpleMultiAgentPlanner:
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
         self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 20.0))
-        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.2))
+        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
-        # 커스텀 경로를 원본 그대로 사용하고 싶을 때 lane snap 비활성화
-        self.snap_to_lane_enable = bool(rospy.get_param("~snap_to_lane_enable", False))
         
         # Start waypoint/path stitch parameters
         self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 12.0))
@@ -401,7 +399,7 @@ class SimpleMultiAgentPlanner:
                 chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
                 s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
 
-                if 0 < s_start - s_on_mine <= self.override_clear_radius:
+                if 0 < (s_start - s_on_mine) <= 1.0:
                     rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
 
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
@@ -548,6 +546,7 @@ class SimpleMultiAgentPlanner:
         if not current or len(current) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: no active path to extend; full replan")
             return self._plan_for_role(vehicle, role, front_loc, category, dest_override=dest_override)
+        
         s_profile = self._active_path_s.get(role)
         suffix = current
         if s_profile and len(s_profile) == len(current):
@@ -561,18 +560,23 @@ class SimpleMultiAgentPlanner:
                         break
                 suffix = current[start_idx:]
         attempts = 0
+        
         while attempts < max(1, int(self.max_extend_attempts)):
             prefix_copy = list(suffix)
             if len(prefix_copy) < 2:
                 rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
                 return self._plan_for_role(vehicle, role, front_loc, category)
+            
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is not None:
                 rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
+            
             if self._plan_for_role(vehicle, role, front_loc, category, prefix_points=prefix_copy):
                 return True
+            
             attempts += 1
             rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
+        
         rospy.logwarn_throttle(5.0, f"{role}: all extension attempts failed; falling back to fresh plan")
         return self._plan_for_role(vehicle, role, front_loc, category)
 
@@ -642,21 +646,18 @@ class SimpleMultiAgentPlanner:
 
     def _trace_route(self, start: carla.Location, dest: carla.Location):
         """
-        경로 탐색 - (route, node_list) 반환
+        경로 탐색
         
         Returns:
-            (route, node_list) 또는 (None, None)
+            route 또는 None
         """
         try:
-            # trace_route_with_nodes가 있으면 사용 (정확한 엣지 추출 가능)
-            if hasattr(self.route_planner, 'trace_route_with_nodes'):
-                return self.route_planner.trace_route_with_nodes(start, dest)
-            # fallback: 기존 방식
             route = self.route_planner.trace_route(start, dest)
-            return route, None
+            return route
+        
         except Exception as exc:
             rospy.logwarn(f"trace_route failed: {exc}")
-            return None, None
+            return None
 
     def _route_to_points(self, route) -> List[Tuple[float, float]]:
         points: List[Tuple[float, float]] = []
@@ -716,23 +717,6 @@ class SimpleMultiAgentPlanner:
                 return [front_xy, mid] + path_points
         return [front_xy] + path_points
 
-    def _snap_points_to_lane(self, role: str, points: List[Tuple[float, float]]):
-        rospy.logfatal(f"{_get_vehicle_color(role)}: 크아아악!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-        
-        snapped: List[Tuple[float, float]] = []
-        for x, y in points:
-            loc = carla.Location(x=x, y=y, z=0.0)
-            try:
-                wp = self.carla_map.get_waypoint(loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-            except Exception:
-                wp = None
-            if wp is not None:
-                lane_loc = wp.transform.location
-                snapped.append((lane_loc.x, lane_loc.y))
-            else:
-                snapped.append((x, y))
-        return snapped
-
     def _compute_path_profile(self, points: List[Tuple[float, float]]):
         if len(points) < 2:
             return [], 0.0
@@ -786,34 +770,6 @@ class SimpleMultiAgentPlanner:
         s_now = s_profile[best_index] + best_t * seg_length * int(seg_length >= 1e-6)
         return s_now
 
-    def _dist_point_to_path(self, points: List[Tuple[float, float]], px: float, py: float) -> float:
-        """점과 경로 사이의 최소 거리 반환"""
-        if len(points) < 2:
-            return float('inf')
-            
-        best_dist_sq = float("inf")
-        
-        for idx in range(len(points) - 1):
-            x1, y1 = points[idx]
-            x2, y2 = points[idx + 1]
-            dx = x2 - x1
-            dy = y2 - y1
-            seg_len_sq = dx * dx + dy * dy
-        
-            if seg_len_sq < 1e-6:
-                dist_sq = (px - x1) ** 2 + (py - y1) ** 2
-            else:
-                t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
-                t = max(0.0, min(1.0, t))
-                proj_x = x1 + dx * t
-                proj_y = y1 + dy * t
-                dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
-        
-            if dist_sq < best_dist_sq:
-                best_dist_sq = dist_sq
-        
-        return math.sqrt(best_dist_sq)
-
     def _remaining_path_distance(self, role: str, front_loc: carla.Location):
         points = self._active_paths.get(role)
         if not points or len(points) < 2:
@@ -841,14 +797,7 @@ class SimpleMultiAgentPlanner:
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
 
-    def _publish_path(
-        self,
-        points: List[Tuple[float, float]],
-        role: str,
-        category: str,
-        s_starts: Optional[List[float]] = None,
-        s_ends: Optional[List[float]] = None,
-    ) -> None:
+    def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str, s_starts: List[float]=[], s_ends: List[float]=[]) -> None:
         # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
         if self.platoon_enable and role != self.leader_role:
             return
@@ -877,10 +826,8 @@ class SimpleMultiAgentPlanner:
             meta.header = msg.header
             meta.resolution.data = 0.1
             meta.category.data = category
-            if s_starts is not None:
-                meta.s_starts.data = list(s_starts)
-            if s_ends is not None:
-                meta.s_ends.data = list(s_ends)
+            meta.s_starts.data = s_starts
+            meta.s_ends.data = s_ends
 
             self.path_meta_publishers[role].publish(meta)
 
@@ -934,25 +881,23 @@ class SimpleMultiAgentPlanner:
                                        z=front_loc.z)
         
         start_loc.z = front_loc.z
-        route, node_list = None, None
+        route = None
         max_attempts = 5
         if not force_direct:
             for _ in range(max_attempts):
-                route, node_list = self._trace_route(start_loc, dest_loc)
+                route = self._trace_route(start_loc, dest_loc)
                 if route and len(route) >= 2:
                     break
 
                 dest_loc = self._choose_destination(front_loc)
                 if dest_loc is None:
-                    route, node_list = None, None
+                    route = None
                     break
         
         # 1. 새 경로 생성
         new_points: List[Tuple[float, float]] = []
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
-            # prefix 경로에 대해서도 node_list를 만들어야 함!!
-            # self._obstacle_planner.update_vehicle_edges_from_nodes(role, node_list)
 
         else:
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
@@ -965,7 +910,6 @@ class SimpleMultiAgentPlanner:
         else:
             points = self._ensure_path_starts_at_vehicle(new_points, (front_loc.x, front_loc.y))
 
-        # 3. waypoint 에 fit하게 snap
         obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
         rospy.logfatal(f"{_get_vehicle_color(role)}: obstacles_on_path={obstacles_on_path}")
 
@@ -982,15 +926,6 @@ class SimpleMultiAgentPlanner:
             if len(obstacles_on_path) > 0:
                 points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
-        
-        dont_snap = offroad_override or force_direct or len(self._obstacle_planner._obstacle_blocked_roles.get(role, [])) > 0
-        if dont_snap or not self.snap_to_lane_enable:
-            rospy.logwarn_throttle(
-                2.0,
-                f"{role}: path not snapped to lane (dest=({dest_loc.x:.2f},{dest_loc.y:.2f}), snap_to_lane={self.snap_to_lane_enable})",
-            )
-        # else:
-        #     points = self._snap_points_to_lane(role, points)
 
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 

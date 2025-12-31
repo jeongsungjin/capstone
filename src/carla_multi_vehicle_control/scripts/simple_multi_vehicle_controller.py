@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 
 import math
-from typing import Dict, List, Tuple
+import sys
+import os
+from typing import Dict, List, Tuple, Optional
 
 import rospy
+
+# Add planner scripts path for GlobalPlanner import
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_planner_scripts = os.path.join(_script_dir, '..', '..', 'carla_multi_vehicle_planner', 'scripts')
+if _planner_scripts not in sys.path:
+    sys.path.insert(0, _planner_scripts)
+
+try:
+    from global_planner import GlobalPlanner
+except Exception as e:
+    GlobalPlanner = None
+    rospy.logwarn(f"Failed to import GlobalPlanner: {e}")
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
@@ -97,6 +111,16 @@ class SimpleMultiVehicleController:
         self.client = carla.Client(host, port)
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
+        self.carla_map = self.world.get_map()
+        
+        # GlobalPlanner for edge localization
+        self.route_planner = None
+        if GlobalPlanner is not None:
+            try:
+                self.route_planner = GlobalPlanner(self.carla_map, sampling_resolution=1.0)
+                rospy.loginfo("[Controller] GlobalPlanner initialized for edge localization")
+            except Exception as e:
+                rospy.logwarn(f"[Controller] Failed to create GlobalPlanner: {e}")
 
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
@@ -724,6 +748,69 @@ class SimpleMultiVehicleController:
         return steer, speed
 
 
+    def _get_edge_at_location(self, x: float, y: float) -> Optional[tuple]:
+        """주어진 위치의 edge를 반환"""
+        if self.route_planner is None:
+            return None
+        try:
+            loc = carla.Location(x=x, y=y, z=0.0)
+            edge = self.route_planner._localize(loc)
+            return edge
+        except Exception:
+            return None
+
+    def _is_vehicle_at_red_light(self, x: float, y: float) -> bool:
+        """해당 위치의 차량이 빨간불 영역에 있는지 확인"""
+        if not self._tl_phase:
+            return False
+        
+        for data in self._tl_phase.values():
+            approaches = data.get("approaches", [])
+            for ap in approaches:
+                # 빨간불인 경우만
+                color = int(ap.get("color", -1))
+                if color != 0:  # 0 = red
+                    continue
+                
+                # 차량이 해당 영역 안에 있는지 확인
+                if x >= ap["xmin"] and x <= ap["xmax"] and y >= ap["ymin"] and y <= ap["ymax"]:
+                    return True
+        
+        return False
+
+    def _should_ignore_for_traffic_light(self, my_edge: tuple, other_edge: tuple, other_x: float, other_y: float) -> bool:
+        """
+        신호대기 차량을 무시해야 하는지 판단
+        
+        조건:
+        1. 상대 차량이 빨간불 위에 있음
+        2. 내 edge가 traffic_interference의 key 중 하나에 속해 있음
+        3. 상대 edge가 해당 key의 value에 속해 있음
+        
+        Returns:
+            True if should ignore (proceed without stopping)
+        """
+        if my_edge is None or other_edge is None:
+            return False
+        
+        # 상대 차량이 빨간불 위에 있는지 확인
+        if not self._is_vehicle_at_red_light(other_x, other_y):
+            return False
+        
+        # traffic_interference 맵 확인
+        for key_edges, value_edges in self.traffic_interference.items():
+            # 내 edge가 key 중 하나에 속해 있고
+            if my_edge in key_edges:
+                # 상대 edge가 해당 value 중 하나에 속해 있으면
+                if other_edge in value_edges:
+                    rospy.loginfo_throttle(
+                        2.0,
+                        f"Ignoring red-light vehicle: my_edge={my_edge} -> other_edge={other_edge}"
+                    )
+                    return True
+        
+        return False
+
     def _apply_collision_gating(self, role: str, fx: float, fy: float, yaw: float, speed_cmd: float) -> float:
         # Deadlock token으로 충돌 정지 해제 요청 시 그대로 통과
         if self._collision_override.get(role, False):
@@ -733,8 +820,13 @@ class SimpleMultiVehicleController:
             return speed_cmd
         if not self.collision_stop_enable:
             return speed_cmd
+        
         angle_th = abs(float(self.collision_stop_angle_deg)) * math.pi / 180.0
         dist_th = max(0.0, float(self.collision_stop_distance_m))
+        
+        # 내 위치의 edge 확인
+        my_edge = self._get_edge_at_location(fx, fy)
+        
         # Iterate over other controlled vehicles (based on odom states)
         for other_role, ost in self.states.items():
             if other_role == role:
@@ -742,11 +834,16 @@ class SimpleMultiVehicleController:
             op = ost.get("position")
             if op is None:
                 continue
-            dx = float(op.x) - fx
-            dy = float(op.y) - fy
+            
+            other_x = float(op.x)
+            other_y = float(op.y)
+            dx = other_x - fx
+            dy = other_y - fy
             dist = math.hypot(dx, dy)
+            
             if dist <= 1e-3:
                 return 0.0
+            
             # Bearing difference to heading
             ang = math.atan2(dy, dx)
             rel = ang - yaw
@@ -754,7 +851,13 @@ class SimpleMultiVehicleController:
                 rel -= 2.0 * math.pi
             while rel < -math.pi:
                 rel += 2.0 * math.pi
+            
             if abs(rel) <= angle_th and dist <= dist_th:
+                # 신호대기 차량 무시 로직
+                other_edge = self._get_edge_at_location(other_x, other_y)
+                if self._should_ignore_for_traffic_light(my_edge, other_edge, other_x, other_y):
+                    continue  # 해당 차량 무시하고 다음 차량 검사
+                
                 # rospy.logwarn_throttle(
                 #     1.0,
                 #     f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",

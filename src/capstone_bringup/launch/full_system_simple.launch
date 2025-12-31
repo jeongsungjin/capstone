@@ -42,11 +42,11 @@
     <param name="topic" value="$(arg bev_topic_raw)" />
   </node>
   <!-- Traffic manager (signals publisher + UI) -->
-  <!-- <include file="$(find traffic_manager)/launch/traffic_manager.launch">
+  <include file="$(find traffic_manager)/launch/traffic_manager.launch">
     <arg name="signals_yaml" value="$(arg tm_signals_yaml)" />
     <arg name="publish_hz" value="$(arg tm_publish_hz)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-  </include> -->
+  </include>
   <!-- Status UDP broadcaster -->
   <node if="$(arg enable_status_udp)"
         pkg="capstone_msgs"

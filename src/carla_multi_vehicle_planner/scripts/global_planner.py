@@ -450,37 +450,3 @@ class GlobalPlanner(GlobalRoutePlanner):
 
         except nx.NodeNotFound:
             return None
-
-    def trace_route_with_nodes(self, origin, destination):
-        """
-        경로 탐색 + A* 노드 리스트 반환
-        
-        Returns:
-            (route, node_list) 또는 (None, None)
-            - route: [(waypoint, RoadOption), ...]
-            - node_list: [node_id, ...] A* 경로의 노드 순서
-        """
-        try:
-            node_list = self._path_search(origin, destination)
-            if node_list is None:
-                return None, None
-            route = self.trace_route(origin, destination)
-            return route, None
-            
-        except Exception:
-            return None, None
-
-    def nodes_to_edges(self, node_list: List[int]) -> List[Tuple[int, int]]:
-        """
-        노드 리스트를 엣지 리스트로 변환
-        
-        Args:
-            node_list: [n0, n1, n2, ...] A* 경로 노드 순서
-            
-        Returns:
-            [(n0, n1), (n1, n2), ...] 엣지 리스트
-        """
-        if not node_list or len(node_list) < 2:
-            return []
-        
-        return [(node_list[i], node_list[i + 1]) for i in range(len(node_list) - 1)]
