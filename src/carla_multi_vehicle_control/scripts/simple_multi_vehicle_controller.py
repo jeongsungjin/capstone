@@ -3,6 +3,7 @@
 import math
 import sys
 import os
+import json
 from typing import Dict, List, Tuple, Optional
 
 import rospy
@@ -21,7 +22,7 @@ except Exception as e:
 from ackermann_msgs.msg import AckermannDrive
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String
 from std_msgs.msg import Bool
 from capstone_msgs.msg import Uplink  # type: ignore
 
@@ -180,6 +181,15 @@ class SimpleMultiVehicleController:
                 ((12, 10), (10, 11), (10, 18))
         }
 
+        # 신호등별 정지 차량 추적: Dict[signal_name, List[role]]
+        # 신호등 이름은 traffic_signals.yaml 기준 하드코딩
+        self._vehicles_at_tl: Dict[str, List[str]] = {
+            "A_MAIN_3": [], "A_MAIN_4": [], "A_SIDE": [],
+            "B_MAIN_3": [], "B_MAIN_4": [], "B_SIDE": [],
+            "C_MAIN_3": [], "C_MAIN_4": [], "C_SIDE": []
+        }
+        self._vehicles_at_tl_pub = rospy.Publisher("/vehicles_at_tl", String, queue_size=1, latch=True)
+
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             self.states[role] = {
@@ -197,6 +207,7 @@ class SimpleMultiVehicleController:
                 "idx_max": 0,
                 "path_length": 0.0,
             }
+
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
             cmd_topic = f"/carla/{role}/vehicle_control_cmd_raw"
@@ -212,8 +223,10 @@ class SimpleMultiVehicleController:
                     callback_args=role,
                     queue_size=5,
                 )
+
             self.control_publishers[role] = rospy.Publisher(cmd_topic, AckermannDrive, queue_size=1)
             self.pose_publishers[role] = rospy.Publisher(pose_topic, PoseStamped, queue_size=1)
+            
             # Deadlock/token 기반 충돌 무시 플래그
             override_col_topic = f"/collision_override/{role}"
             self._collision_override: Dict[str, bool] = getattr(self, "_collision_override", {})
@@ -229,10 +242,12 @@ class SimpleMultiVehicleController:
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
+        
         # Uplink (voltage) subscriber: topic configurable
         self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink")).strip()
         if self.uplink_topic:
             rospy.Subscriber(self.uplink_topic, Uplink, self._uplink_cb, queue_size=10)
+
         rospy.Subscriber("/emergency_stop", Bool, self._e_stop_cb, queue_size=5)
         rospy.Timer(rospy.Duration(1.0 / 20.0), self._refresh_vehicles)
         rospy.Timer(rospy.Duration(1.0 / max(1.0, self.control_frequency)), self._control_loop)
@@ -747,7 +762,6 @@ class SimpleMultiVehicleController:
         # )
         return steer, speed
 
-
     def _get_edge_at_location(self, x: float, y: float) -> Optional[tuple]:
         """주어진 위치의 edge를 반환"""
         if self.route_planner is None:
@@ -759,31 +773,23 @@ class SimpleMultiVehicleController:
         except Exception:
             return None
 
-    def _is_vehicle_at_red_light(self, x: float, y: float) -> bool:
-        """해당 위치의 차량이 빨간불 영역에 있는지 확인"""
-        if not self._tl_phase:
-            return False
+    def _is_vehicle_registered_at_tl(self, role: str) -> Optional[str]:
+        """해당 차량이 신호등에 등록되어 있는지 확인 (자료구조 기반)
         
-        for data in self._tl_phase.values():
-            approaches = data.get("approaches", [])
-            for ap in approaches:
-                # 빨간불인 경우만
-                color = int(ap.get("color", -1))
-                if color != 0:  # 0 = red
-                    continue
-                
-                # 차량이 해당 영역 안에 있는지 확인
-                if x >= ap["xmin"] and x <= ap["xmax"] and y >= ap["ymin"] and y <= ap["ymax"]:
-                    return True
-        
-        return False
+        Returns:
+            등록된 신호등 이름, 없으면 None
+        """
+        for signal_name, roles in self._vehicles_at_tl.items():
+            if role in roles:
+                return signal_name
+        return None
 
-    def _should_ignore_for_traffic_light(self, my_edge: tuple, other_edge: tuple, other_x: float, other_y: float) -> bool:
+    def _should_ignore_for_traffic_light(self, my_edge: tuple, other_edge: tuple, other_role: str) -> bool:
         """
         신호대기 차량을 무시해야 하는지 판단
         
         조건:
-        1. 상대 차량이 빨간불 위에 있음
+        1. 상대 차량이 신호등에 등록되어 있음 (_vehicles_at_tl)
         2. 내 edge가 traffic_interference의 key 중 하나에 속해 있음
         3. 상대 edge가 해당 key의 value에 속해 있음
         
@@ -793,8 +799,9 @@ class SimpleMultiVehicleController:
         if my_edge is None or other_edge is None:
             return False
         
-        # 상대 차량이 빨간불 위에 있는지 확인
-        if not self._is_vehicle_at_red_light(other_x, other_y):
+        # 상대 차량이 신호등에 등록되어 있는지 확인 (자료구조 기반)
+        stopped_signal = self._is_vehicle_registered_at_tl(other_role)
+        if stopped_signal is None:
             return False
         
         # traffic_interference 맵 확인
@@ -805,7 +812,7 @@ class SimpleMultiVehicleController:
                 if other_edge in value_edges:
                     rospy.loginfo_throttle(
                         2.0,
-                        f"Ignoring red-light vehicle: my_edge={my_edge} -> other_edge={other_edge}"
+                        f"Ignoring {other_role} at {stopped_signal}: my_edge={my_edge} -> other_edge={other_edge}"
                     )
                     return True
         
@@ -855,7 +862,7 @@ class SimpleMultiVehicleController:
             if abs(rel) <= angle_th and dist <= dist_th:
                 # 신호대기 차량 무시 로직
                 other_edge = self._get_edge_at_location(other_x, other_y)
-                if self._should_ignore_for_traffic_light(my_edge, other_edge, other_x, other_y):
+                if self._should_ignore_for_traffic_light(my_edge, other_edge, other_role):
                     continue  # 해당 차량 무시하고 다음 차량 검사
                 
                 # rospy.logwarn_throttle(
@@ -943,31 +950,44 @@ class SimpleMultiVehicleController:
         check_points = [("rear", fx, fy)]
         if pos is not None:
             check_points.append(("center", float(pos.x), float(pos.y)))
+        
         hit = False
+        hit_signal = None  # 어떤 신호등에 hit 했는지
+        hit_color = None   # 해당 신호등의 색상
         min_gap = float("inf")
         min_info = None
+        
         for data in self._tl_phase.values():
             approaches = data.get("approaches", [])
             for ap in approaches:
+                signal_name = ap.get("name", "")
                 for label, px, py in check_points:
                     if px >= ap["xmin"] and px <= ap["xmax"] and py >= ap["ymin"] and py <= ap["ymax"]:
                         color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
-                        color_name = "red" if color == 0 else ("yellow" if color == 1 else "green")
-                        # Region-based hard stop
-                        if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
-                            # rospy.loginfo_throttle(
-                            #     0.5,
-                            #     f"{role}: TL HIT ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) speed_in={speed_cmd:.2f} -> 0",
-                            # )
-                            hit = True
-                            return 0.0
-                        # In region but not stopping (green or permissive yellow)
-                        # rospy.loginfo_throttle(
-                        #     0.5,
-                        #     f"{role}: TL IN ({label}) color={color_name} region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) pos=({px:.2f},{py:.2f}) keep speed={speed_cmd:.2f}",
-                        # )
                         hit = True
-                    # gap to bbox (0 if inside); use L2 of outside deltas
+                        hit_signal = signal_name
+                        hit_color = color
+                        
+                        # Region-based hard stop (빨간불 또는 황색)
+                        if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
+                            # 신호등에 차량 등록
+                            if signal_name and signal_name in self._vehicles_at_tl:
+                                if role not in self._vehicles_at_tl[signal_name]:
+                                    self._vehicles_at_tl[signal_name].append(role)
+                                    rospy.loginfo(f"[TL] {role} registered at {signal_name} (color=red/yellow)")
+                                    self._publish_vehicles_at_tl()
+                            return 0.0
+                        
+                        # 녹색불인 경우 → 해당 신호등에서 차량 제거
+                        elif color == 2:
+                            if signal_name and signal_name in self._vehicles_at_tl:
+                                if role in self._vehicles_at_tl[signal_name]:
+                                    self._vehicles_at_tl[signal_name].remove(role)
+                                    rospy.loginfo(f"[TL] {role} left {signal_name} (color=green)")
+                                    self._publish_vehicles_at_tl()
+                        break  # 해당 approach에서 hit 확인됨
+                    
+                    # gap to bbox (0 if inside); use L2 of outside deltas - 디버깅용
                     dx = 0.0
                     if px < ap["xmin"]:
                         dx = ap["xmin"] - px
@@ -982,13 +1002,24 @@ class SimpleMultiVehicleController:
                     if gap < min_gap:
                         min_gap = gap
                         min_info = (label, px, py, ap, ap.get("color", 0))
+        
         if not hit and min_info is not None:
             label, px, py, ap, color = min_info
             # rospy.logdebug_throttle(
             #     1.0,
             #     f"{role}: TL no-hit ({label}) pos=({px:.2f},{py:.2f}) closest region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) gap={min_gap:.2f} color={int(color)} phase_cache={len(self._tl_phase)}",
             # )
+        
         return speed_cmd
+
+    def _publish_vehicles_at_tl(self) -> None:
+        """신호등별 정지 차량 정보를 JSON 문자열로 발행"""
+        try:
+            msg = String()
+            msg.data = json.dumps(self._vehicles_at_tl)
+            self._vehicles_at_tl_pub.publish(msg)
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[TL] Failed to publish vehicles_at_tl: {e}")
 
     def _apply_parking_speed_limit(self, role: str, st, speed_cmd: float) -> float:
         if not self._is_low_voltage(role):
@@ -1024,6 +1055,7 @@ class SimpleMultiVehicleController:
         if rem < 0.0:
             rem = 0.0
         return rem
+    
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
         msg.steering_angle = float(0.0 if self.emergency_stop_active else steer)

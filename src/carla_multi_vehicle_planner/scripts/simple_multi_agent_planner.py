@@ -3,6 +3,7 @@ import numpy as np
 
 import math
 import random
+import json
 from typing import Dict, List, Optional, Tuple
 
 import rospy
@@ -177,12 +178,34 @@ class SimpleMultiAgentPlanner:
             topic = f"/override_goal/{role}"
             rospy.Subscriber(topic, PoseStamped, self._override_goal_cb, callback_args=role, queue_size=1)
 
+        # 신호등별 정지 차량 정보 (컨트롤러에서 발행)
+        self._vehicles_at_tl: Dict[str, List[str]] = {}
+        rospy.Subscriber("/vehicles_at_tl", String, self._vehicles_at_tl_cb, queue_size=1)
+
         rospy.sleep(0.5)
         self._plan_once()
         rospy.Timer(rospy.Duration(self.replan_check_interval), self._replan_check_cb)
     
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
+
+    def _vehicles_at_tl_cb(self, msg: String) -> None:
+        """컨트롤러에서 발행하는 신호등별 정지 차량 정보 수신"""
+        try:
+            self._vehicles_at_tl = json.loads(msg.data)
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[Planner] Failed to parse vehicles_at_tl: {e}")
+
+    def _is_vehicle_at_tl(self, role: str) -> Optional[str]:
+        """해당 차량이 신호등에서 대기 중인지 확인
+        
+        Returns:
+            대기 중인 신호등 이름, 없으면 None
+        """
+        for signal_name, roles in self._vehicles_at_tl.items():
+            if role in roles:
+                return signal_name
+        return None
 
     def _on_obstacle_change(self) -> None:
         """장애물 변화 시 즉시 호출되는 콜백 - 모든 활성 경로에 회피 적용"""
