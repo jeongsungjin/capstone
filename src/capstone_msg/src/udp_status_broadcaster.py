@@ -245,8 +245,6 @@ class UdpStatusBroadcaster:
         return ret
 
     def _send_payload(self, payload) -> None:
-        return
-
         try:
             data_str = json.dumps(payload, separators=(",", ":"))
             self.sock.sendto(data_str.encode("utf-8"), (self.dest_ip, self.port))
