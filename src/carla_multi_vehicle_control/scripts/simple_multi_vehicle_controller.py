@@ -564,18 +564,23 @@ class SimpleMultiVehicleController:
         st["progress_idx_ratio"] = ratio
         return ratio
 
-    def _sample_path_at_s(self, path, s_profile, s_target: float):
+    def _sample_path_at_s(self, path, s_profile, s_target: float, min_index: int = 0):
         """Arc-length 보간으로 정확한 목표점을 얻는다."""
         if len(path) < 2 or not s_profile or len(s_profile) != len(path):
             return None
-        if s_target <= s_profile[0]:
-            return path[0][0], path[0][1], 0, 0.0
+        # 진행 방향 유지: 검색 시작 인덱스를 최소값으로 제한
+        start_i = max(0, min(len(s_profile) - 1, int(min_index)))
+        if s_target <= s_profile[start_i]:
+            return path[start_i][0], path[start_i][1], start_i, 0.0
         if s_target >= s_profile[-1]:
             return path[-1][0], path[-1][1], len(path) - 1, 0.0
-        # 찾기
-        for i in range(len(s_profile) - 1):
+        # 찾기 (min_index 이후에서만 진행, 세그먼트 길이 0은 건너뜀)
+        for i in range(start_i, len(s_profile) - 1):
             if s_profile[i + 1] >= s_target:
-                ds = max(1e-6, s_profile[i + 1] - s_profile[i])
+                ds_raw = s_profile[i + 1] - s_profile[i]
+                if abs(ds_raw) < 1e-6:
+                    continue
+                ds = max(1e-6, ds_raw)
                 t = (s_target - s_profile[i]) / ds
                 x1, y1 = path[i]
                 x2, y2 = path[i + 1]
@@ -591,6 +596,10 @@ class SimpleMultiVehicleController:
             return x, y
         # arc-length target selection with interpolation
         s_now = float(st.get("progress_s", 0.0))
+        # 진행 방향 보존: 현재 인덱스 기준으로 뒤로 가지 않도록 보정
+        cur_idx = max(0, min(len(path) - 1, int(st.get("current_index", 0))))
+        if s_profile:
+            s_now = max(s_now, s_profile[cur_idx])
         base_ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
         ld = base_ld
         # 곡률 기반 LD 축소: 직선(κ≈0)에서 ld≈curv_ld_max, 곡률 커지면 최소 curv_ld_min
@@ -609,7 +618,7 @@ class SimpleMultiVehicleController:
         #     f"{st.get('role','')}: ld={ld:.2f} (curv={kappa if 'kappa' in locals() else None}, head_err={heading_err:.3f})",
         # )
         s_target = s_now + max(0.05, ld)
-        sample = self._sample_path_at_s(path, s_profile, s_target)
+        sample = self._sample_path_at_s(path, s_profile, s_target, min_index=cur_idx)
         if sample is None:
             return x, y
         tx, ty, idx, _t = sample

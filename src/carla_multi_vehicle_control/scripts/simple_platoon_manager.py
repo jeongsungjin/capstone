@@ -31,6 +31,8 @@ class SimplePlatoonManager:
         self.max_trim_distance_m = float(rospy.get_param("~max_trim_distance_m", 30.0))
         # 트림 시 뒤로 허용할 최대 백트랙 (m) – 지나간 구간으로 점프 방지
         self.trim_backtrack_window_m = float(rospy.get_param("~trim_backtrack_window_m", 8.0))
+        # 리더 재계획 시 후미 보호용 이전 경로 유지/병합 설정
+        self.merge_keep_dist_m = float(rospy.get_param("~merge_keep_dist_m", 30.0))
 
         self.publish_leader_path = bool(rospy.get_param("~publish_leader_path", True))
 
@@ -63,6 +65,9 @@ class SimplePlatoonManager:
     def _path_cb(self, msg: Path) -> None:
         if not msg.poses:
             return
+        merged = self._merge_with_previous(msg)
+        # 이후 로직은 병합 결과를 기준으로 동작
+        msg = merged
         fixed = self._ensure_orientations(msg)
         self.path_msg = fixed
         self._prepare_path_data(fixed)
@@ -225,6 +230,76 @@ class SimplePlatoonManager:
             return msg.poses
         self._last_s[role] = _s
         return trimmed
+
+    def _merge_with_previous(self, new_msg: Path) -> Path:
+        """
+        리더가 재계획한 새 경로가 들어올 때,
+        이전 경로의 리더 진행 지점 이후 구간을 일정 거리(merge_keep_dist_m)만큼 유지해
+        하나의 경로로 이어붙인다.
+        """
+        # 이전 경로가 없거나 유지 거리가 0이면 그대로 반환
+        if self.path_msg is None or not self.path_msg.poses or self.merge_keep_dist_m <= 0.0:
+            return new_msg
+        odom = self.odom.get(self.leader_role)
+        if odom is None:
+            return new_msg
+        # 이전 경로 기준 투영 (self.path_pts/self.path_s는 이전 경로 데이터)
+        proj = self._project_s(odom.pose.pose.position.x, odom.pose.pose.position.y)
+        if proj is None:
+            return new_msg
+        s_proj, dist, idx, t, px, py = proj
+
+        prev = self.path_msg
+        if len(prev.poses) < 2:
+            return new_msg
+
+        # 이전 경로 suffix 생성 (리더 진행 지점부터 keep_dist까지)
+        suffix: List[PoseStamped] = []
+        # 시작 보간점
+        start_pose = PoseStamped()
+        start_pose.header = prev.header
+        seg_x1 = prev.poses[idx].pose.position.x
+        seg_y1 = prev.poses[idx].pose.position.y
+        seg_x2 = prev.poses[idx + 1].pose.position.x if idx + 1 < len(prev.poses) else seg_x1
+        seg_y2 = prev.poses[idx + 1].pose.position.y if idx + 1 < len(prev.poses) else seg_y1
+        seg_dx, seg_dy = seg_x2 - seg_x1, seg_y2 - seg_y1
+        yaw = math.atan2(seg_dy, seg_dx) if abs(seg_dx) + abs(seg_dy) > 1e-9 else 0.0
+        start_pose.pose.position.x = px
+        start_pose.pose.position.y = py
+        start_pose.pose.position.z = prev.poses[idx].pose.position.z
+        start_pose.pose.orientation.x = 0.0
+        start_pose.pose.orientation.y = 0.0
+        start_pose.pose.orientation.z = math.sin(0.5 * yaw)
+        start_pose.pose.orientation.w = math.cos(0.5 * yaw)
+        suffix.append(start_pose)
+
+        # s_profile이 이전 path_s에 담겨 있으므로 이를 활용
+        keep_limit = s_proj + max(0.0, self.merge_keep_dist_m)
+        for i in range(idx + 1, len(prev.poses)):
+            if i >= len(self.path_s):
+                break
+            if self.path_s[i] > keep_limit:
+                break
+            suffix.append(prev.poses[i])
+
+        # suffix 길이가 충분하지 않으면 병합 이득이 거의 없으므로 건너뜀
+        if len(suffix) < 2:
+            return new_msg
+
+        # 새 경로와의 연결을 부드럽게: 간격이 크면 직선 보간 점 삽입
+        merged = Path()
+        merged.header = new_msg.header
+        merged.poses = []
+
+        merged.poses.extend(suffix)
+        if new_msg.poses:
+            merged.poses.extend(new_msg.poses)
+        # 새 경로가 비었으면 suffix만이라도 유지
+
+        # 최소 두 점 유지
+        if len(merged.poses) < 2:
+            return new_msg
+        return merged
 
 
 def main() -> None:
