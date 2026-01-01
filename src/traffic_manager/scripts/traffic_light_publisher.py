@@ -19,7 +19,7 @@ class TrafficLightPublisher:
             "C": rospy.get_param("~ip_C", "192.168.0.47"),
         }
 
-        self.verbose: bool = bool(rospy.get_param("~verbose", True))
+        self.verbose: bool = bool(rospy.get_param("~verbose", False))
 
         # UDP 소켓
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
