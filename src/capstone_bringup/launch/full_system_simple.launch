@@ -11,7 +11,7 @@
   <arg name="tm_publish_hz" default="10.0" />
   <arg name="enable_status_udp" default="true" />
   <arg name="status_udp_port" default="60070" />
-  <arg name="status_udp_dest_ip" default="192.168.0.5" />
+  <arg name="status_udp_dest_ip" default="192.168.0.96" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">
@@ -56,7 +56,7 @@
     <param name="dest_ip" value="$(arg status_udp_dest_ip)" />
     <param name="port" value="$(arg status_udp_port)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="uplink_topic" value="/uplink" />
+    <param name="uplink_topic" value="/imu_uplink" />
     <param name="path_topic_prefix" value="/global_path_" />
   </node>
   <!-- RC UDP senders (simple) -->
