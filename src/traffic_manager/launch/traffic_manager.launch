@@ -16,6 +16,21 @@
     -->
   </node>
 
+  <!-- Hardware traffic light UDP publisher -->
+  <node pkg="traffic_manager"
+        type="traffic_light_publisher.py"
+        name="traffic_light_publisher"
+        output="screen">
+    <!-- 보드 IP 필요하면 여기서 override -->
+    <!--
+    <param name="ip_A" value="192.168.0.41" />
+    <param name="ip_B" value="192.168.0.44" />
+    <param name="ip_C" value="192.168.0.47" />
+    <param name="run_once" value="false" />
+    <param name="verbose" value="true" />
+    -->
+  </node>
+
   <!-- Traffic light monitor UI (per-intersection list + vehicles in approach) -->
   <node pkg="traffic_manager" type="tl_monitor_ui.py" name="tl_monitor_ui" output="screen">
     <param name="width" value="$(arg ui_width)"/>
