@@ -217,22 +217,8 @@ class GlobalPlanner(GlobalRoutePlanner):
                 segment[0] = (entry_loc.x, entry_loc.y)
                 segment[-1] = (exit_loc.x, exit_loc.y)
 
-            # 아크길이 기반 리샘플링으로 매끈하게 (도로 스냅 없음)
-            resampled = []
-            try:
-                seg_arr = np.array(segment, dtype=float)
-                deltas = np.diff(seg_arr, axis=0)
-                seg_len = np.sqrt((deltas ** 2).sum(axis=1))
-                s = np.concatenate(([0.0], np.cumsum(seg_len)))
-                total = s[-1] if len(s) > 0 else 0.0
-                if total > 0.0:
-                    t = np.linspace(0.0, total, num=len(segment))
-                    # 균일 간격으로 다시 보간 (포인트 수는 원본과 동일)
-                    xs = np.interp(t, s, seg_arr[:, 0])
-                    ys = np.interp(t, s, seg_arr[:, 1])
-                    resampled = list(zip(xs, ys))
-            except Exception:
-                resampled = segment
+            # 아크길이 기반 1m 간격 리샘플링 (도로 스냅 없음)
+            resampled = self._resample_by_spacing(segment, spacing=1.0)
             if not resampled:
                 resampled = segment
 
@@ -264,6 +250,33 @@ class GlobalPlanner(GlobalRoutePlanner):
             )
 
         rospy.loginfo(f"[GlobalPlanner] applied {applied} custom edge paths from {custom_dir}")
+
+    def _resample_by_spacing(self, points: List[Tuple[float, float]], spacing: float) -> List[Tuple[float, float]]:
+        """
+        주어진 점들을 아크길이 기준 일정 간격(spacing)으로 보간한 포인트 집합 반환
+        - 첫/마지막 점은 유지
+        """
+        if len(points) < 2 or spacing <= 0.0:
+            return points
+
+        try:
+            seg_arr = np.array(points, dtype=float)
+            deltas = np.diff(seg_arr, axis=0)
+            seg_len = np.sqrt((deltas ** 2).sum(axis=1))
+            s = np.concatenate(([0.0], np.cumsum(seg_len)))
+            total = s[-1] if len(s) > 0 else 0.0
+            if total <= 0.0:
+                return points
+
+            ts = list(np.arange(0.0, total, spacing))
+            if not ts or ts[-1] < total:
+                ts.append(total)
+
+            xs = np.interp(ts, s, seg_arr[:, 0])
+            ys = np.interp(ts, s, seg_arr[:, 1])
+            return list(zip(xs, ys))
+        except Exception:
+            return points
 
 
     def get_edge_direction(self, edge: Tuple[int, int]) -> Optional[float]:

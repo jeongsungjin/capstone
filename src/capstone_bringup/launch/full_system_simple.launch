@@ -12,6 +12,13 @@
   <arg name="enable_status_udp" default="true" />
   <arg name="status_udp_port" default="60070" />
   <arg name="status_udp_dest_ip" default="192.168.0.200" />
+  <!-- Vehicle IPs (논리 ID 순서) -->
+  <arg name="vehicle_1_ip" default="192.168.0.16" />
+  <arg name="vehicle_2_ip" default="192.168.0.17" />
+  <arg name="vehicle_3_ip" default="192.168.0.2" />
+  <arg name="vehicle_4_ip" default="192.168.0.14" />
+  <arg name="vehicle_5_ip" default="192.168.0.16" />
+  <arg name="vehicle_6_ip" default="10.10.103.106" />
 
   <!-- Teleporter -->
   <include if="$(arg enable_bev_pipeline)" file="$(find capstone_bringup)/launch/bev_id_teleporter_simple.launch">
@@ -29,6 +36,12 @@
     <arg name="enable_heading_fuser" value="$(arg enable_heading_fuser)" />
     <arg name="bev_topic_raw" value="$(arg bev_topic_raw)" />
     <arg name="bev_topic_teleport" value="$(arg bev_topic_teleport)" />
+    <arg name="vehicle_1_ip" value="$(arg vehicle_1_ip)" />
+    <arg name="vehicle_2_ip" value="$(arg vehicle_2_ip)" />
+    <arg name="vehicle_3_ip" value="$(arg vehicle_3_ip)" />
+    <arg name="vehicle_4_ip" value="$(arg vehicle_4_ip)" />
+    <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
+    <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
   </include>
   <!-- BEV inference UDP 수신 -->
   <node if="$(arg enable_bev_pipeline)"
@@ -56,12 +69,21 @@
     <param name="dest_ip" value="$(arg status_udp_dest_ip)" />
     <param name="port" value="$(arg status_udp_port)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="uplink_topic" value="/imu_uplink" />
+    <param name="uplink_topic" value="/uplink" />
     <param name="path_topic_prefix" value="/global_path_" />
+    <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
+    <param name="hw_ip_prefix" value="192.168.0." />
+    <param name="hw_ip_offset" value="10" />
   </node>
   <!-- RC UDP senders (simple) -->
   <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
+    <arg name="vehicle_1_ip" value="$(arg vehicle_1_ip)" />
+    <arg name="vehicle_2_ip" value="$(arg vehicle_2_ip)" />
+    <arg name="vehicle_3_ip" value="$(arg vehicle_3_ip)" />
+    <arg name="vehicle_4_ip" value="$(arg vehicle_4_ip)" />
+    <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
+    <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
   </include>
 </launch>
 

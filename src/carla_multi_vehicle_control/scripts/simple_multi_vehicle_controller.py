@@ -4,6 +4,7 @@ import math
 import sys
 import os
 from typing import Dict, List, Tuple, Optional
+import yaml
 
 import rospy
 
@@ -141,6 +142,17 @@ class SimpleMultiVehicleController:
         self.progress_log_period = 0.0
         self.path_log_enable = True
         self.path_log_period = 0.0
+
+        # Hardware ID -> IP -> 논리 ID 매핑 설정
+        self.hw_ip_prefix = str(rospy.get_param("~hw_ip_prefix", "192.168.0."))
+        self.hw_ip_offset = int(rospy.get_param("~hw_ip_offset", 10))
+        self.allow_hwid_fallback = bool(rospy.get_param("~allow_hwid_fallback", True))
+        self.vehicle_ips = self._load_vehicle_ips(self.num_vehicles)
+        self.ip_to_logical = {ip: idx + 1 for idx, ip in enumerate(self.vehicle_ips)}
+        if not self.vehicle_ips:
+            rospy.logwarn("[Controller] vehicle_ips not set; hwid fallback=%s", self.allow_hwid_fallback)
+        elif len(self.vehicle_ips) < self.num_vehicles:
+            rospy.logwarn("[Controller] vehicle_ips shorter than num_vehicles (%d < %d)", len(self.vehicle_ips), self.num_vehicles)
 
         self.traffic_interference = {
             # 하단 진출
@@ -916,7 +928,17 @@ class SimpleMultiVehicleController:
 
     def _uplink_cb(self, msg: "Uplink") -> None:
         try:
-            self._voltage[int(msg.vehicle_id)] = float(msg.voltage)
+            hwid_or_logical = int(msg.vehicle_id)
+            logical_id = self._map_hwid_to_logical(hwid_or_logical)
+            if logical_id is None:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "[Controller] logical id not found for hwid=%d (ip=%s); skip voltage",
+                    hwid_or_logical,
+                    self._hwid_to_ip(hwid_or_logical),
+                )
+                return
+            self._voltage[logical_id] = float(msg.voltage)
         except Exception:
             pass
 
@@ -1024,6 +1046,50 @@ class SimpleMultiVehicleController:
         if rem < 0.0:
             rem = 0.0
         return rem
+
+    def _load_vehicle_ips(self, num_vehicles: int):
+        ips_param = rospy.get_param("~vehicle_ips", None)
+        if isinstance(ips_param, list) and ips_param:
+            return [str(ip) for ip in ips_param][:num_vehicles]
+        if isinstance(ips_param, str):
+            txt = ips_param.strip()
+            if txt:
+                try:
+                    loaded = yaml.safe_load(txt)
+                    if isinstance(loaded, list):
+                        return [str(ip) for ip in loaded][:num_vehicles]
+                except Exception:
+                    pass
+                parts = [p.strip() for p in txt.split(",") if p.strip()]
+                if parts:
+                    return parts[:num_vehicles]
+
+        ips = []
+        for i in range(1, num_vehicles + 1):
+            val = rospy.get_param(f"~vehicle_{i}_ip", None)
+            if val is None:
+                val = rospy.get_param(f"/vehicle_{i}_ip", None)
+            if val is not None:
+                ips.append(str(val))
+        return ips
+
+    def _hwid_to_ip(self, hwid: int) -> str:
+        return f"{self.hw_ip_prefix}{hwid + self.hw_ip_offset}"
+
+    def _map_hwid_to_logical(self, hwid_or_logical: int):
+        # 이미 논리 ID 범위라면 그대로 사용
+        if 1 <= hwid_or_logical <= self.num_vehicles:
+            return hwid_or_logical
+
+        ip = self._hwid_to_ip(hwid_or_logical)
+        lid = self.ip_to_logical.get(ip)
+        if lid is not None:
+            return lid
+
+        if self.allow_hwid_fallback:
+            return hwid_or_logical
+
+        return None
     def _publish_ackermann(self, role, steer, speed):
         msg = AckermannDrive()
         msg.steering_angle = float(0.0 if self.emergency_stop_active else steer)

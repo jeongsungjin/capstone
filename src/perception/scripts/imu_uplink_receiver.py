@@ -7,6 +7,7 @@ import struct
 import time
 from dataclasses import dataclass
 from typing import Dict
+import yaml
 
 import rospy
 from capstone_msgs.msg import Uplink
@@ -38,6 +39,18 @@ class UplinkReceiverNode:
         self.publish_hz = float(rospy.get_param("~publish_hz", 30.0))
         self.republish_last = bool(rospy.get_param("~republish_last", False))
         self.max_age_s = float(rospy.get_param("~max_age_s", 0.0))
+
+        # Hardware ID -> IP -> 논리 ID 매핑 설정
+        self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
+        self.hw_ip_prefix = str(rospy.get_param("~hw_ip_prefix", "192.168.0."))
+        self.hw_ip_offset = int(rospy.get_param("~hw_ip_offset", 10))  # hw_id + offset
+        self.allow_hwid_fallback = bool(rospy.get_param("~allow_hwid_fallback", False))
+        self.vehicle_ips = self._load_vehicle_ips(self.num_vehicles)
+        self.ip_to_logical = {ip: idx + 1 for idx, ip in enumerate(self.vehicle_ips)}
+        if not self.vehicle_ips:
+            rospy.logwarn("[uplink-rx] vehicle_ips not set; hardware id fallback=%s", self.allow_hwid_fallback)
+        elif len(self.vehicle_ips) < self.num_vehicles:
+            rospy.logwarn("[uplink-rx] vehicle_ips shorter than num_vehicles (%d < %d)", len(self.vehicle_ips), self.num_vehicles)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
@@ -93,9 +106,19 @@ class UplinkReceiverNode:
                 rospy.logwarn_throttle(2.0, "[uplink-rx] unpack error: %s", exc)
                 continue
 
-            vid = int(vehicle_id)
-            self.latest[vid] = LatestPacket(
-                vehicle_id=vid,
+            hwid = int(vehicle_id)
+            logical_id = self._map_to_logical_id(hwid)
+            if logical_id is None:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "[uplink-rx] logical id not found for hwid=%d (ip=%s); drop packet",
+                    hwid,
+                    self._hwid_to_ip(hwid),
+                )
+                continue
+
+            self.latest[logical_id] = LatestPacket(
+                vehicle_id=logical_id,
                 voltage=float(voltage),
                 recv_monotonic=time.monotonic(),
             )
@@ -127,6 +150,49 @@ class UplinkReceiverNode:
             else:
                 self._publish_latest()
             rate.sleep()
+
+    def _hwid_to_ip(self, hwid: int) -> str:
+        return f"{self.hw_ip_prefix}{hwid + self.hw_ip_offset}"
+
+    def _load_vehicle_ips(self, num_vehicles: int):
+        # 1) 리스트 형태 파라미터 우선 (~vehicle_ips: ["192.168.0.14", ...])
+        ips_param = rospy.get_param("~vehicle_ips", None)
+        if isinstance(ips_param, list) and ips_param:
+            return [str(ip) for ip in ips_param][:num_vehicles]
+        if isinstance(ips_param, str):
+            txt = ips_param.strip()
+            if txt:
+                # YAML 리스트 형태 문자열 지원 (예: "['192.168.0.14','192.168.0.12']")
+                try:
+                    loaded = yaml.safe_load(txt)
+                    if isinstance(loaded, list):
+                        return [str(ip) for ip in loaded][:num_vehicles]
+                except Exception:
+                    pass
+                # 콤마 구분 문자열도 지원
+                parts = [p.strip() for p in txt.split(",") if p.strip()]
+                if parts:
+                    return parts[:num_vehicles]
+
+        # 2) 개별 파라미터 (~vehicle_1_ip, /vehicle_1_ip ...)
+        ips = []
+        for i in range(1, num_vehicles + 1):
+            val = rospy.get_param(f"~vehicle_{i}_ip", None)
+            if val is None:
+                val = rospy.get_param(f"/vehicle_{i}_ip", None)
+            if val is not None:
+                ips.append(str(val))
+        return ips
+
+    def _map_to_logical_id(self, hwid: int):
+        ip = self._hwid_to_ip(hwid)
+        if ip in self.ip_to_logical:
+            return self.ip_to_logical[ip]
+
+        if self.allow_hwid_fallback:
+            return hwid
+
+        return None
 
 
 def main() -> None:

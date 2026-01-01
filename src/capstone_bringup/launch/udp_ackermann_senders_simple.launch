@@ -5,18 +5,29 @@
   <!-- RC car uses raw integer speed (4 worked as minimum), keep scale at 1 -->
   <arg name="vehicle_1_speed_scale" default="1.0" />
   <arg name="vehicle_1_speed_min_abs" default="0" />
+  <!-- Vehicle IPs (논리 ID 순서) -->
+  <arg name="vehicle_1_ip" default="192.168.0.16" />
+  <arg name="vehicle_2_ip" default="192.168.0.17" />
+  <arg name="vehicle_3_ip" default="192.168.0.2" />
+  <arg name="vehicle_4_ip" default="192.168.0.14" />
+  <arg name="vehicle_5_ip" default="192.168.0.16" />
+  <arg name="vehicle_6_ip" default="10.10.103.106" />
   <include file="$(find carla_multi_vehicle_planner)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
-    <arg name="vehicle_1_ip" default="192.168.0.14" />
-    <arg name="vehicle_2_ip" default="192.168.0.16" />
-    <arg name="vehicle_3_ip" default="192.168.0.2" />
-    <arg name="vehicle_4_ip" default="192.168.0.14" />
-    <arg name="vehicle_5_ip" default="192.168.0.16" />
-    <arg name="vehicle_6_ip" default="10.10.103.106" />
+    <arg name="vehicle_1_ip" value="$(arg vehicle_1_ip)" />
+    <arg name="vehicle_2_ip" value="$(arg vehicle_2_ip)" />
+    <arg name="vehicle_3_ip" value="$(arg vehicle_3_ip)" />
+    <arg name="vehicle_4_ip" value="$(arg vehicle_4_ip)" />
+    <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
+    <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
     <arg name="send_speed_as_float" value="$(arg send_speed_as_float)" />
     <arg name="vehicle_1_speed_scale" value="$(arg vehicle_1_speed_scale)" />
     <arg name="vehicle_1_speed_min_abs" value="$(arg vehicle_1_speed_min_abs)" />
   </include>
 </launch>
 
+
+<!--젯 레이서 번호 == ip 고유한 값임-->
+<!-- 젯레이서 번호를 수신 받으면 그걸 갖고 ip 몇번인지 찾아서 여기에 매핑된 vehicle id 를 바탕으로 사용-->
+<!-- 배터리 저전압 회수 로직에 적용하기 위함 + 인지 웹에 vehicle id와 일치 시켜야함 (id - 배터리정보)-->
 

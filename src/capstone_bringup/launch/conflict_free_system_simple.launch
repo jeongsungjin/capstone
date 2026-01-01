@@ -10,6 +10,13 @@
   <!-- raw: camera-only BEV; fused: heading_fuser output -->
   <arg name="bev_topic_raw" default="/bev_info_raw" />
   <arg name="bev_topic_teleport" default="/bev_info_raw" />
+  <!-- Vehicle IPs (논리 ID 순서). IMU uplink 하드웨어 ID -> IP -> 논리 ID 매핑에 사용 -->
+  <arg name="vehicle_1_ip" default="192.168.0.16" />
+  <arg name="vehicle_2_ip" default="192.168.0.17" />
+  <arg name="vehicle_3_ip" default="192.168.0.2" />
+  <arg name="vehicle_4_ip" default="192.168.0.14" />
+  <arg name="vehicle_5_ip" default="192.168.0.16" />
+  <arg name="vehicle_6_ip" default="10.10.103.106" />
 
   <!-- 1) Spawner (no autopilot) -->
   <node pkg="carla_multi_vehicle_planner" type="multi_vehicle_spawner.py" name="multi_vehicle_spawner" output="screen">
@@ -65,9 +72,13 @@
   <node pkg="perception" type="imu_uplink_receiver.py" name="imu_uplink_receiver" output="screen">
     <param name="udp_ip" value="0.0.0.0" />
     <param name="udp_port" value="5560" />
-    <param name="topic" value="/imu_uplink" />
+    <param name="topic" value="/uplink" />
     <param name="publish_hz" value="30.0" />
     <param name="republish_last" value="true" />
+    <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
+    <param name="num_vehicles" value="$(arg num_vehicles)" />
+    <param name="hw_ip_prefix" value="192.168.0." />
+    <param name="hw_ip_offset" value="10" />
   </node>
 
   <!-- 4) Controller -->
@@ -84,6 +95,9 @@
     <param name="parking_speed" value="5.0" />
     <param name="parking_speed_radius" value="8.0" />
     <param name="parking_stop_radius" value="3.0" />
+    <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
+    <param name="hw_ip_prefix" value="192.168.0." />
+    <param name="hw_ip_offset" value="10" />
   </node>
 
   <!-- 4.1) Deadlock token manager (ID 우선, 전방 점유 없을 때 토큰 부여) -->

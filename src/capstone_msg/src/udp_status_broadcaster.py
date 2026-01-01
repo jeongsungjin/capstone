@@ -57,6 +57,18 @@ class UdpStatusBroadcaster:
         self.path_max_points = int(rospy.get_param("~path_max_points", 0))
         self.path_resolution = float(rospy.get_param("~path_resolution", 0.1))
 
+        # Hardware ID -> IP -> 논리 ID 매핑 설정
+        self.hw_ip_prefix = str(rospy.get_param("~hw_ip_prefix", "192.168.0."))
+        self.hw_ip_offset = int(rospy.get_param("~hw_ip_offset", 10))
+        self.allow_hwid_fallback = bool(rospy.get_param("~allow_hwid_fallback", True))
+        num_for_map = int(rospy.get_param("~num_vehicles", rospy.get_param("~num_vehicle", 5)))
+        self.vehicle_ips = self._load_vehicle_ips(num_for_map)
+        self.ip_to_logical = {ip: idx + 1 for idx, ip in enumerate(self.vehicle_ips)}
+        if not self.vehicle_ips:
+            rospy.logwarn("[udp_status] vehicle_ips not set; hwid fallback=%s", self.allow_hwid_fallback)
+        elif len(self.vehicle_ips) < num_for_map:
+            rospy.logwarn("[udp_status] vehicle_ips shorter than num_vehicles (%d < %d)", len(self.vehicle_ips), num_for_map)
+
         # 차량 ID 결정
         vehicle_ids = self._parse_vehicle_ids()
         self.vehicle_ids = tuple(sorted(set(vehicle_ids)))
@@ -182,8 +194,17 @@ class UdpStatusBroadcaster:
 
     def _uplink_cb(self, msg: Uplink) -> None:
         try:
-            vid = int(msg.vehicle_id)
-            self._voltages[vid] = float(msg.voltage)
+            hwid_or_logical = int(msg.vehicle_id)
+            logical_id = self._map_hwid_to_logical(hwid_or_logical)
+            if logical_id is None:
+                rospy.logwarn_throttle(
+                    2.0,
+                    "[udp_status] logical id not found for hwid=%d (ip=%s); skip",
+                    hwid_or_logical,
+                    self._hwid_to_ip(hwid_or_logical),
+                )
+                return
+            self._voltages[logical_id] = float(msg.voltage)
 
         except Exception:
             pass
@@ -214,6 +235,50 @@ class UdpStatusBroadcaster:
             self._path_sig[vehicle_id] = sig
 
         self._path_seen[vehicle_id] = True
+
+    def _load_vehicle_ips(self, num_vehicles: int):
+        ips_param = rospy.get_param("~vehicle_ips", None)
+        if isinstance(ips_param, list) and ips_param:
+            return [str(ip) for ip in ips_param][:num_vehicles]
+        if isinstance(ips_param, str):
+            txt = ips_param.strip()
+            if txt:
+                try:
+                    loaded = yaml.safe_load(txt)
+                    if isinstance(loaded, list):
+                        return [str(ip) for ip in loaded][:num_vehicles]
+                except Exception:
+                    pass
+                parts = [p.strip() for p in txt.split(",") if p.strip()]
+                if parts:
+                    return parts[:num_vehicles]
+
+        ips = []
+        for i in range(1, num_vehicles + 1):
+            val = rospy.get_param(f"~vehicle_{i}_ip", None)
+            if val is None:
+                val = rospy.get_param(f"/vehicle_{i}_ip", None)
+            if val is not None:
+                ips.append(str(val))
+        return ips
+
+    def _hwid_to_ip(self, hwid: int) -> str:
+        return f"{self.hw_ip_prefix}{hwid + self.hw_ip_offset}"
+
+    def _map_hwid_to_logical(self, hwid_or_logical: int):
+        # 이미 논리 ID 범위라면 그대로 사용
+        if 1 <= hwid_or_logical <= len(self.vehicle_ids):
+            return hwid_or_logical
+
+        ip = self._hwid_to_ip(hwid_or_logical)
+        lid = self.ip_to_logical.get(ip)
+        if lid is not None:
+            return lid
+
+        if self.allow_hwid_fallback:
+            return hwid_or_logical
+
+        return None
 
     def _build_port_a_payload(self):
         # carStatus payload: 개별 메시지로 송신

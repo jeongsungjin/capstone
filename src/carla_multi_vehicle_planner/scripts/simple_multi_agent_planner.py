@@ -918,6 +918,7 @@ class SimpleMultiAgentPlanner:
             return False
         
         points = self._unique_points(points)
+        points = self._densify_points(points, float(self.path_thin_min_m))
 
         s_starts, s_ends = [], []
         original_points = list(points)
@@ -940,6 +941,28 @@ class SimpleMultiAgentPlanner:
         points = points[np.append([True], dist > 1e-6), :].tolist()
         
         return points
+
+    def _densify_points(self, points: List[Tuple[float, float]], max_spacing: float) -> List[Tuple[float, float]]:
+        """연속 점 사이 거리가 max_spacing을 초과하면 중간 점을 추가해 0.1m 수준으로 퍼블리시"""
+        if len(points) < 2 or max_spacing <= 0.0:
+            return points
+
+        densified: List[Tuple[float, float]] = [points[0]]
+        for i in range(1, len(points)):
+            x1, y1 = densified[-1]
+            x2, y2 = points[i]
+            dx, dy = x2 - x1, y2 - y1
+            dist = math.hypot(dx, dy)
+            if dist <= max_spacing:
+                densified.append((x2, y2))
+                continue
+
+            steps = max(1, int(dist / max_spacing))
+            for step in range(1, steps + 1):
+                t = min(1.0, step / steps)
+                densified.append((x1 + dx * t, y1 + dy * t))
+
+        return densified
 
     def _override_goal_cb(self, msg: PoseStamped, role: str) -> None:
         try:
