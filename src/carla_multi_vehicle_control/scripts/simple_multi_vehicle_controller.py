@@ -869,7 +869,7 @@ class SimpleMultiVehicleController:
                     continue  # 해당 차량 무시하고 다음 차량 검사
                 
                 signal = self._is_vehicle_registered_at_tl(other_role)
-                if signal:
+                if signal and role not in self._vehicles_at_tl[signal]:
                     self._vehicles_at_tl[signal].append(role)
                     rospy.loginfo(f"[TL] {role} registered at {signal} due to {other_role} stopping")
                     self._publish_vehicles_at_tl()
@@ -923,6 +923,16 @@ class SimpleMultiVehicleController:
                     "sx": float(ap.stopline_x), "sy": float(ap.stopline_y),
                 })
             self._tl_phase[iid] = {"stamp": msg.header.stamp, "approaches": approaches}
+
+            if int(ap.color) == 2:
+                # 녹색불인 경우 → 해당 신호등에서 모든 차량 제거
+                for ap in approaches:
+                    signal_name = ap.get("name", "")
+                    if signal_name in self._vehicles_at_tl:
+                        self._vehicles_at_tl[signal_name] = []
+                        # rospy.loginfo(f"[TL] All vehicles cleared from {signal_name} (color=green)")
+                        self._publish_vehicles_at_tl()
+
         except Exception:
             self._tl_phase[iid] = {"stamp": rospy.Time.now(), "approaches": []}
 
@@ -963,6 +973,7 @@ class SimpleMultiVehicleController:
             approaches = data.get("approaches", [])
             for ap in approaches:
                 signal_name = ap.get("name", "")
+
                 for label, px, py in check_points:
                     if px >= ap["xmin"] and px <= ap["xmax"] and py >= ap["ymin"] and py <= ap["ymax"]:
                         color = int(ap.get("color", 0))  # 0=R,1=Y,2=G

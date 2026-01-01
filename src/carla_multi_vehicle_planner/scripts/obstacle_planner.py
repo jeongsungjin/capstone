@@ -76,7 +76,6 @@ class ObstaclePlanner:
         if self.is_obstacle_list_changed:
             rospy.loginfo(f"Obstacles changed: {len(self._obstacles)} -> {len(new_obstacles)}")
             self._obstacles = new_obstacles
-            # self._update_blocked_nodes()
             
             # 콜백 호출 - 즉시 회피 적용
             if self._on_obstacle_change_callback is not None:
@@ -93,46 +92,6 @@ class ObstaclePlanner:
             if math.hypot(new[0] - old[0], new[1] - old[1]) > 1.0:
                 return True
 
-        return False
-
-    def _update_blocked_nodes(self) -> None:
-        """장애물 위치로 차단 노드/엣지 업데이트"""
-        if self.route_planner is None:
-            return
-        if not hasattr(self.route_planner, 'clear_obstacles'):
-            rospy.logwarn_throttle(10.0, "route_planner does not have clear_obstacles method")
-            return
-        
-        self.route_planner.clear_obstacles()
-        
-        for ox, oy, oz in self._obstacles:
-            obstacle_loc = carla.Location(x=ox, y=oy, z=oz)
-            blocked = self.route_planner.add_obstacle_on_road(obstacle_loc, self.obstacle_radius)
-            edge = self.route_planner._localize(obstacle_loc)
-            rospy.loginfo(f"Obstacle at ({ox:.1f}, {oy:.1f}): blocked {blocked} nodes, edge={edge}")
-
-    def _is_edge_blocked_by_obstacle(self, edge: Tuple[int, int], obstacle_loc) -> bool:
-        """엣지가 장애물에 의해 막혔는지 확인"""
-        if self.route_planner is None or not hasattr(self.route_planner, '_graph'):
-            return False
-        
-        n1, n2 = edge
-        graph = self.route_planner._graph
-        
-        if not graph.has_edge(n1, n2):
-            return False
-        
-        # 엣지의 path (waypoints) 가져오기
-        edge_data = graph.edges[n1, n2]
-        path = edge_data.get('path', [])
-        
-        ox, oy = obstacle_loc.x, obstacle_loc.y
-        
-        for wp in path:
-            loc = wp.transform.location
-            if math.hypot(loc.x - ox, loc.y - oy) < self.obstacle_radius:
-                return True
-        
         return False
 
     def get_stop_pos(self, role: str) -> carla.Location:

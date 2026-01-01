@@ -216,38 +216,23 @@ class SimpleMultiAgentPlanner:
         
         for index, vehicle in enumerate(vehicles[:self.num_vehicles]):
             role = self._role_name(index)
-            front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._backup_blocked_path.get(role)
-            if not original_path or len(original_path) < 2:
-                original_path = self._original_paths.get(role)
+            path = self._backup_blocked_path.get(role)
+            if not path or len(path) < 2:
+                path = self._original_paths.get(role)
             
-            if not original_path or len(original_path) < 2:
-                original_path = self._active_paths.get(role)
+            if not path or len(path) < 2:
+                path = self._active_paths.get(role)
 
-            if not original_path or len(original_path) < 2:
+            if not path or len(path) < 2:
                 continue
 
-            # 원본 경로를 현재 위치부터 트리밍 (지나간 부분 제거)
-            vx, vy = front_loc.x, front_loc.y
-            
-            # 현재 위치에 가장 가까운 인덱스 찾기
-            # 단순히 거리가 작은 것만 찾지 말고, 경로를 따라가는 순서를 고려해야 함
-            closest_idx = self._find_closest_path_index(original_path, vx, vy)
-            
-            # 현재 위치부터의 경로만 사용
-            trimmed_original = original_path[closest_idx:]
-            if len(trimmed_original) < 2:
-                # fallback: 경로 전체 사용
-                trimmed_original = original_path
-                rospy.logwarn_throttle(2.0, f"{role}: trimmed path too short, using original")
-            
             # 경로에 중복 제거 (원본 경로 구조 유지)
-            trimmed_original = self._unique_points(trimmed_original)
+            path = self._unique_points(path)
             
             # 장애물 탐지
-            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(trimmed_original, is_frenet=False)
+            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(path, is_frenet=False)
             
             if not obstacles_on_path:
                 # 장애물 없음 -> 원본 경로로 복구
@@ -255,9 +240,9 @@ class SimpleMultiAgentPlanner:
                     self._obstacle_planner._obstacle_blocked_roles.pop(role)
 
                 rospy.loginfo(f"[RECOVERY] {role}: recovered to original path (no obstacles)")
-                self._publish_path(trimmed_original, role, "normal", [], [])
-                self._store_active_path(role, trimmed_original)
-                self._original_paths[role] = list(trimmed_original)  # 원본 경로 갱신
+                self._publish_path(path, role, "normal", [], [])
+                self._store_active_path(role, path)
+                self._original_paths[role] = list(path)  # 원본 경로 갱신
                 
                 if role in self._backup_blocked_path:
                     self._backup_blocked_path.pop(role)
@@ -266,7 +251,7 @@ class SimpleMultiAgentPlanner:
                 # 장애물 있음 -> 회피 경로 생성
                 rospy.loginfo(f"[RECOVERY] {role}: {len(obstacles_on_path)} obstacle(s) detected, generating avoidance")
                 modified_path, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(
-                    role, trimmed_original, obstacles_on_path
+                    role, path, obstacles_on_path
                 )
                 
                 if modified_path is not None and len(modified_path) >= 2:
@@ -275,8 +260,8 @@ class SimpleMultiAgentPlanner:
                     # 원본은 유지 (다음 복구 시 사용)
                 else:
                     rospy.logwarn(f"[RECOVERY] {role}: avoidance path generation failed, keeping original")
-                    self._publish_path(trimmed_original, role, "normal", [], [])
-                    self._store_active_path(role, trimmed_original)
+                    self._publish_path(path, role, "normal", [], [])
+                    self._store_active_path(role, path)
 
     def _find_closest_path_index(self, path: List[Tuple[float, float]], vx: float, vy: float) -> int:
         """
@@ -389,8 +374,8 @@ class SimpleMultiAgentPlanner:
                 # 회피 경로의 2배 이상 거리가 나지 않으면 정지
                 remain_s_on_other = s_obs_on_other - s_other_vehicle_on_other
                 if -1 < remain_s_on_other <= safe_distance:
-                    other_color = _get_vehicle_color(other_role)
-                    return True
+                    # 최소 안전 거리 이내에 있고, 신호에 걸리지 않은 녀석이라면 -> 정지
+                    return self._is_vehicle_at_tl(other_role) is None
         
         return False
 
