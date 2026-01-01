@@ -56,7 +56,7 @@
     <param name="dest_ip" value="$(arg status_udp_dest_ip)" />
     <param name="port" value="$(arg status_udp_port)" />
     <param name="num_vehicles" value="$(arg num_vehicles)" />
-    <param name="uplink_topic" value="/uplink" />
+    <param name="uplink_topic" value="/imu_uplink" />
     <param name="path_topic_prefix" value="/global_path_" />
   </node>
   <!-- RC UDP senders (simple) -->

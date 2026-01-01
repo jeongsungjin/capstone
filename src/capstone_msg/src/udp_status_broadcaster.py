@@ -184,6 +184,7 @@ class UdpStatusBroadcaster:
         try:
             vid = int(msg.vehicle_id)
             self._voltages[vid] = float(msg.voltage)
+
         except Exception:
             pass
 
@@ -245,24 +246,22 @@ class UdpStatusBroadcaster:
         return ret
 
     def _send_payload(self, payload) -> None:
-        return
-
         try:
             data_str = json.dumps(payload, separators=(",", ":"))
             self.sock.sendto(data_str.encode("utf-8"), (self.dest_ip, self.port))
             
             msg_type = payload.get("type", "unknown") if isinstance(payload, dict) else "unknown"
             if msg_type == "carStatus":
-                pass
-                # rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
+                # pass
+                rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
             
             elif msg_type == "route":
                 # route는 길어질 수 있어 타입과 차량 수만 요약
                 try:
                     cars = payload.get("payload")
-                    rospy.logfatal(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
+                    rospy.loginfo(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
                 except Exception:
-                    rospy.logfatal("UDP route -> port=%d", self.port)
+                    rospy.loginfo("UDP route -> port=%d", self.port)
             
             elif msg_type == "end":
                 rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
