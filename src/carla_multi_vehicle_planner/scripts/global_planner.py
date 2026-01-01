@@ -278,7 +278,6 @@ class GlobalPlanner(GlobalRoutePlanner):
         except Exception:
             return points
 
-
     def get_edge_direction(self, edge: Tuple[int, int]) -> Optional[float]:
         """엣지의 진행 방향(yaw) 반환 (캐시됨)"""
         return self.lane_direction.get(edge)

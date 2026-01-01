@@ -3,6 +3,7 @@ import numpy as np
 
 import math
 import random
+import json
 from typing import Dict, List, Optional, Tuple
 
 import rospy
@@ -177,12 +178,34 @@ class SimpleMultiAgentPlanner:
             topic = f"/override_goal/{role}"
             rospy.Subscriber(topic, PoseStamped, self._override_goal_cb, callback_args=role, queue_size=1)
 
+        # 신호등별 정지 차량 정보 (컨트롤러에서 발행)
+        self._vehicles_at_tl: Dict[str, List[str]] = {}
+        rospy.Subscriber("/vehicles_at_tl", String, self._vehicles_at_tl_cb, queue_size=1)
+
         rospy.sleep(0.5)
         self._plan_once()
         rospy.Timer(rospy.Duration(self.replan_check_interval), self._replan_check_cb)
     
     def _role_name(self, index: int) -> str:
         return f"ego_vehicle_{index + 1}"
+
+    def _vehicles_at_tl_cb(self, msg: String) -> None:
+        """컨트롤러에서 발행하는 신호등별 정지 차량 정보 수신"""
+        try:
+            self._vehicles_at_tl = json.loads(msg.data)
+        except Exception as e:
+            rospy.logwarn_throttle(5.0, f"[Planner] Failed to parse vehicles_at_tl: {e}")
+
+    def _is_vehicle_at_tl(self, role: str) -> Optional[str]:
+        """해당 차량이 신호등에서 대기 중인지 확인
+        
+        Returns:
+            대기 중인 신호등 이름, 없으면 None
+        """
+        for signal_name, roles in self._vehicles_at_tl.items():
+            if role in roles:
+                return signal_name
+        return None
 
     def _on_obstacle_change(self) -> None:
         """장애물 변화 시 즉시 호출되는 콜백 - 모든 활성 경로에 회피 적용"""
@@ -193,35 +216,23 @@ class SimpleMultiAgentPlanner:
         
         for index, vehicle in enumerate(vehicles[:self.num_vehicles]):
             role = self._role_name(index)
-            front_loc = self._vehicle_front(vehicle)
             
             # 원본 경로 사용 (없으면 현재 경로 사용)
-            original_path = self._original_paths.get(role)
-            if not original_path or len(original_path) < 2:
-                original_path = self._active_paths.get(role)
+            path = self._backup_blocked_path.get(role)
+            if not path or len(path) < 2:
+                path = self._original_paths.get(role)
+            
+            if not path or len(path) < 2:
+                path = self._active_paths.get(role)
 
-            if not original_path or len(original_path) < 2:
+            if not path or len(path) < 2:
                 continue
 
-            # 원본 경로를 현재 위치부터 트리밍 (지나간 부분 제거)
-            vx, vy = front_loc.x, front_loc.y
-            
-            # 현재 위치에 가장 가까운 인덱스 찾기
-            # 단순히 거리가 작은 것만 찾지 말고, 경로를 따라가는 순서를 고려해야 함
-            closest_idx = self._find_closest_path_index(original_path, vx, vy)
-            
-            # 현재 위치부터의 경로만 사용
-            trimmed_original = original_path[closest_idx:]
-            if len(trimmed_original) < 2:
-                # fallback: 경로 전체 사용
-                trimmed_original = original_path
-                rospy.logwarn_throttle(2.0, f"{role}: trimmed path too short, using original")
-            
             # 경로에 중복 제거 (원본 경로 구조 유지)
-            trimmed_original = self._unique_points(trimmed_original)
+            path = self._unique_points(path)
             
             # 장애물 탐지
-            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(trimmed_original, is_frenet=False)
+            obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(path, is_frenet=False)
             
             if not obstacles_on_path:
                 # 장애물 없음 -> 원본 경로로 복구
@@ -229,9 +240,9 @@ class SimpleMultiAgentPlanner:
                     self._obstacle_planner._obstacle_blocked_roles.pop(role)
 
                 rospy.loginfo(f"[RECOVERY] {role}: recovered to original path (no obstacles)")
-                self._publish_path(trimmed_original, role, "normal", [], [])
-                self._store_active_path(role, trimmed_original)
-                self._original_paths[role] = list(trimmed_original)  # 원본 경로 갱신
+                self._publish_path(path, role, "normal", [], [])
+                self._store_active_path(role, path)
+                self._original_paths[role] = list(path)  # 원본 경로 갱신
                 
                 if role in self._backup_blocked_path:
                     self._backup_blocked_path.pop(role)
@@ -240,7 +251,7 @@ class SimpleMultiAgentPlanner:
                 # 장애물 있음 -> 회피 경로 생성
                 rospy.loginfo(f"[RECOVERY] {role}: {len(obstacles_on_path)} obstacle(s) detected, generating avoidance")
                 modified_path, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(
-                    role, trimmed_original, obstacles_on_path
+                    role, path, obstacles_on_path
                 )
                 
                 if modified_path is not None and len(modified_path) >= 2:
@@ -249,8 +260,8 @@ class SimpleMultiAgentPlanner:
                     # 원본은 유지 (다음 복구 시 사용)
                 else:
                     rospy.logwarn(f"[RECOVERY] {role}: avoidance path generation failed, keeping original")
-                    self._publish_path(trimmed_original, role, "normal", [], [])
-                    self._store_active_path(role, trimmed_original)
+                    self._publish_path(path, role, "normal", [], [])
+                    self._store_active_path(role, path)
 
     def _find_closest_path_index(self, path: List[Tuple[float, float]], vx: float, vy: float) -> int:
         """
@@ -362,12 +373,9 @@ class SimpleMultiAgentPlanner:
             if 3 < abs(d_obs_on_other) < 6:
                 # 회피 경로의 2배 이상 거리가 나지 않으면 정지
                 remain_s_on_other = s_obs_on_other - s_other_vehicle_on_other
-                rospy.logwarn(f"[STOP CHECK] {my_color} vs {_get_vehicle_color(other_role)}: d_obs_on_other={d_obs_on_other:.1f}m, d_other_vehicle_on_mine={remain_s_on_other:.1f}m")
-                
                 if -1 < remain_s_on_other <= safe_distance:
-                    other_color = _get_vehicle_color(other_role)
-                    rospy.logfatal(f"[CONFLICT] {my_color}: {other_color} active overlap ({remain_s_on_other:.1f}m <= {safe_distance:.1f}m) - waiting")
-                    return True
+                    # 최소 안전 거리 이내에 있고, 신호에 걸리지 않은 녀석이라면 -> 정지
+                    return self._is_vehicle_at_tl(other_role) is None
         
         return False
 
@@ -387,29 +395,26 @@ class SimpleMultiAgentPlanner:
         for index, vehicle in enumerate(vehicles[: self.num_vehicles]):
             role = self._role_name(index)
             
-            front_loc = self._vehicle_front(vehicle)
             dest_override = None
+            front_loc = self._vehicle_front(vehicle)
             active_path = self._active_paths.get(role)
             
             # 우회 불가하지만, 정지해야 하는 녀석
             if self._obstacle_planner and role in self._obstacle_planner._obstacle_blocked_roles:
                 # 정지 지점과 가까워 진 경우
+                color = _get_vehicle_color(role)
                 stop_pos, d_offset, s_start, s_end = self._obstacle_planner.get_stop_pos(role)
                 
                 chk_path = active_path if active_path and len(active_path) >= 2 else self._backup_blocked_path[role]
                 s_on_mine, d_on_mine = FrenetPath(chk_path).cartesian_to_frenet(front_loc.x, front_loc.y)
 
-                if 0 < (s_start - s_on_mine) <= 1.0:
-                    rospy.logwarn(f"[STOP CHECK] {_get_vehicle_color(role)}")
-
+                if -1.0 <= (s_start - s_on_mine) <= 1.0:
                     # 좌표 기반 충돌 검사 (회피 경로 길이의 2.5배 이내면 대기)
                     if d_offset is None or self.has_conflict_opposite(role, stop_pos, d_offset, s_start, s_end):
                         if role not in self._backup_blocked_path:
                             self._backup_blocked_path[role] = self._active_paths.get(role)
 
                         stop_pts = [(front_loc.x, front_loc.y)]
-                        color = _get_vehicle_color(role)
-                        rospy.logfatal(f"[STOP] {color}: 장애물 회피 대기 중 (d_offset={d_offset})")
                         self._publish_path(stop_pts, role, "stop")
                         self._store_active_path(role, stop_pts)
                         continue
@@ -636,7 +641,7 @@ class SimpleMultiAgentPlanner:
             z=tf.location.z
         )
 
-    def _choose_destination(self, start: carla.Location, max_trials: int = 80) -> Optional[carla.Location]:
+    def _choose_destination(self, start: carla.Location, max_trials: int=200) -> Optional[carla.Location]:
         for _ in range(max_trials):
             cand = random.choice(self.spawn_points).location
             dist = math.hypot(cand.x - start.x, cand.y - start.y)
@@ -816,9 +821,9 @@ class SimpleMultiAgentPlanner:
             p.pose.position.y = y
             p.pose.position.z = 0.0
             msg.poses.append(p)
+
         # 다음 퍼블리시를 위해 epoch 증가 (경로 길이 + stride)
         self._seq_epoch[role] = epoch + max(len(points), 1) + self.seq_epoch_stride
-
         self.path_publishers[role].publish(msg)
         
         if category != "stop":
