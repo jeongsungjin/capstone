@@ -76,7 +76,7 @@ class ObstaclePlanner:
         if self.is_obstacle_list_changed:
             rospy.loginfo(f"Obstacles changed: {len(self._obstacles)} -> {len(new_obstacles)}")
             self._obstacles = new_obstacles
-            self._update_blocked_nodes()
+            # self._update_blocked_nodes()
             
             # 콜백 호출 - 즉시 회피 적용
             if self._on_obstacle_change_callback is not None:
@@ -242,7 +242,7 @@ class ObstaclePlanner:
                 r_min = wheelbase / math.tan(delta_max_rad)
     
                 look_ahead = math.sqrt(2 * r_min * abs(best_d_offset if best_d_offset else (self.max_d_offset / self.d_offset_scale)))
-                look_behind = wheelbase * 9
+                look_behind = wheelbase * 6
 
                 s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
                 s_starts.append(s_start)

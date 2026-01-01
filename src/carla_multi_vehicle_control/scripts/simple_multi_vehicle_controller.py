@@ -807,14 +807,13 @@ class SimpleMultiVehicleController:
         # traffic_interference 맵 확인
         for key_edges, value_edges in self.traffic_interference.items():
             # 내 edge가 key 중 하나에 속해 있고
-            if my_edge in key_edges:
+            if my_edge in key_edges and other_edge in value_edges:
                 # 상대 edge가 해당 value 중 하나에 속해 있으면
-                if other_edge in value_edges:
-                    rospy.loginfo_throttle(
-                        2.0,
-                        f"Ignoring {other_role} at {stopped_signal}: my_edge={my_edge} -> other_edge={other_edge}"
-                    )
-                    return True
+                rospy.loginfo_throttle(
+                    0.1,
+                    f"Ignoring {other_role} at {stopped_signal}: my_edge={my_edge} -> other_edge={other_edge}"
+                )
+                return True
         
         return False
 
@@ -822,9 +821,11 @@ class SimpleMultiVehicleController:
         # Deadlock token으로 충돌 정지 해제 요청 시 그대로 통과
         if self._collision_override.get(role, False):
             return speed_cmd
+        
         # 플래툰/외부 속도오버라이드 사용 시 충돌 정지 비활성화 (간섭 방지)
         if self.use_speed_override:
             return speed_cmd
+        
         if not self.collision_stop_enable:
             return speed_cmd
         
@@ -838,6 +839,7 @@ class SimpleMultiVehicleController:
         for other_role, ost in self.states.items():
             if other_role == role:
                 continue
+
             op = ost.get("position")
             if op is None:
                 continue
@@ -856,6 +858,7 @@ class SimpleMultiVehicleController:
             rel = ang - yaw
             while rel > math.pi:
                 rel -= 2.0 * math.pi
+
             while rel < -math.pi:
                 rel += 2.0 * math.pi
             
@@ -865,10 +868,12 @@ class SimpleMultiVehicleController:
                 if self._should_ignore_for_traffic_light(my_edge, other_edge, other_role):
                     continue  # 해당 차량 무시하고 다음 차량 검사
                 
-                # rospy.logwarn_throttle(
-                #     1.0,
-                #     f"{role}: stopping for {other_role} (dist={dist:.1f} m, rel={math.degrees(rel):.1f} deg)",
-                # )
+                signal = self._is_vehicle_registered_at_tl(other_role)
+                if signal:
+                    self._vehicles_at_tl[signal].append(role)
+                    rospy.loginfo(f"[TL] {role} registered at {signal} due to {other_role} stopping")
+                    self._publish_vehicles_at_tl()
+
                 return 0.0
         return speed_cmd
 
@@ -945,18 +950,15 @@ class SimpleMultiVehicleController:
     def _apply_tl_gating(self, role: str, vehicle, st, fx: float, fy: float, speed_cmd: float) -> float:
         if not self._tl_phase:
             return speed_cmd
+        
         pos = st.get("position")
         # rear 기준뿐 아니라 차량 중심 좌표도 함께 검사해 영역 누락 방지
         check_points = [("rear", fx, fy)]
         if pos is not None:
             check_points.append(("center", float(pos.x), float(pos.y)))
         
-        hit = False
-        hit_signal = None  # 어떤 신호등에 hit 했는지
-        hit_color = None   # 해당 신호등의 색상
-        min_gap = float("inf")
-        min_info = None
-        
+        convert_role_name_to_color = lambda r: ["red", "yellow", "green", "black", "white"][int(r[-1]) - 1]
+
         for data in self._tl_phase.values():
             approaches = data.get("approaches", [])
             for ap in approaches:
@@ -964,51 +966,24 @@ class SimpleMultiVehicleController:
                 for label, px, py in check_points:
                     if px >= ap["xmin"] and px <= ap["xmax"] and py >= ap["ymin"] and py <= ap["ymax"]:
                         color = int(ap.get("color", 0))  # 0=R,1=Y,2=G
-                        hit = True
-                        hit_signal = signal_name
-                        hit_color = color
                         
                         # Region-based hard stop (빨간불 또는 황색)
                         if color == 0 or (color == 1 and self.tl_yellow_policy.lower() != "permissive"):
                             # 신호등에 차량 등록
-                            if signal_name and signal_name in self._vehicles_at_tl:
-                                if role not in self._vehicles_at_tl[signal_name]:
-                                    self._vehicles_at_tl[signal_name].append(role)
-                                    rospy.loginfo(f"[TL] {role} registered at {signal_name} (color=red/yellow)")
-                                    self._publish_vehicles_at_tl()
+                            if role not in self._vehicles_at_tl[signal_name]:
+                                self._vehicles_at_tl[signal_name].append(role)
+                                rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} registered at {signal_name} (color=red/yellow)")
+                                self._publish_vehicles_at_tl()
+
                             return 0.0
                         
                         # 녹색불인 경우 → 해당 신호등에서 차량 제거
                         elif color == 2:
-                            if signal_name and signal_name in self._vehicles_at_tl:
-                                if role in self._vehicles_at_tl[signal_name]:
-                                    self._vehicles_at_tl[signal_name].remove(role)
-                                    rospy.loginfo(f"[TL] {role} left {signal_name} (color=green)")
-                                    self._publish_vehicles_at_tl()
+                            if role in self._vehicles_at_tl[signal_name]:
+                                self._vehicles_at_tl[signal_name] = []
+                                rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} left {signal_name} (color=green)")
+                                self._publish_vehicles_at_tl()
                         break  # 해당 approach에서 hit 확인됨
-                    
-                    # gap to bbox (0 if inside); use L2 of outside deltas - 디버깅용
-                    dx = 0.0
-                    if px < ap["xmin"]:
-                        dx = ap["xmin"] - px
-                    elif px > ap["xmax"]:
-                        dx = px - ap["xmax"]
-                    dy = 0.0
-                    if py < ap["ymin"]:
-                        dy = ap["ymin"] - py
-                    elif py > ap["ymax"]:
-                        dy = py - ap["ymax"]
-                    gap = math.hypot(dx, dy)
-                    if gap < min_gap:
-                        min_gap = gap
-                        min_info = (label, px, py, ap, ap.get("color", 0))
-        
-        if not hit and min_info is not None:
-            label, px, py, ap, color = min_info
-            # rospy.logdebug_throttle(
-            #     1.0,
-            #     f"{role}: TL no-hit ({label}) pos=({px:.2f},{py:.2f}) closest region=({ap['xmin']:.2f},{ap['xmax']:.2f},{ap['ymin']:.2f},{ap['ymax']:.2f}) gap={min_gap:.2f} color={int(color)} phase_cache={len(self._tl_phase)}",
-            # )
         
         return speed_cmd
 

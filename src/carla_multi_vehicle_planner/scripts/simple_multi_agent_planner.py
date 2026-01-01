@@ -87,7 +87,7 @@ class SimpleMultiAgentPlanner:
         # Start waypoint/path stitch parameters
         self.start_join_max_gap_m = float(rospy.get_param("~start_join_max_gap_m", 12.0))
         self.start_offset_m = float(rospy.get_param("~start_offset_m", 3.0))
-        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 10.0))
+        self.path_extension_overlap_m = float(rospy.get_param("~path_extension_overlap_m", 30.0))
         self.max_extend_attempts = int(rospy.get_param("~max_extend_attempts", 3))
         self.min_destination_distance = float(rospy.get_param("~min_destination_distance", 70.0))
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 100.0))
