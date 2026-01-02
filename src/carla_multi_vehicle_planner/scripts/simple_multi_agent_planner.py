@@ -758,6 +758,19 @@ class SimpleMultiAgentPlanner:
         msg = Path()
         msg.header = Header(frame_id="map", stamp=rospy.Time.now())
         epoch = self._seq_epoch.get(role, 0)
+        # 디버그: 퍼블리시 직전 경로 정보 로깅 (교차 퍼블리시 문제 추적)
+        if points:
+            rospy.logfatal(
+                "[PLAN PUB] role=%s cat=%s n=%d first=(%.2f,%.2f) last=(%.2f,%.2f) epoch=%d",
+                role,
+                category,
+                len(points),
+                points[0][0],
+                points[0][1],
+                points[-1][0],
+                points[-1][1],
+                epoch,
+            )
         for i, (x, y) in enumerate(points):
             p = PoseStamped()
             p.header = msg.header

@@ -276,6 +276,18 @@ class SimpleMultiVehicleController:
 
     def _path_cb(self, msg: Path, role: str) -> None:
         points = [(pose.pose.position.x, pose.pose.position.y) for pose in msg.poses]
+        if points:
+            rospy.logfatal(
+                "[CTRL PATH] role=%s n=%d seq_min=%d seq_max=%d first=(%.2f,%.2f) last=(%.2f,%.2f)",
+                role,
+                len(points),
+                msg.poses[0].header.seq if msg.poses else -1,
+                msg.poses[-1].header.seq if msg.poses else -1,
+                points[0][0],
+                points[0][1],
+                points[-1][0],
+                points[-1][1],
+            )
         # 항상 0..N-1로 정규화된 인덱스 사용 (플래툰 안정성 우선)
         idx_profile = list(range(len(points)))
         s_profile, total_len = self._compute_path_profile(points)

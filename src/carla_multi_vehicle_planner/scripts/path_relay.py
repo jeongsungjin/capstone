@@ -3,6 +3,7 @@ import math
 import rospy
 from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
+from std_msgs.msg import Header
 
 
 class PathRelay:
@@ -45,6 +46,19 @@ class PathRelay:
         for role, pub in self._publishers.items():
             out = msg if role == self.leader_role else self._trim_for_role(msg, role)
             repub = self._renumber_path(out)
+            if repub.poses:
+                rospy.logfatal(
+                    "[RELAY] src=%s dst=%s n=%d seq_min=%d seq_max=%d first=(%.2f,%.2f) last=(%.2f,%.2f)",
+                    f"/global_path_{self.leader_role}",
+                    f"/planned_path_{role}",
+                    len(repub.poses),
+                    repub.poses[0].header.seq,
+                    repub.poses[-1].header.seq,
+                    repub.poses[0].pose.position.x,
+                    repub.poses[0].pose.position.y,
+                    repub.poses[-1].pose.position.x,
+                    repub.poses[-1].pose.position.y,
+                )
             pub.publish(repub)
 
     def _follower_cb(self, msg: Path, role: str):
@@ -55,6 +69,19 @@ class PathRelay:
             return
         trimmed = self._trim_for_role(msg, role)
         repub = self._renumber_path(trimmed)
+        if repub.poses:
+            rospy.logfatal(
+                "[RELAY] src=%s dst=%s n=%d seq_min=%d seq_max=%d first=(%.2f,%.2f) last=(%.2f,%.2f)",
+                f"/global_path_{role}",
+                f"/planned_path_{role}",
+                len(repub.poses),
+                repub.poses[0].header.seq,
+                repub.poses[-1].header.seq,
+                repub.poses[0].pose.position.x,
+                repub.poses[0].pose.position.y,
+                repub.poses[-1].pose.position.x,
+                repub.poses[-1].pose.position.y,
+            )
         pub.publish(repub)
 
     def _odom_cb(self, msg: Odometry, role: str):
@@ -141,7 +168,10 @@ class PathRelay:
         out.header = msg.header
         for i, ps in enumerate(msg.poses):
             p = PoseStamped()
-            p.header = msg.header
+            # 각 pose마다 독립 Header를 생성해 seq를 안전하게 부여
+            p.header = Header()
+            p.header.frame_id = msg.header.frame_id
+            p.header.stamp = msg.header.stamp
             p.header.seq = i
             p.pose = ps.pose
             out.poses.append(p)

@@ -137,8 +137,8 @@
 
 
   <!-- RViz -->
-  <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
+  <!-- <node if="$(arg enable_rviz)" pkg="rviz" type="rviz" name="rviz"
         args="-d $(arg rviz_config)"
         output="screen"
-        required="false" />
+        required="false" /> -->
 </launch>

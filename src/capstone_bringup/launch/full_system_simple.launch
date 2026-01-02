@@ -20,7 +20,7 @@
   <arg name="vehicle_2_ip" default="192.168.0.17" />
   <arg name="vehicle_3_ip" default="192.168.0.18" />
   <arg name="vehicle_4_ip" default="192.168.0.19" />
-  <arg name="vehicle_5_ip" default="192.168.0.16" />
+  <arg name="vehicle_5_ip" default="192.168.0.15" />
   <arg name="vehicle_6_ip" default="10.10.103.106" />
 
   <!-- Teleporter -->
@@ -46,8 +46,9 @@
     <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
     <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
   </include>
+  
   <!-- BEV inference UDP 수신 -->
-  <node if="$(arg enable_bev_pipeline)"
+  <!-- <node if="$(arg enable_bev_pipeline)"
         pkg="perception"
         type="inference_receiver.py"
         name="inference_receiver"
@@ -56,15 +57,17 @@
     <param name="udp_port" value="$(arg udp_port)" />
     <param name="allowed_classes" value="0" />
     <param name="topic" value="$(arg bev_topic_raw)" />
-  </node>
+  </node> -->
+  
   <!-- Traffic manager (signals publisher + UI) -->
   <include file="$(find traffic_manager)/launch/traffic_manager.launch">
     <arg name="signals_yaml" value="$(arg tm_signals_yaml)" />
     <arg name="publish_hz" value="$(arg tm_publish_hz)" />
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
   </include>
+  
   <!-- Status UDP broadcaster -->
-  <!-- <node if="$(arg enable_status_udp)"
+  <node if="$(arg enable_status_udp)"
         pkg="capstone_msgs"
         type="udp_status_broadcaster.py"
         name="udp_status_broadcaster"
@@ -77,9 +80,10 @@
     <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
     <param name="hw_ip_prefix" value="192.168.0." />
     <param name="hw_ip_offset" value="10" />
-  </node> -->
+  </node>
+
   <!-- RC UDP senders (simple) -->
-  <!-- <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
+  <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
     <arg name="vehicle_1_ip" value="$(arg vehicle_1_ip)" />
     <arg name="vehicle_2_ip" value="$(arg vehicle_2_ip)" />
@@ -87,7 +91,7 @@
     <arg name="vehicle_4_ip" value="$(arg vehicle_4_ip)" />
     <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
     <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
-  </include> -->
+  </include>
 </launch>
 
 

@@ -85,12 +85,32 @@ class SimplePlatoonManager:
             path_copy = Path()
             path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
             path_copy.poses = self._trim_poses_for_role(role, msg)
+            if path_copy.poses:
+                rospy.logfatal(
+                    "[PLATOON PUB] role=%s n=%d first=(%.2f,%.2f) last=(%.2f,%.2f)",
+                    role,
+                    len(path_copy.poses),
+                    path_copy.poses[0].pose.position.x,
+                    path_copy.poses[0].pose.position.y,
+                    path_copy.poses[-1].pose.position.x,
+                    path_copy.poses[-1].pose.position.y,
+                )
             pub.publish(path_copy)
         # RViz에서 global_path_* 를 그릴 때도 동일 경로를 보게 복제 (trim 동일 적용)
         for role, pub in self.global_path_pubs.items():
             path_copy = Path()
             path_copy.header = Header(stamp=rospy.Time.now(), frame_id=msg.header.frame_id)
             path_copy.poses = self._trim_poses_for_role(role, msg)
+            if path_copy.poses:
+                rospy.logfatal(
+                    "[PLATOON PUB] global role=%s n=%d first=(%.2f,%.2f) last=(%.2f,%.2f)",
+                    role,
+                    len(path_copy.poses),
+                    path_copy.poses[0].pose.position.x,
+                    path_copy.poses[0].pose.position.y,
+                    path_copy.poses[-1].pose.position.x,
+                    path_copy.poses[-1].pose.position.y,
+                )
             pub.publish(path_copy)
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
