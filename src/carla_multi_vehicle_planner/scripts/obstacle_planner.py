@@ -94,6 +94,9 @@ class ObstaclePlanner:
 
         return False
 
+    def has_stop_pos(self, role: str) -> bool:
+        return role in self._obstacle_blocked_roles and len(self._obstacle_blocked_roles[role]) > 0
+
     def get_stop_pos(self, role: str) -> carla.Location:
         return self._obstacle_blocked_roles[role][0]
 
