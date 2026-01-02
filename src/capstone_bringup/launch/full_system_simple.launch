@@ -9,14 +9,17 @@
   <arg name="udp_port" default="60050" />
   <arg name="tm_signals_yaml" default="$(find traffic_manager)/config/traffic_signals.yaml" />
   <arg name="tm_publish_hz" default="10.0" />
-  <arg name="enable_status_udp" default="true" />
+  <arg name="enable_status_udp" default="true" />  
+
+  <!-- 인지 서버 정보 -->
   <arg name="status_udp_port" default="60070" />
   <arg name="status_udp_dest_ip" default="192.168.0.200" />
+  
   <!-- Vehicle IPs (논리 ID 순서) -->
-  <arg name="vehicle_1_ip" default="192.168.0.16" />
+  <arg name="vehicle_1_ip" default="192.168.0.11" />
   <arg name="vehicle_2_ip" default="192.168.0.17" />
-  <arg name="vehicle_3_ip" default="192.168.0.2" />
-  <arg name="vehicle_4_ip" default="192.168.0.14" />
+  <arg name="vehicle_3_ip" default="192.168.0.18" />
+  <arg name="vehicle_4_ip" default="192.168.0.19" />
   <arg name="vehicle_5_ip" default="192.168.0.16" />
   <arg name="vehicle_6_ip" default="10.10.103.106" />
 
@@ -61,7 +64,7 @@
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
   </include>
   <!-- Status UDP broadcaster -->
-  <node if="$(arg enable_status_udp)"
+  <!-- <node if="$(arg enable_status_udp)"
         pkg="capstone_msgs"
         type="udp_status_broadcaster.py"
         name="udp_status_broadcaster"
@@ -74,7 +77,7 @@
     <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
     <param name="hw_ip_prefix" value="192.168.0." />
     <param name="hw_ip_offset" value="10" />
-  </node>
+  </node> -->
   <!-- RC UDP senders (simple) -->
   <!-- <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">
     <arg name="num_vehicles" value="$(arg num_vehicles)" />
@@ -84,7 +87,7 @@
     <arg name="vehicle_4_ip" value="$(arg vehicle_4_ip)" />
     <arg name="vehicle_5_ip" value="$(arg vehicle_5_ip)" />
     <arg name="vehicle_6_ip" value="$(arg vehicle_6_ip)" />
-  </include>
+  </include> -->
 </launch>
 
 
