@@ -255,6 +255,7 @@ class SimpleMultiAgentPlanner:
                 )
                 
                 if modified_path is not None and len(modified_path) >= 2:
+                    rospy.loginfo(f"[RECOVERY] {role}: avoidance path generated with {len(modified_path)} points")
                     self._publish_path(modified_path, role, "obstacle", s_starts, s_ends)
                     self._store_active_path(role, modified_path)
                     # 원본은 유지 (다음 복구 시 사용)
@@ -262,62 +263,6 @@ class SimpleMultiAgentPlanner:
                     rospy.logwarn(f"[RECOVERY] {role}: avoidance path generation failed, keeping original")
                     self._publish_path(path, role, "normal", [], [])
                     self._store_active_path(role, path)
-
-    def _find_closest_path_index(self, path: List[Tuple[float, float]], vx: float, vy: float) -> int:
-        """
-        경로에서 현재 위치에 가장 가까운 인덱스 찾기
-        
-        주의: 단순 거리가 아니라 경로의 진행 방향을 고려
-        - 차량이 경로를 따라 이동 중이므로, 차량 앞의 점들을 우선시
-        - 거리 + 방향 점수를 종합적으로 평가
-        
-        Args:
-            path: 경로 점 리스트
-            vx, vy: 차량의 현재 위치
-        
-        Returns:
-            가장 적절한 인덱스 (0 ~ len(path)-1)
-        """
-        if not path or len(path) < 1:
-            return 0
-        
-        best_idx = 0
-        best_score = float('inf')
-        
-        for i in range(len(path)):
-            px, py = path[i]
-            dist = math.hypot(px - vx, py - vy)
-            
-            # 점수 = 거리 + 역방향 페널티
-            # 차량이 이미 지난 점일수록 높은 점수(더 나쁨)
-            score = dist
-            
-            # 차량보다 뒤에 있는 점에 페널티 추가
-            if i < len(path) - 1:
-                next_x, next_y = path[i + 1]
-                # 현재 점과 다음 점 사이의 벡터
-                path_dx = next_x - px
-                path_dy = next_y - py
-                # 차량과 현재 점 사이의 벡터
-                to_vehicle_dx = vx - px
-                to_vehicle_dy = vy - py
-                
-                # 내적: 경로 진행 방향과 반대면 음수
-                dot = path_dx * to_vehicle_dx + path_dy * to_vehicle_dy
-                path_len_sq = path_dx * path_dx + path_dy * path_dy
-                
-                if path_len_sq > 1e-6:
-                    # 정규화된 projection (0~1)
-                    projection = dot / path_len_sq
-                    # projection < 0이면 경로 시작 방향, > 1이면 경로 끝 방향
-                    if projection < 0:
-                        score += 50.0 * (-projection)  # 뒤쪽 점 페널티
-            
-            if score < best_score:
-                best_score = score
-                best_idx = i
-        
-        return best_idx
 
     def has_conflict_opposite(self, role: str, stop_pos: carla.Location, d_offset: float, s_start: float, s_end: float) -> bool:
         """
@@ -915,15 +860,15 @@ class SimpleMultiAgentPlanner:
         else:
             points = self._ensure_path_starts_at_vehicle(new_points, (front_loc.x, front_loc.y))
 
-        obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
-        rospy.logfatal(f"{_get_vehicle_color(role)}: obstacles_on_path={obstacles_on_path}")
-
         if len(points) < 2:
             rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
             return False
         
         points = self._unique_points(points)
         points = self._densify_points(points, float(self.path_thin_min_m))
+
+        obstacles_on_path = self._obstacle_planner._find_obstacle_on_path(points, is_frenet=False)
+        rospy.logfatal(f"{_get_vehicle_color(role)}: obstacles_on_path={obstacles_on_path}")
 
         s_starts, s_ends = [], []
         original_points = list(points)
@@ -932,6 +877,8 @@ class SimpleMultiAgentPlanner:
             if len(obstacles_on_path) > 0:
                 points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
+
+                rospy.loginfo(f"{role}: applied obstacle avoidance; new path has {s_starts, s_ends} points")
 
         rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 

@@ -163,12 +163,10 @@ class ObstaclePlanner:
             frenet_path = FrenetPath(frenet_path)
 
         for ox, oy, _ in self._obstacles:
-            # TODO : 회전 교차로 같은 중복으로 겹칠 수 있는 영역에 대한 로직을 구현해야 함.
-            # 아직 어떻게 할지 몰라서 일단 한 개만 처리하도록 구현함.
             collision_indices = frenet_path.get_multiple_s_values(ox, oy, self.obstacle_radius, self.lane_width)
-            if len(collision_indices) > 0:
+            for collision_idx in collision_indices:
                 s_obs, d_obs = frenet_path.cartesian_to_frenet(ox, oy)
-                ret.append((collision_indices[0], (s_obs, d_obs), (ox, oy)))
+                ret.append((collision_idx, (s_obs, d_obs), (ox, oy)))
         
         return ret
 
