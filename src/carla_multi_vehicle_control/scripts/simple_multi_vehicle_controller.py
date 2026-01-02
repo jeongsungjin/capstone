@@ -5,6 +5,7 @@ import sys
 import os
 import json
 from typing import Dict, List, Tuple, Optional
+import threading
 import yaml
 
 import rospy
@@ -127,6 +128,7 @@ class SimpleMultiVehicleController:
         # State
         self.vehicles: Dict[str, carla.Actor] = {}
         self.states: Dict[str, Dict] = {}
+        self.state_locks: Dict[str, threading.Lock] = {}  # Locks for thread-safe state access
         self.control_publishers: Dict[str, rospy.Publisher] = {}
         self.pose_publishers: Dict[str, rospy.Publisher] = {}
         self._tl_phase: Dict[str, Dict] = {}
@@ -219,6 +221,7 @@ class SimpleMultiVehicleController:
                 "idx_max": 0,
                 "path_length": 0.0,
             }
+            self.state_locks[role] = threading.Lock()  # Lock for thread-safe state access
 
             path_topic = f"/planned_path_{role}"
             odom_topic = f"/carla/{role}/odometry"
@@ -291,25 +294,28 @@ class SimpleMultiVehicleController:
         # 항상 0..N-1로 정규화된 인덱스 사용 (플래툰 안정성 우선)
         idx_profile = list(range(len(points)))
         s_profile, total_len = self._compute_path_profile(points)
-        st = self.states[role]
-        st["path"] = points
-        st["path_idx"] = idx_profile
-        st["current_index"] = 0
-        st["current_seq"] = idx_profile[0] if idx_profile else None
-        st["s_profile"] = s_profile
-        st["path_length"] = total_len
-        st["idx_min"] = idx_profile[0] if idx_profile else 0
-        st["idx_max"] = idx_profile[-1] if idx_profile else 0
-        st["progress_s"] = 0.0
-        st["progress_idx_ratio"] = 0.0
-        st["progress_fail_count"] = 0
+        
+        with self.state_locks[role]:  # Lock for thread-safe state update
+            st = self.states[role]
+            st["path"] = points
+            st["path_idx"] = idx_profile
+            st["current_index"] = 0
+            st["current_seq"] = idx_profile[0] if idx_profile else None
+            st["s_profile"] = s_profile
+            st["path_length"] = total_len
+            st["idx_min"] = idx_profile[0] if idx_profile else 0
+            st["idx_max"] = idx_profile[-1] if idx_profile else 0
+            st["progress_s"] = 0.0
+            st["progress_idx_ratio"] = 0.0
+            st["progress_fail_count"] = 0
+            
         if self.path_log_enable:
             rospy.loginfo(
-                f"{role}: path recv len={len(points)} idx_range=[{st['idx_min']},{st['idx_max']}] stamp={msg.header.stamp.to_sec():.3f}",
+                f"{role}: path recv len={len(points)} idx_range=[{idx_profile[0] if idx_profile else 0},{idx_profile[-1] if idx_profile else 0}] stamp={msg.header.stamp.to_sec():.3f}",
             )
         # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
-        rear = self._rear_point(st, vehicle)
+        rear = self._rear_point(self.states[role], vehicle)
         if rear is not None:
             rx, ry, _ = rear
             proj = self._project_progress(
@@ -324,17 +330,21 @@ class SimpleMultiVehicleController:
             )
             if proj is not None:
                 s_now, idx, seq_val = proj
-                st["progress_s"] = s_now
-                st["current_index"] = idx
-                st["current_seq"] = seq_val
-            else:
-                # 초기에 경로 투영 실패 시 바로 근처 점으로 스냅
-                snap = self._force_snap_progress(st, rx, ry)
-                if snap is not None:
-                    s_now, idx = snap
+                with self.state_locks[role]:
+                    st = self.states[role]
                     st["progress_s"] = s_now
                     st["current_index"] = idx
-                    st["progress_fail_count"] = 0
+                    st["current_seq"] = seq_val
+            else:
+                # 초기에 경로 투영 실패 시 바로 근처 점으로 스냅
+                snap = self._force_snap_progress(self.states[role], rx, ry)
+                if snap is not None:
+                    s_now, idx = snap
+                    with self.state_locks[role]:
+                        st = self.states[role]
+                        st["progress_s"] = s_now
+                        st["current_index"] = idx
+                        st["progress_fail_count"] = 0
                     # rospy.loginfo(f"{role}: progress reset to s={s_now:.1f} at path receive")
 
     def _odom_cb(self, msg: Odometry, role: str) -> None:
@@ -629,15 +639,16 @@ class SimpleMultiVehicleController:
         return None
 
     def _select_target(self, st, x, y, lookahead_override: float = None) -> Tuple[float, float]:
-        path = st.get("path") or []
-        s_profile = st.get("s_profile") or []
-        if len(path) < 2:
+        # Local copy to avoid race condition during state update
+        path = list(st.get("path") or [])
+        s_profile = list(st.get("s_profile") or [])
+        if len(path) < 2 or len(s_profile) != len(path):
             return x, y
         # arc-length target selection with interpolation
         s_now = float(st.get("progress_s", 0.0))
         # 진행 방향 보존: 현재 인덱스 기준으로 뒤로 가지 않도록 보정
         cur_idx = max(0, min(len(path) - 1, int(st.get("current_index", 0))))
-        if s_profile:
+        if s_profile and cur_idx < len(s_profile):
             s_now = max(s_now, s_profile[cur_idx])
         base_ld = float(self.lookahead_distance) if lookahead_override is None else float(lookahead_override)
         ld = base_ld

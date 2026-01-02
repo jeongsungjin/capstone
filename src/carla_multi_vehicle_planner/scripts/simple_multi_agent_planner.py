@@ -79,8 +79,8 @@ class SimpleMultiAgentPlanner:
         self.leader_role = str(rospy.get_param("~leader_role", "ego_vehicle_1"))
         self.global_route_resolution = float(rospy.get_param("~global_route_resolution", 1.0))
         self.path_thin_min_m = float(rospy.get_param("~path_thin_min_m", 0.1))            # default denser than 0.2
-        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 40.0))
-        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.01))
+        self.replan_soft_distance_m = float(rospy.get_param("~replan_soft_distance_m", 20.0))
+        self.replan_check_interval = float(rospy.get_param("~replan_check_interval", 0.2))
         
         # Align first path segment with vehicle heading by looking slightly ahead when replanning
         self.heading_align_lookahead_m = float(rospy.get_param("~heading_align_lookahead_m", 2.5))
@@ -108,6 +108,7 @@ class SimpleMultiAgentPlanner:
         self._active_path_s: Dict[str, List[float]] = {}
         self._active_path_len: Dict[str, float] = {}
         self._active_path_category: Dict[str, str] = {}
+        self._last_progress: Dict[str, float] = {}  # 투영 점프 방지용 이전 progress
         self._voltage: Dict[int, float] = {}
         self._lv_stage: Dict[str, str] = {self._role_name(i): "idle" for i in range(self.num_vehicles)}
 
@@ -483,15 +484,16 @@ class SimpleMultiAgentPlanner:
                 continue
             
             remaining = self._remaining_path_distance(role, front_loc)
+            # rospy.logfatal(f"{role}: remaining distance check -> {remaining}")
             if remaining is None:
                 if not self._plan_for_role(vehicle, role, front_loc, "normal", dest_override=dest_override):
-                    rospy.logwarn_throttle(5.0, f"{role}: failed to replan after progress loss")
+                    rospy.logwarn(f"{role}: failed to replan after progress loss")
                 continue
 
             if remaining <= max(0.0, float(self.replan_soft_distance_m)):
                 rospy.loginfo(f"{role}: remaining {remaining:.1f} m <= soft {self.replan_soft_distance_m:.1f} m -> path extension")
                 if not self._extend_path(vehicle, role, front_loc, "normal", dest_override=dest_override):
-                    rospy.logwarn_throttle(5.0, f"{role}: path extension failed; forcing fresh plan")
+                    rospy.logwarn(f"{role}: path extension failed; forcing fresh plan")
                     if self._plan_for_role(vehicle, role, front_loc, "normal", dest_override=dest_override):
                         pass
 
@@ -516,16 +518,21 @@ class SimpleMultiAgentPlanner:
         while attempts < max(1, int(self.max_extend_attempts)):
             prefix_copy = list(suffix)
             if len(prefix_copy) < 2:
-                rospy.logwarn_throttle(5.0, f"{role}: prefix too short during extension; replanning")
+                rospy.logfatal(f"{role}: prefix too short during extension; replanning")
                 return self._plan_for_role(vehicle, role, front_loc, category)
+            
             remaining = self._remaining_path_distance(role, front_loc)
             if remaining is not None:
-                rospy.loginfo(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
+                rospy.logfatal(f"{role}: extending path (remaining {remaining:.1f} m, overlap {self.path_extension_overlap_m} m, attempt {attempts + 1})")
+            
             if self._plan_for_role(vehicle, role, front_loc, category, prefix_points=prefix_copy):
+                rospy.logfatal("어어어어어어어어어어어엉??????????????????????????????")
                 return True
+            
             attempts += 1
-            rospy.logwarn_throttle(5.0, f"{role}: path extension attempt {attempts} failed; retrying")
-        rospy.logwarn_throttle(5.0, f"{role}: all extension attempts failed; falling back to fresh plan")
+            rospy.logfatal(f"{role}: path extension attempt {attempts} failed; retrying")
+        
+        rospy.logfatal(f"{role}: all extension attempts failed; falling back to fresh plan")
         return self._plan_for_role(vehicle, role, front_loc, category)
 
     def _get_ego_vehicles(self) -> List[carla.Actor]:
@@ -600,9 +607,7 @@ class SimpleMultiAgentPlanner:
             route 또는 None
         """
         try:
-            route = self.route_planner.trace_route(start, dest)
-            return route
-        
+            return self.route_planner.trace_route(start, dest)
         except Exception as exc:
             rospy.logwarn(f"trace_route failed: {exc}")
             return None
@@ -626,7 +631,8 @@ class SimpleMultiAgentPlanner:
             if dx * dx + dy * dy >= float(self.path_thin_min_m) * float(self.path_thin_min_m):
                 points.append((x, y))
                 last_x, last_y = x, y
-        
+        if len(points) >= 2:
+            return points
         return points
 
     def _straight_line_points(self, start_loc: carla.Location, dest_loc: carla.Location, spacing: float = 1.0) -> List[Tuple[float, float]]:
@@ -678,7 +684,8 @@ class SimpleMultiAgentPlanner:
         return cumulative, total
 
     def _project_progress_on_path(self, points: List[Tuple[float, float]], s_profile: List[float], px: float, py: float):
-        if len(points) < 2: return None
+        if len(points) < 2:
+            return None
         
         if not s_profile or len(s_profile) != len(points):
             s_profile, _ = self._compute_path_profile(points)
@@ -711,22 +718,88 @@ class SimpleMultiAgentPlanner:
                 best_t = t
         
         if best_index is None:
-            rospy.logwarn_throttle(2.0, "SimpleMultiAgentPlanner: unable to project progress (disjoint path)")
+            rospy.logwarn("SimpleMultiAgentPlanner: unable to project progress (disjoint path)")
             return None
         
         seg_length = math.hypot(points[best_index + 1][0] - points[best_index][0], points[best_index + 1][1] - points[best_index][1])
-        s_now = s_profile[best_index] + best_t * seg_length * int(seg_length >= 1e-6)
+        if seg_length < 1e-6:
+            s_now = s_profile[best_index]
+        else:
+            s_now = s_profile[best_index] + best_t * seg_length
         return s_now
+
+    def _project_progress_on_path_limited(self, points: List[Tuple[float, float]], s_profile: List[float], 
+                                          px: float, py: float, prev_s: float, backtrack_window: float = 5.0):
+        """제한된 투영: prev_s - backtrack_window 미만으로 점프하지 않도록 제한"""
+        if len(points) < 2:
+            return None
+        
+        if not s_profile or len(s_profile) != len(points):
+            s_profile, _ = self._compute_path_profile(points)
+            if not s_profile or len(s_profile) != len(points):
+                return None
+        
+        min_s = max(0.0, prev_s - backtrack_window)
+        
+        best_dist_sq = float("inf")
+        best_s = None
+        
+        for idx in range(len(points) - 1):
+            x1, y1 = points[idx]
+            x2, y2 = points[idx + 1]
+            dx = x2 - x1
+            dy = y2 - y1
+            seg_len_sq = dx * dx + dy * dy
+        
+            if seg_len_sq < 1e-6:
+                continue
+        
+            t = ((px - x1) * dx + (py - y1) * dy) / seg_len_sq
+            t = max(0.0, min(1.0, t))
+            
+            seg_length = math.sqrt(seg_len_sq)
+            cand_s = s_profile[idx] + t * seg_length
+            
+            # 뒤로 너무 멀리 점프 방지
+            if cand_s < min_s:
+                continue
+            
+            proj_x = x1 + dx * t
+            proj_y = y1 + dy * t
+            dist_sq = (proj_x - px) ** 2 + (proj_y - py) ** 2
+        
+            if dist_sq < best_dist_sq:
+                best_dist_sq = dist_sq
+                best_s = cand_s
+        
+        return best_s
 
     def _remaining_path_distance(self, role: str, front_loc: carla.Location):
         points = self._active_paths.get(role)
         if not points or len(points) < 2:
             return None
         s_profile = self._active_path_s.get(role) or []
-        progress = self._project_progress_on_path(points, s_profile, front_loc.x, front_loc.y)
+        
+        # 이전 progress 가져오기 (투영 점프 방지)
+        prev_progress = self._last_progress.get(role, 0.0)
+        
+        # 제한된 투영 (뒤로 5m 이상 점프 방지)
+        progress = self._project_progress_on_path_limited(
+            points, s_profile, front_loc.x, front_loc.y,
+            prev_progress, backtrack_window=5.0
+        )
+        
         if progress is None:
-            rospy.logwarn_throttle(2.0, f"{role}: progress projection failed; forcing replan fallback")
+            # 제한된 검색 실패 시 전역 검색으로 fallback
+            progress = self._project_progress_on_path(points, s_profile, front_loc.x, front_loc.y)
+        
+        if progress is None:
+            rospy.logwarn(f"{role}: progress projection failed; forcing replan fallback")
             return None
+        
+        # progress 저장 (다음 호출에서 사용)
+        self._last_progress[role] = progress
+        
         path_len = self._active_path_len.get(role, 0.0)
         remaining = path_len - progress
         if remaining < 0.0:
@@ -746,6 +819,8 @@ class SimpleMultiAgentPlanner:
         self._active_path_category[role] = category
         self._active_path_s[role] = s_profile
         self._active_path_len[role] = total_len
+        # 경로가 새로 설정되면 _last_progress 초기화 (새 경로에서 다시 시작)
+        self._last_progress[role] = 0.0
 
     def _publish_path(self, points: List[Tuple[float, float]], role: str, category: str, s_starts: List[float]=[], s_ends: List[float]=[]) -> None:
         # 플래툰 모드에서는 리더 외에는 경로를 내보내지 않아 follower가 덮어쓰지 않도록 함
@@ -812,7 +887,7 @@ class SimpleMultiAgentPlanner:
         # Sample (or resample) destination and publish a fresh path
         dest_loc = dest_override if dest_override is not None else self._choose_destination(front_loc)
         if dest_loc is None:
-            rospy.logwarn_throttle(5.0, f"{role}: destination not found within distance bounds")
+            rospy.logfatal(f"{role}: destination not found within distance bounds")
             return False
         
         # Detect off-road override target (e.g., parking off the lane)
@@ -827,7 +902,9 @@ class SimpleMultiAgentPlanner:
                 offroad_override = True
         
         tf = vehicle.get_transform()
-        start_loc, start_heading = None, math.radians(tf.rotation.yaw)
+        yaw_rad = math.radians(tf.rotation.yaw)
+        start_loc = None
+        start_heading = yaw_rad
         if prefix_points is not None and len(prefix_points) >= 2:
             dx = prefix_points[-1][0] - prefix_points[-2][0]
             dy = prefix_points[-1][1] - prefix_points[-2][1]
@@ -845,9 +922,10 @@ class SimpleMultiAgentPlanner:
         
         start_loc.z = front_loc.z
         route = None
+        attempts = 0
         max_attempts = 5
         if not force_direct:
-            for _ in range(max_attempts):
+            while attempts < max_attempts:
                 route = self._trace_route(start_loc, dest_loc)
                 if route and len(route) >= 2:
                     break
@@ -856,15 +934,15 @@ class SimpleMultiAgentPlanner:
                 if dest_loc is None:
                     route = None
                     break
-        
-        # 1. 새 경로 생성
+                attempts += 1
+                
         new_points: List[Tuple[float, float]] = []
         if not force_direct and route and len(route) >= 2:
             new_points = self._route_to_points(route)
 
         else:
             new_points = self._straight_line_points(start_loc, dest_loc, spacing=max(0.5, float(self.path_thin_min_m)))
-            rospy.logwarn_throttle(2.0, f"{role}: using direct line to dest ({dest_loc.x:.2f},{dest_loc.y:.2f}) (force_direct={force_direct}, route_ok={route is not None and len(route)>=2})")
+            rospy.logfatal(f"{role}: using direct line to dest ({dest_loc.x:.2f},{dest_loc.y:.2f}) (force_direct={force_direct}, route_ok={route is not None and len(route)>=2})")
         
         # 2. prefix 경로와 연결 
         if prefix_points is not None and len(prefix_points) >= 1:
@@ -874,7 +952,7 @@ class SimpleMultiAgentPlanner:
             points = self._ensure_path_starts_at_vehicle(new_points, (front_loc.x, front_loc.y))
 
         if len(points) < 2:
-            rospy.logwarn_throttle(5.0, f"{role}: insufficient path points")
+            rospy.logfatal(f"{role}: insufficient path points")
             return False
         
         points = self._unique_points(points)
@@ -886,14 +964,14 @@ class SimpleMultiAgentPlanner:
         s_starts, s_ends = [], []
         original_points = list(points)
         if self._obstacle_planner is not None and not offroad_override and not force_direct:
-            rospy.logwarn(f"{role}: obstacles on path: {obstacles_on_path}")
+            rospy.logfatal(f"{role}: obstacles on path: {obstacles_on_path}")
             if len(obstacles_on_path) > 0:
                 points, s_starts, s_ends = self._obstacle_planner.apply_avoidance_to_path(role, points, obstacles_on_path)
                 self._original_paths[role] = original_points
 
-                rospy.loginfo(f"{role}: applied obstacle avoidance; new path has {s_starts, s_ends} points")
+                rospy.logfatal(f"{role}: applied obstacle avoidance; new path has {s_starts, s_ends} points")
 
-        rospy.logdebug(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
+        rospy.logfatal(f"{role}: publishing path with {len(points)} points (prefix={'yes' if prefix_points else 'no'})")
 
         self._publish_path(points, role, category, s_starts, s_ends)
         self._store_active_path(role, points, category)        
