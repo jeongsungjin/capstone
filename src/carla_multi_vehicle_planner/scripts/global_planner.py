@@ -62,7 +62,9 @@ class GlobalPlanner(GlobalRoutePlanner):
             (26, 15),
             (16, 22),
             (13, 19),
-            (20, 25)
+            (20, 25),
+            (6, 11),
+            (8, 7)
         )
 
         for u, v in self._custom_blocked_edge:
