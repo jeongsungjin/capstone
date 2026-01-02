@@ -856,6 +856,20 @@ class SimpleMultiVehicleController:
             if op is None:
                 continue
             
+            # 상대 차량의 heading 확인 (반대 방향 차량 필터링용)
+            other_ori = ost.get("orientation")
+            if other_ori is not None:
+                other_yaw = quaternion_to_yaw(other_ori)
+                yaw_diff = abs(yaw - other_yaw)
+                
+                # 정규화: 0 ~ pi 범위로
+                while yaw_diff > math.pi:
+                    yaw_diff = abs(yaw_diff - 2.0 * math.pi)
+
+                # 반대 방향 (약 100도 이상 차이) → 무시
+                if yaw_diff > math.pi * 100 / 180:  # ~100도
+                    continue
+            
             other_x = float(op.x)
             other_y = float(op.y)
             dx = other_x - fx
@@ -1005,7 +1019,7 @@ class SimpleMultiVehicleController:
                             # 신호등에 차량 등록
                             if role not in self._vehicles_at_tl[signal_name]:
                                 self._vehicles_at_tl[signal_name].append(role)
-                                rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} registered at {signal_name} (color=red/yellow)")
+                                # rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} registered at {signal_name} (color=red/yellow)")
                                 self._publish_vehicles_at_tl()
 
                             return 0.0
@@ -1014,7 +1028,7 @@ class SimpleMultiVehicleController:
                         elif color == 2:
                             if role in self._vehicles_at_tl[signal_name]:
                                 self._vehicles_at_tl[signal_name] = []
-                                rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} left {signal_name} (color=green)")
+                                # rospy.loginfo(f"[TL] {convert_role_name_to_color(role)} left {signal_name} (color=green)")
                                 self._publish_vehicles_at_tl()
                         break  # 해당 approach에서 hit 확인됨
         
