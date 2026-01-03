@@ -104,7 +104,7 @@ class SimpleUdpAckermannSender:
         if self.use_bev_speed and self.bev_topic:
             rospy.Subscriber(self.bev_topic, BEVInfo, self._cb_bev_speed, queue_size=1, tcp_nodelay=True)
 
-        rospy.loginfo(f"[RC-UDP] bound on {self.bind_ip} for {len(self.roles)} vehicles")
+        # rospy.loginfo(f"[RC-UDP] bound on {self.bind_ip} for {len(self.roles)} vehicles")
 
     def _cb(self, msg: AckermannDrive, role: str) -> None:
         self.cache[role] = {"steer": float(msg.steering_angle), "speed": float(msg.speed), "stamp": rospy.Time.now()}
@@ -211,10 +211,10 @@ class SimpleUdpAckermannSender:
         last_log = v.get("last_log", rospy.Time(0))
         if self.log_throttle_sec <= 0.0 or (now - last_log).to_sec() >= self.log_throttle_sec:
             di, dp = v.get("dest", ("", 0))
-            rospy.loginfo(
-                f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, cmd_speed={xy_speed} obs_speed={obs_speed:.3f} -> {di}:{dp} "
-                f"(mode={'float' if self.send_speed_as_float else 'int'})"
-            )
+            # rospy.loginfo(
+            #     f"[RC-UDP][{role}] angle(rad)={send_angle:.4f}, cmd_speed={xy_speed} obs_speed={obs_speed:.3f} -> {di}:{dp} "
+            #     f"(mode={'float' if self.send_speed_as_float else 'int'})"
+            # )
             v["last_log"] = now
 
         if self.send_speed_as_float:

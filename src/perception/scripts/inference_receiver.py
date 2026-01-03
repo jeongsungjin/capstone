@@ -67,13 +67,13 @@ class InferenceReceiverNode:
         self.obstacle_height = 2.0
 
         self.pub = rospy.Publisher(self.topic, BEVInfo, queue_size=1)
-        rospy.loginfo(
-            "[Inference UDP] listening on %s ports %s -> %s (allowed_classes=%s)",
-            self.udp_ip,
-            ",".join(str(p) for p in self.udp_ports),
-            self.topic,
-            ",".join(str(c) for c in sorted(self.allowed_classes)) if self.allowed_classes else "ANY",
-        )
+        # rospy.loginfo(
+        #     "[Inference UDP] listening on %s ports %s -> %s (allowed_classes=%s)",
+        #     self.udp_ip,
+        #     ",".join(str(p) for p in self.udp_ports),
+        #     self.topic,
+        #     ",".join(str(c) for c in sorted(self.allowed_classes)) if self.allowed_classes else "ANY",
+        # )
         rospy.on_shutdown(self._on_shutdown)
 
         self.frame_seq: int = 0
@@ -321,13 +321,13 @@ class InferenceReceiverNode:
 
                 now = rospy.Time.now()
                 latency = (now - stamp).to_sec()
-                rospy.loginfo_throttle(
-                    1.0,
-                    "[Frame %d] published detCounts=%d latency=%.3fs",
-                    frame_seq,
-                    bev_msg.detCounts + obstacle_count,
-                    latency,
-                )
+                # rospy.loginfo_throttle(
+                #     1.0,
+                #     "[Frame %d] published detCounts=%d latency=%.3fs",
+                #     frame_seq,
+                #     bev_msg.detCounts + obstacle_count,
+                #     latency,
+                # )
 
                 self.frame_seq += 1
 

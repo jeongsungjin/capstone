@@ -64,7 +64,7 @@ class SimpleMultiVehicleController:
         self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
         # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
-        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 3.0))
+        self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 2.0))
         self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 7.0))
         self.heading_ld_gain = float(rospy.get_param("~heading_ld_gain", 2.0))  # ld / (1 + gain * |heading_err|)
         self.heading_deadzone_rad = abs(float(rospy.get_param("~heading_deadzone_deg", 2.0))) * math.pi / 180.0
@@ -105,7 +105,7 @@ class SimpleMultiVehicleController:
         # Collision stop gating (forward cone)
         self.collision_stop_enable = bool(rospy.get_param("~collision_stop_enable", True))
         self.collision_stop_angle_deg = float(rospy.get_param("~collision_stop_angle_deg", 40.0))  # +/-deg ahead
-        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 7.0))
+        self.collision_stop_distance_m = float(rospy.get_param("~collision_stop_distance_m", 8.0))
 
         # CARLA world
         host = rospy.get_param("~carla_host", "localhost")
@@ -207,6 +207,7 @@ class SimpleMultiVehicleController:
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             self.states[role] = {
+                "role": role,
                 "path": [],  # List[(x, y)]
                 "path_idx": [],
                 "position": None,
@@ -309,10 +310,10 @@ class SimpleMultiVehicleController:
             st["progress_idx_ratio"] = 0.0
             st["progress_fail_count"] = 0
             
-        if self.path_log_enable:
-            rospy.loginfo(
-                f"{role}: path recv len={len(points)} idx_range=[{idx_profile[0] if idx_profile else 0},{idx_profile[-1] if idx_profile else 0}] stamp={msg.header.stamp.to_sec():.3f}",
-            )
+        # if self.path_log_enable:
+        #     rospy.loginfo(
+        #         f"{role}: path recv len={len(points)} idx_range=[{idx_profile[0] if idx_profile else 0},{idx_profile[-1] if idx_profile else 0}] stamp={msg.header.stamp.to_sec():.3f}",
+        #     )
         # rospy.loginfo_throttle(1.0, f"{role}: planned_path received ({len(points)} pts, len={total_len:.1f} m)")
         vehicle = self.vehicles.get(role)
         rear = self._rear_point(self.states[role], vehicle)
@@ -662,11 +663,13 @@ class SimpleMultiVehicleController:
         heading_err = float(st.get("heading_err_filt", st.get("heading_err", 0.0)))
         ld = ld / (1.0 + self.heading_ld_gain * abs(heading_err))
         ld = max(self.min_lookahead_m, min(self.max_lookahead_m, ld))
+
         # 디버그: 최종 ld 출력
         # rospy.loginfo_throttle(
         #     0.5,
         #     f"{st.get('role','')}: ld={ld:.2f} (curv={kappa if 'kappa' in locals() else None}, head_err={heading_err:.3f})",
         # )
+
         s_target = s_now + max(0.05, ld)
         sample = self._sample_path_at_s(path, s_profile, s_target, min_index=cur_idx)
         if sample is None:
@@ -844,10 +847,10 @@ class SimpleMultiVehicleController:
             # 내 edge가 key 중 하나에 속해 있고
             if my_edge in key_edges and other_edge in value_edges:
                 # 상대 edge가 해당 value 중 하나에 속해 있으면
-                rospy.loginfo_throttle(
-                    0.1,
-                    f"Ignoring {other_role} at {stopped_signal}: my_edge={my_edge} -> other_edge={other_edge}"
-                )
+                # rospy.loginfo_throttle(
+                #     0.1,
+                #     f"Ignoring {other_role} at {stopped_signal}: my_edge={my_edge} -> other_edge={other_edge}"
+                # )
                 return True
         
         return False
@@ -920,7 +923,7 @@ class SimpleMultiVehicleController:
                 signal = self._is_vehicle_registered_at_tl(other_role)
                 if signal and role not in self._vehicles_at_tl[signal]:
                     self._vehicles_at_tl[signal].append(role)
-                    rospy.loginfo(f"[TL] {role} registered at {signal} due to {other_role} stopping")
+                    # rospy.loginfo(f"[TL] {role} registered at {signal} due to {other_role} stopping")
                     self._publish_vehicles_at_tl()
 
                 return 0.0

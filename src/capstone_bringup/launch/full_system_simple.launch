@@ -16,10 +16,10 @@
   <arg name="status_udp_dest_ip" default="192.168.0.200" />
   
   <!-- Vehicle IPs (논리 ID 순서) -->
-  <arg name="vehicle_1_ip" default="192.168.0.11" />
-  <arg name="vehicle_2_ip" default="192.168.0.17" />
-  <arg name="vehicle_3_ip" default="192.168.0.18" />
-  <arg name="vehicle_4_ip" default="192.168.0.19" />
+  <arg name="vehicle_1_ip" default="192.168.0.17" />
+  <arg name="vehicle_2_ip" default="192.168.0.18" />
+  <arg name="vehicle_3_ip" default="192.168.0.14" />
+  <arg name="vehicle_4_ip" default="192.168.0.15" />
   <arg name="vehicle_5_ip" default="192.168.0.15" />
   <arg name="vehicle_6_ip" default="10.10.103.106" />
 
@@ -48,7 +48,7 @@
   </include>
   
   <!-- BEV inference UDP 수신 -->
-  <!-- <node if="$(arg enable_bev_pipeline)"
+  <node if="$(arg enable_bev_pipeline)"
         pkg="perception"
         type="inference_receiver.py"
         name="inference_receiver"
@@ -57,7 +57,7 @@
     <param name="udp_port" value="$(arg udp_port)" />
     <param name="allowed_classes" value="0" />
     <param name="topic" value="$(arg bev_topic_raw)" />
-  </node> -->
+  </node>
   
   <!-- Traffic manager (signals publisher + UI) -->
   <include file="$(find traffic_manager)/launch/traffic_manager.launch">

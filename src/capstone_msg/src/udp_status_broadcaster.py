@@ -33,6 +33,7 @@ type:
 
 import json
 import socket
+import math
 from typing import Dict, List, Tuple
 import message_filters
 
@@ -54,8 +55,8 @@ class UdpStatusBroadcaster:
         self.rate_status_hz = float(max(0.1, rospy.get_param("~rate_status_hz", 1.0)))
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
         self.traffic_hz = float(max(0.1, rospy.get_param("~traffic_hz", 1.0)))
-        self.path_max_points = int(rospy.get_param("~path_max_points", 0))
-        self.path_resolution = float(rospy.get_param("~path_resolution", 0.1))
+        self.path_max_points = int(rospy.get_param("~path_max_points", -1))
+        self.path_resolution = float(rospy.get_param("~path_resolution", 10.0))
 
         # Hardware ID -> IP -> 논리 ID 매핑 설정
         self.hw_ip_prefix = str(rospy.get_param("~hw_ip_prefix", "192.168.0."))
@@ -143,6 +144,32 @@ class UdpStatusBroadcaster:
         rospy.Timer(rospy.Duration(1.0 / self.route_check_hz), self._timer_route)
         rospy.Timer(rospy.Duration(1.0 / self.traffic_hz), self._timer_traffic)
 
+    def _resample_path(self, points: List[dict], resolution: float, max_points: int) -> List[dict]:
+        """
+        지정된 해상도(m)로 경로를 다운샘플/리샘플한 후 최대 개수 제한을 적용.
+        - resolution <= 0이면 원본 유지
+        - 마지막 점은 항상 포함
+        """
+        if not points or len(points) < 2 or resolution <= 0.0:
+            pts = list(points)
+        else:
+            pts = [points[0]]
+            accum = 0.0
+            for i in range(1, len(points)):
+                px, py = pts[-1]["x"], pts[-1]["y"]
+                cx, cy = points[i]["x"], points[i]["y"]
+                dist = math.hypot(cx - px, cy - py)
+                accum += dist
+                if accum + 1e-6 >= resolution:
+                    pts.append({"x": cx, "y": cy})
+                    accum = 0.0
+            if pts[-1] != points[-1]:
+                pts.append(points[-1])
+
+        if max_points > 0 and len(pts) > max_points:
+            pts = pts[:max_points]
+        return pts
+
     def _parse_vehicle_ids(self) -> List[int]:
         raw = rospy.get_param("~vehicle_ids", None)
         ids: List[int] = []
@@ -210,25 +237,27 @@ class UdpStatusBroadcaster:
             pass
 
     def _path_cb(self, path: Path, meta: PathMeta, vehicle_id: int) -> None:
-        pts: Tuple[Tuple[float, float]] = tuple(
-            (float(pose.pose.position.x), float(pose.pose.position.y)) for pose in path.poses
-        )
+        # 좌표는 dict 리스트로 저장 (예: {"x":..., "y":...}) – downlink에서 파싱 용이
+        pts_list = [
+            {"x": float(pose.pose.position.x), "y": float(pose.pose.position.y)}
+            for pose in path.poses
+        ]
 
         category = meta.category.data
         resolution = meta.resolution.data
         s_starts = meta.s_starts.data
         s_ends = meta.s_ends.data
 
-        self._paths[vehicle_id]["path"] = pts
+        self._paths[vehicle_id]["path"] = pts_list
         self._paths[vehicle_id]["category"] = category
         self._paths[vehicle_id]["resolution"] = resolution
-        self._paths[vehicle_id]["s_start"] = s_starts if category == "obstacle" else []
-        self._paths[vehicle_id]["s_end"] = s_ends if category == "obstacle" else []
+        self._paths[vehicle_id]["s_start"] = s_starts
+        self._paths[vehicle_id]["s_end"] = s_ends
 
-        rospy.logdebug("[car %d] path received (%d pts)", vehicle_id, len(pts))
+        rospy.loginfo("[car %d] path received (%d pts)", vehicle_id, len(pts_list))
 
         # 경로 변경 감지: 길이, 시작/끝 좌표로 단순 서명
-        sig = (len(pts), pts) if pts else (0, ((0.0, 0.0),))
+        sig = (len(pts_list), (pts_list[0]["x"], pts_list[0]["y"]), (pts_list[-1]["x"], pts_list[-1]["y"])) if pts_list else (0, (0.0, 0.0), (0.0, 0.0))
         prev = self._path_sig.get(vehicle_id)
         if prev is None or prev != sig:
             self._path_dirty[vehicle_id] = True
@@ -299,13 +328,15 @@ class UdpStatusBroadcaster:
                 continue
 
             info = self._paths.get(vid, {"category": "", "path": []})
+            path_pts = info.get("path", [])
+            path_pts = self._resample_path(path_pts, self.path_resolution, self.path_max_points)
             
             ret["payload"].append({
                 "vid": vid,
                 "category": info["category"],
                 "s_start": info["s_start"],
                 "s_end": info["s_end"],
-                "planning": info["path"]
+                "planning": path_pts
             })
 
         return ret
@@ -316,23 +347,23 @@ class UdpStatusBroadcaster:
             self.sock.sendto(data_str.encode("utf-8"), (self.dest_ip, self.port))
             
             msg_type = payload.get("type", "unknown") if isinstance(payload, dict) else "unknown"
-            if msg_type == "carStatus":
-                # pass
-                rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
+            # if msg_type == "carStatus":
+            #     # pass
+            #     rospy.loginfo("UDP carStatus -> port=%d data=%s", self.port, data_str)
             
-            elif msg_type == "route":
-                # route는 길어질 수 있어 타입과 차량 수만 요약
-                try:
-                    cars = payload.get("payload")
-                    rospy.loginfo(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
-                except Exception:
-                    rospy.loginfo("UDP route -> port=%d", self.port)
+            # elif msg_type == "route":
+            #     # route는 길어질 수 있어 타입과 차량 수만 요약
+            #     try:
+            #         cars = payload.get("payload")
+            #         rospy.loginfo(f"UDP route -> port={self.port} cars={[cars[i]['vid'] for i in range(len(cars))]} count={len(cars)}")
+            #     except Exception:
+            #         rospy.loginfo("UDP route -> port=%d", self.port)
             
-            elif msg_type == "end":
-                rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
+            # elif msg_type == "end":
+            #     rospy.loginfo("UDP end -> port=%d data=%s", self.port, data_str)
             
-            else:
-                rospy.loginfo("UDP send -> port=%d data=%s", self.port, data_str)
+            # else:
+            #     rospy.loginfo("UDP send -> port=%d data=%s", self.port, data_str)
         
         except Exception as exc:
             rospy.logwarn_throttle(2.0, "UDP send failed (port=%d): %s", self.port, exc)

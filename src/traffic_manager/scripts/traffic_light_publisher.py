@@ -20,16 +20,18 @@ class TrafficLightPublisher:
         }
 
         self.verbose: bool = bool(rospy.get_param("~verbose", False))
+        self.send_rate_hz: float = float(rospy.get_param("~send_rate_hz", 20.0))
+        self.latest_iid: str = ""
+        self.latest_phase: str = ""
 
         # UDP 소켓
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-        rospy.loginfo("=== traffic_light_publisher started ===")
-        for iid, ip in self.ip_map.items():
-            rospy.loginfo("  - intersection %s -> %s", iid, ip)
-
         # /traffic_phase 구독해서 들어오는 페이즈를 하드웨어로 중계
         rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._phase_cb, queue_size=20)
+
+        # 최신 상태를 설정 주기로 반복 전송
+        rospy.Timer(rospy.Duration(1.0 / max(self.send_rate_hz, 0.1)), self._tick_send)
 
         rospy.on_shutdown(self._on_shutdown)
 
@@ -40,34 +42,37 @@ class TrafficLightPublisher:
         if not iid or not phase:
             return
 
-        ip = self.ip_map.get(iid)
-        if not ip:
-            rospy.logwarn("traffic_light_publisher: no IP configured for intersection_id=%s", iid)
+        # 최신 상태만 저장하고 전송은 타이머에서 반복 수행
+        self.latest_iid = iid
+        self.latest_phase = phase
+
+    def _tick_send(self, _event=None) -> None:
+        if not self.latest_iid or not self.latest_phase:
             return
 
+        ip = self.ip_map.get(self.latest_iid)
+        # if not ip:
+        #     rospy.logwarn_throttle(5.0, "traffic_light_publisher: no IP configured for intersection_id=%s", self.latest_iid)
+        #     return
+
         # 하드웨어가 기대하는 문자열 형식: "A_P1_MAIN_GREEN" / "B_P2_YELLOW" / "C_P3_SIDE_GREEN" ...
-        payload_str = f"{iid}_{phase}"
+        payload_str = f"{self.latest_iid}_{self.latest_phase}"
         payload = payload_str.encode("utf-8")
 
         try:
             self.sock.sendto(payload, (ip, UDP_PORT))
-            if self.verbose:
-                rospy.loginfo("UDP -> [%s] %s", ip, payload_str)
         except OSError as exc:
             rospy.logwarn("traffic_light_publisher: failed to send to %s (%s): %s", ip, payload_str, exc)
 
     def _on_shutdown(self) -> None:
-        rospy.loginfo("traffic_light_publisher: sending 'finish' to all boards and closing socket...")
         for iid, ip in self.ip_map.items():
             try:
                 self.sock.sendto(b"finish", (ip, UDP_PORT))
-                rospy.loginfo("  finish sent to %s (iid=%s)", ip, iid)
             except OSError as exc:
                 rospy.logwarn("  failed to send finish to %s: %s", ip, exc)
         self.sock.close()
 
     def spin(self) -> None:
-        rospy.loginfo("traffic_light_publisher: relaying /traffic_phase to UDP (no internal timing).")
         rospy.spin()
 
 
