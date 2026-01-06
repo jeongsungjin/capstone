@@ -34,7 +34,7 @@ class SimpleBevTeleporter:
 		self.default_z = float(rospy.get_param("~default_z", -1.5))
 		self.yaw_in_degrees = bool(rospy.get_param("~yaw_in_degrees", False))
 		# BEV 지연 보상용 경로 기반 lookahead (m)
-		self.lookahead_m = float(rospy.get_param("~lookahead_m", 0.5))
+		self.lookahead_m = float(rospy.get_param("~lookahead_m", 0.3))
 		# BEV lateral offset 보정 필터/클램프
 		self.lat_offset_max = float(rospy.get_param("~lat_offset_max", 0.75))  # m, 허용 횡편차 상한
 		self.lat_offset_alpha = float(rospy.get_param("~lat_offset_alpha", 0.3))  # 0~1, 0=hold, 1=no filter
@@ -190,8 +190,8 @@ class SimpleBevTeleporter:
 		self._last_seq = seq
 		now = rospy.Time.now()
 		age = (now - stamp).to_sec()
-		if age > 0.3:
-			return
+		# if age > 0.3:
+		# 	return
 		if self._last_stamp is not None:
 			if stamp == self._last_stamp:
 				return

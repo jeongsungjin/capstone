@@ -10,8 +10,8 @@ def main():
     pub = rospy.Publisher("/uplink", Uplink, queue_size=1)
     rate_hz = rospy.get_param("~rate", 5.0)
     rate = rospy.Rate(rate_hz)
-    vehicle_id = 1
-    voltage = 4.5
+    vehicle_id = 2
+    voltage = 1
     while not rospy.is_shutdown():
         msg = Uplink()
         msg.vehicle_id = vehicle_id

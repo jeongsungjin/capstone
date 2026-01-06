@@ -8,7 +8,7 @@
   <!-- Vehicle IPs (논리 ID 순서) -->
   <arg name="vehicle_1_ip" default="192.168.0.15" />
   <arg name="vehicle_2_ip" default="192.168.0.17" />
-  <arg name="vehicle_3_ip" default="192.168.0.2" />
+  <arg name="vehicle_3_ip" default="192.168.0.14" />
   <arg name="vehicle_4_ip" default="192.168.0.14" />
   <arg name="vehicle_5_ip" default="192.168.0.16" />
   <arg name="vehicle_6_ip" default="10.10.103.106" />
