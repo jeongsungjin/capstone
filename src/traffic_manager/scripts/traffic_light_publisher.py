@@ -21,8 +21,8 @@ class TrafficLightPublisher:
 
         self.verbose: bool = bool(rospy.get_param("~verbose", False))
         self.send_rate_hz: float = float(rospy.get_param("~send_rate_hz", 20.0))
-        self.latest_iid: str = ""
-        self.latest_phase: str = ""
+        # 교차로별 최신 페이즈 캐시
+        self.latest_phases: Dict[str, str] = {}
 
         # UDP 소켓
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -42,27 +42,29 @@ class TrafficLightPublisher:
         if not iid or not phase:
             return
 
-        # 최신 상태만 저장하고 전송은 타이머에서 반복 수행
-        self.latest_iid = iid
-        self.latest_phase = phase
+        # 교차로별 최신 상태 저장
+        self.latest_phases[iid] = phase
 
     def _tick_send(self, _event=None) -> None:
-        if not self.latest_iid or not self.latest_phase:
+        if not self.latest_phases:
             return
 
-        ip = self.ip_map.get(self.latest_iid)
-        # if not ip:
-        #     rospy.logwarn_throttle(5.0, "traffic_light_publisher: no IP configured for intersection_id=%s", self.latest_iid)
-        #     return
+        for iid, phase in list(self.latest_phases.items()):
+            ip = self.ip_map.get(iid)
+            if not ip:
+                rospy.logwarn_throttle(5.0, "traffic_light_publisher: no IP configured for intersection_id=%s", iid)
+                continue
 
-        # 하드웨어가 기대하는 문자열 형식: "A_P1_MAIN_GREEN" / "B_P2_YELLOW" / "C_P3_SIDE_GREEN" ...
-        payload_str = f"{self.latest_iid}_{self.latest_phase}"
-        payload = payload_str.encode("utf-8")
+            # 하드웨어가 기대하는 문자열 형식: "A_P1_MAIN_GREEN" / "B_P2_YELLOW" / "C_P3_SIDE_GREEN" ...
+            payload_str = f"{iid}_{phase}"
+            payload = payload_str.encode("utf-8")
 
-        try:
-            self.sock.sendto(payload, (ip, UDP_PORT))
-        except OSError as exc:
-            rospy.logwarn("traffic_light_publisher: failed to send to %s (%s): %s", ip, payload_str, exc)
+            try:
+                self.sock.sendto(payload, (ip, UDP_PORT))
+                if self.verbose:
+                    rospy.loginfo_throttle(1.0, "sent %s to %s", payload_str, ip)
+            except OSError as exc:
+                rospy.logwarn("traffic_light_publisher: failed to send to %s (%s): %s", ip, payload_str, exc)
 
     def _on_shutdown(self) -> None:
         for iid, ip in self.ip_map.items():
