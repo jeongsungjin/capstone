@@ -26,7 +26,7 @@ from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path, Odometry
 from std_msgs.msg import Header, String
 from std_msgs.msg import Bool
-from capstone_msgs.msg import Uplink  # type: ignore
+from capstone_msgs.msg import Uplink, BEVInfo  # type: ignore
 
 try:
     from carla_multi_vehicle_control.msg import TrafficLightPhase, TrafficApproach  # type: ignore
@@ -63,6 +63,11 @@ class SimpleMultiVehicleController:
         self.num_vehicles = int(rospy.get_param("~num_vehicles", 5))
         self.emergency_stop_active = False
         self.lookahead_distance = float(rospy.get_param("~lookahead_distance", 3.0))
+        # BEV 기반 ID 존재 검출 파라미터
+        self.bev_topic = str(rospy.get_param("~bev_topic", "/bev_info_raw"))
+        self.bev_missing_frames = max(1, int(rospy.get_param("~bev_missing_frames", 1)))
+        self.bev_use_ids = bool(rospy.get_param("~bev_use_ids", True))
+        self.bev_id_offset = int(rospy.get_param("~bev_id_offset", 0))
         # 조향/헤딩 오차 기반 lookahead 조정 (LPF만 적용)
         self.min_lookahead_m = float(rospy.get_param("~min_lookahead_m", 2.0))
         self.max_lookahead_m = float(rospy.get_param("~max_lookahead_m", 7.0))
@@ -74,7 +79,7 @@ class SimpleMultiVehicleController:
         self.curv_ld_enable = bool(rospy.get_param("~curv_ld_enable", True))
         self.curv_ld_min = float(rospy.get_param("~curv_ld_min", 2.0))   # 최소 2m
         self.curv_ld_max = float(rospy.get_param("~curv_ld_max", 7.0))   # 직선에서 7m
-        self.curv_ld_gain = float(rospy.get_param("~curv_ld_gain", 10.0))  # ld = max / (1 + gain*|kappa|)
+        self.curv_ld_gain = float(rospy.get_param("~curv_ld_gain", 6.0))  # ld = max / (1 + gain*|kappa|)
         self.wheelbase = float(rospy.get_param("~wheelbase", 1.74))
         # max_steer: 차량의 물리적 최대 조향각(rad) – CARLA 정규화에 사용 (fallback)
         self.max_steer = float(rospy.get_param("~max_steer", 0.5))
@@ -115,6 +120,8 @@ class SimpleMultiVehicleController:
         self.client.set_timeout(timeout)
         self.world = self.client.get_world()
         self.carla_map = self.world.get_map()
+        # 제어 대상 role 리스트
+        self.role_names: List[str] = [self._role_name(i) for i in range(self.num_vehicles)]
         
         # GlobalPlanner for edge localization
         self.route_planner = None
@@ -204,8 +211,11 @@ class SimpleMultiVehicleController:
         }
         self._vehicles_at_tl_pub = rospy.Publisher("/vehicles_at_tl", String, queue_size=1, latch=True)
 
-        for index in range(self.num_vehicles):
-            role = self._role_name(index)
+        # BEV 누락 카운터 초기화 (미수신 상태에서 시작 → 즉시 정지)
+        self._bev_miss_count: Dict[str, int] = {r: self.bev_missing_frames for r in self.role_names}
+        self._bev_last_seq = None
+
+        for index, role in enumerate(self.role_names):
             self.states[role] = {
                 "role": role,
                 "path": [],  # List[(x, y)]
@@ -258,6 +268,9 @@ class SimpleMultiVehicleController:
         # Subscribe traffic light phase if message is available
         if TrafficLightPhase is not None:
             rospy.Subscriber("/traffic_phase", TrafficLightPhase, self._tl_cb, queue_size=5)
+        # BEV 존재 여부 구독 (ID 누락 시 정지)
+        if self.bev_topic:
+            rospy.Subscriber(self.bev_topic, BEVInfo, self._bev_cb, queue_size=1, tcp_nodelay=True)
         
         # Uplink (voltage) subscriber: topic configurable
         self.uplink_topic = str(rospy.get_param("~uplink_topic", "/uplink")).strip()
@@ -358,6 +371,44 @@ class SimpleMultiVehicleController:
         pose_msg.header = msg.header
         pose_msg.pose = msg.pose.pose
         self.pose_publishers[role].publish(pose_msg)
+
+    def _bev_cb(self, msg: BEVInfo) -> None:
+        """
+        BEVInfo에 등장한 ID 기반으로 차량 존재 여부를 판단하고
+        프레임 누락 횟수를 누적한다.
+        """
+        roles_present = set()
+
+        if self.bev_use_ids and len(msg.ids) > 0:
+            m = min(len(msg.ids), len(msg.center_xs), len(msg.center_ys))
+            for i in range(m):
+                try:
+                    vid = int(msg.ids[i]) + self.bev_id_offset
+                    if 1 <= vid <= len(self.role_names):
+                        roles_present.add(self.role_names[vid - 1])
+                except Exception:
+                    rospy.logfatal(f"제제젯토토토소 제제젯토토토소 제제젯토토토소")
+                    continue
+        else:
+            m = min(len(msg.center_xs), len(msg.center_ys))
+            for i in range(min(m, len(self.role_names))):
+                roles_present.add(self.role_names[i])
+
+        threshold = max(1, int(self.bev_missing_frames))
+        for role in self.role_names:
+            miss = self._bev_miss_count.get(role, 0)
+            if role in roles_present:
+                self._bev_miss_count[role] = 0
+            else:
+                self._bev_miss_count[role] = miss + 1
+
+            if self._bev_miss_count[role] >= threshold:
+                rospy.loginfo(f"크아아아아아악!!!!!!!!!!!!!!!!!! 차량({role})을 {miss} 이만큼이나 놓쳤다.")
+        
+        try:
+            self._bev_last_seq = msg.header.seq
+        except Exception:
+            pass
 
     def _speed_override_cb(self, msg: AckermannDrive, role: str) -> None:
         """
@@ -929,6 +980,19 @@ class SimpleMultiVehicleController:
                 return 0.0
         return speed_cmd
 
+    def _apply_bev_presence_gating(self, role: str, speed_cmd: float) -> float:
+        """
+        BEV 메시지에서 해당 role이 누락된 프레임이 일정 횟수 이상이면
+        속도를 0으로 강제한다. (steer는 유지)
+        """
+        threshold = max(1, int(self.bev_missing_frames))
+        miss = self._bev_miss_count.get(role, threshold)
+        if miss >= threshold:
+            rospy.loginfo(f"우효오오오오오!!!!!! 차량({role}): 놓침({miss}) 임계값({threshold})")
+            return 0.0
+        
+        return speed_cmd
+
     def _get_vehicle_max_steer(self, vehicle) -> float:
         # 차량 물리 최대 조향(rad) 조회; 실패 시 파라미터 max_steer 사용
         try:
@@ -1173,20 +1237,25 @@ class SimpleMultiVehicleController:
             vehicle = self.vehicles.get(role)
             if vehicle is None:
                 continue
+
             steer, speed = self._compute_control(st, vehicle, role)
             if steer is None:
                 continue
+
             override_speed = self._get_speed_override(role)
             if override_speed is not None:
                 speed = override_speed
+            
+            speed = self._apply_bev_presence_gating(role, speed)
+
             self._apply_carla_control(vehicle, steer, speed)
             self._publish_ackermann(role, steer, speed)
 
-            # colors = ["red", "yellow", "green", "black", "white"]
-            # rospy.loginfo_throttle(
-            #     0.5,
-            #     f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={speed:.2f} m/s",
-            # )
+            # E-STOP이 켜진 경우 실제 적용/퍼블리시 값은 0이므로 로그도 0으로 표시
+            log_speed = 0.0 if self.emergency_stop_active else speed
+            # if log_speed < 1e-6:
+            #     colors = ["red", "yellow", "green", "black", "white"]
+            #     rospy.loginfo(f"{colors[int(role[-1]) - 1]}: cmd steer={steer:.3f} rad speed={log_speed:.2f} m/s")
 
 
 if __name__ == "__main__":

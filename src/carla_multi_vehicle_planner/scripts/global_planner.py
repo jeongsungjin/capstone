@@ -102,6 +102,8 @@ class GlobalPlanner(GlobalRoutePlanner):
             # (5, 1), (2, 3), (2, 1) 
         }
 
+        # wmap.get_waypoint(carla.Location(x=0.0, y=0.0, z=0.0))
+
         self.lane_direction: Dict[Tuple[int, int], float] = {}
         self._cache_edge_directions()
 

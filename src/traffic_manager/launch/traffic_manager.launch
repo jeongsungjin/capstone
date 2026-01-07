@@ -7,7 +7,7 @@
   <arg name="num_vehicles" default="5" />
 
   <!-- Traffic light phase publisher (YAML-driven) -->
-  <node pkg="traffic_manager" type="signals_phase_publisher.py" name="signals_phase_publisher" output="screen">
+  <node pkg="traffic_manager" type="signals_phase_publisher.py" name="signals_phase_publisher">
     <param name="signals_yaml" value="$(arg signals_yaml)"/>
     <param name="publish_hz" value="$(arg publish_hz)"/>
     <!-- Optional: enable external phase topic
@@ -19,8 +19,7 @@
   <!-- Hardware traffic light UDP publisher -->
   <node pkg="traffic_manager"
         type="traffic_light_publisher.py"
-        name="traffic_light_publisher"
-        output="screen">
+        name="traffic_light_publisher">
     <!-- 보드 IP 필요하면 여기서 override -->
     
     <param name="ip_A" value="192.168.0.41" />
@@ -32,7 +31,7 @@
   </node>
 
   <!-- Traffic light monitor UI (per-intersection list + vehicles in approach) -->
-  <node pkg="traffic_manager" type="tl_monitor_ui.py" name="tl_monitor_ui" output="screen">
+  <node pkg="traffic_manager" type="tl_monitor_ui.py" name="tl_monitor_ui">
     <param name="width" value="$(arg ui_width)"/>
     <param name="height" value="$(arg ui_height)"/>
     <param name="num_vehicles" value="$(arg num_vehicles)"/>

@@ -202,7 +202,7 @@ class ObstaclePlanner:
                 r_min = wheelbase / math.tan(delta_max_rad)
     
                 look_ahead = math.sqrt(2 * r_min * abs(best_d_offset if best_d_offset else (self.max_d_offset / self.d_offset_scale)))
-                look_behind = wheelbase * 6
+                look_behind = wheelbase * 8
 
                 s_start = max(0.5, s_obs - (self.obstacle_radius + look_ahead))
                 s_starts.append(s_start)

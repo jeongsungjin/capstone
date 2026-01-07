@@ -143,7 +143,7 @@ class SimpleMultiAgentPlanner:
 
         # Publishers
         self.path_publishers: Dict[str, rospy.Publisher] = {}
-        self.path_meta_publishers: Dict[str, rospy.Publisher] = {}
+        self.path_meta_publishers: Dict[str, rospy.Publisher] = {} 
         for index in range(self.num_vehicles):
             role = self._role_name(index)
             topic = f"/global_path_{role}"
@@ -218,12 +218,15 @@ class SimpleMultiAgentPlanner:
             # 원본 경로 사용 (없으면 현재 경로 사용)
             path = self._backup_blocked_path.get(role)
             if not path or len(path) < 2:
+                rospy.logwarn(f'use origin')
                 path = self._original_paths.get(role)
             
             if not path or len(path) < 2:
+                rospy.logwarn(f'use active path')
                 path = self._active_paths.get(role)
 
             if not path or len(path) < 2:
+                rospy.logwarn('러러러ㅏ러ㅣ만어리ㅏ머니ㅏㅇ러ㅣㅏ얼')
                 continue
 
             # 경로에 중복 제거 (원본 경로 구조 유지)

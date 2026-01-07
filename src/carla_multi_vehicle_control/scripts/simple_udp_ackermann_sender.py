@@ -125,6 +125,7 @@ class SimpleUdpAckermannSender:
     def _cb_bev_speed(self, msg: BEVInfo) -> None:
         n = len(msg.speeds_mps)
         now = rospy.Time.now()
+        roles_present = set()
         # 우선 ids 매핑 시도 (id=vehicle_number → ego_vehicle_{id})
         has_ids = len(msg.ids) == n and n > 0
         if has_ids:
@@ -140,6 +141,7 @@ class SimpleUdpAckermannSender:
                     v = float(msg.speeds_mps[i])
                 except Exception:
                     continue
+                roles_present.add(role)
                 self.cache_bev_speed[role] = {"speed": v, "stamp": now}
         else:
             # fallback: 인덱스 기반 매핑
@@ -150,7 +152,13 @@ class SimpleUdpAckermannSender:
                     v = float(msg.speeds_mps[i])
                 except Exception:
                     continue
+                roles_present.add(role)
                 self.cache_bev_speed[role] = {"speed": v, "stamp": now}
+
+        # 메시지에 없던 ID는 즉시 속도 0으로 리셋 (timeout 기다리지 않음)
+        for role in self.roles:
+            if role not in roles_present and role in self.cache_bev_speed:
+                self.cache_bev_speed[role] = {"speed": 0.0, "stamp": now}
 
     def _tick(self, _evt) -> None:
         if not self.roles:
