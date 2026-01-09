@@ -56,7 +56,7 @@ class UdpStatusBroadcaster:
         self.route_check_hz = float(max(0.1, rospy.get_param("~route_check_hz", 5.0)))
         self.traffic_hz = float(max(0.1, rospy.get_param("~traffic_hz", 1.0)))
         self.path_max_points = int(rospy.get_param("~path_max_points", -1))
-        self.path_resolution = float(rospy.get_param("~path_resolution", 10.0))
+        self.path_resolution = float(rospy.get_param("~path_resolution", 200.0)) # TODO: Path 전송 해상도 수정
 
         # Hardware ID -> IP -> 논리 ID 매핑 설정
         self.hw_ip_prefix = str(rospy.get_param("~hw_ip_prefix", "192.168.0."))

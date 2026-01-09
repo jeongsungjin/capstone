@@ -17,10 +17,11 @@
   
   <!-- Vehicle IPs (논리 ID 순서) -->
   <arg name="vehicle_1_ip" default="192.168.0.12" />
-  <arg name="vehicle_2_ip" default="192.168.0.14" />
+  <arg name="vehicle_2_ip" default="192.168.0.15" />
+  <arg name="vehicle_3_ip" default="192.168.0.14" />
+  <arg name="vehicle_4_ip" default="192.168.0.11" />
 
-  <arg name="vehicle_3_ip" default="192.168.0.11" />
-  <arg name="vehicle_4_ip" default="192.168.0.16" />
+
   <arg name="vehicle_5_ip" default="192.168.0.15" />
   <arg name="vehicle_6_ip" default="10.10.103.106" />
 
@@ -68,7 +69,7 @@
   </include> -->
   
   <!-- Status UDP broadcaster -->
-  <node if="$(arg enable_status_udp)"
+  <!-- <node if="$(arg enable_status_udp)"
         pkg="capstone_msgs"
         type="udp_status_broadcaster.py"
         name="udp_status_broadcaster"
@@ -81,7 +82,7 @@
     <param name="vehicle_ips" value="[ '$(arg vehicle_1_ip)', '$(arg vehicle_2_ip)', '$(arg vehicle_3_ip)', '$(arg vehicle_4_ip)', '$(arg vehicle_5_ip)', '$(arg vehicle_6_ip)' ]" />
     <param name="hw_ip_prefix" value="192.168.0." />
     <param name="hw_ip_offset" value="10" />
-  </node>
+  </node> -->
 
   <!-- RC UDP senders (simple) -->
   <include file="$(find capstone_bringup)/launch/udp_ackermann_senders_simple.launch">

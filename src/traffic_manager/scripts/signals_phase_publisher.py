@@ -82,6 +82,20 @@ class SignalsPhasePublisher:
             ("P3_SIDE_GREEN", float(rospy.get_param("~p3_green_s", 15.0))),
             ("P3_YELLOW", float(rospy.get_param("~p3_yellow_s", 3.0))),
         ]
+
+        '''
+        # shortest version
+        
+        self.sequence = [
+            ("P1_MAIN_GREEN", float(rospy.get_param("~p1_green_s", 8.0))),
+            ("P1_YELLOW", float(rospy.get_param("~p1_yellow_s", 1.0))),
+            ("P2_MAIN_GREEN", float(rospy.get_param("~p2_green_s", 8.0))),
+            ("P2_YELLOW", float(rospy.get_param("~p2_yellow_s", 1.0))),
+            ("P3_SIDE_GREEN", float(rospy.get_param("~p3_green_s", 6.0))),
+            ("P3_YELLOW", float(rospy.get_param("~p3_yellow_s", 1.0))),
+        ]
+        '''
+
         self._cycle_time = sum([d for _, d in self.sequence]) or 1.0
         self._t0 = time.time()
 

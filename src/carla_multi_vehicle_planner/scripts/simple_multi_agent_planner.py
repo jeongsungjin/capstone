@@ -94,7 +94,7 @@ class SimpleMultiAgentPlanner:
         self.max_destination_distance = float(rospy.get_param("~max_destination_distance", 100.0))
         
         # Low-voltage handling (forced destination / parking)
-        self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 5.0))
+        self.low_voltage_threshold = float(rospy.get_param("~low_voltage_threshold", 0.0))
         self.low_voltage_dest_x = float(rospy.get_param("~low_voltage_dest_x", -12.5))
         self.low_voltage_dest_y = float(rospy.get_param("~low_voltage_dest_y", -16.5))
         self.parking_dest_x = float(rospy.get_param("~parking_dest_x", -27.0))
